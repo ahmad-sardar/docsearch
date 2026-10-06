@@ -1312,6 +1312,8 @@ class Index:
             if key != prev:
                 self.browse.append(i)
             prev = key
+        from docsearch.spelling import Speller             # misspelled words (see search)
+        self.speller: Speller | None = Speller({t: len(v[0]) for t, v in self.post.items()})
         if mode != "spell":
             import mlx.core as mx
             # on the GPU at half precision: half the memory, and the similarity is computed there
@@ -1440,6 +1442,25 @@ class Index:
                 sorted(set(prefix) - set(exact), key=order)[:CANDIDATES])
 
     def search(self, q: str, limit: int = SHOW) -> list[tuple[int, float, dict]]:
+        """The ranked results. If the query has words the docs never use (misspelled), the
+        corrected query is searched too and the two result lists are fused: a right
+        correction brings its results up, a wrong one cannot push the typed query's out
+        (benchmark: eval/results-spelling.md)."""
+        hits = self.search_as_typed(q, limit)
+        fixed = self.correction(q)
+        if fixed is None:
+            return hits
+        other = self.search_as_typed(fixed, limit)
+        return rrf([("typed", [i for i, _, _ in hits], 1.0), ("corrected", [i for i, _, _ in other], 1.0)])[:limit]
+
+    def correction(self, q: str) -> str | None:
+        """The query with its misspelled words corrected, or None if it has none."""
+        if self.speller is None or not q.strip():
+            return None
+        fixed = self.speller.correct(q)
+        return fixed if fixed != q else None
+
+    def search_as_typed(self, q: str, limit: int = SHOW) -> list[tuple[int, float, dict]]:
         q = q.strip()
         if not q:
             return []

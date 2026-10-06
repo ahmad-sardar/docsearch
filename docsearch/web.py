@@ -152,7 +152,9 @@ class Library:
                     exact = set(self.index.rank_name(plain_q)[0])
                 ids = rerank.reorder(ids, s, exact)
                 state = "ranked"
-        return {"q": q, "total": len(ids), "ai": state,
+        with self.lock:
+            fixed = self.index.correction(plain_q) if plain_q else None
+        return {"q": q, "total": len(ids), "ai": state, "corrected": fixed,
                 "items": [self.item(i, q) for i in ids[offset:offset + limit]]}
 
     def rerank_text(self, i: int) -> str:

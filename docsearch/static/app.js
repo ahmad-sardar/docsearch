@@ -119,7 +119,8 @@ async function search({ openFirst = true, append = false, ai = false } = {}) {
   state.total = data.total;
   renderResults(append ? data.items : state.items, append ? state.items.length - data.items.length : 0);
   const where = state.srcs.size ? searchedSources().join(", ") : "all packages";
-  status(state.q ? `${data.total} results for “${state.q}” · ${where}${data.ai === "ranked" ? " · ranked with AI" : ""}`
+  const fixed = data.corrected ? ` · also searched “${data.corrected}”` : "";
+  status(state.q ? `${data.total} results for “${state.q}”${fixed} · ${where}${data.ai === "ranked" ? " · ranked with AI" : ""}`
                  : `${data.total} entries · ${where}, in reading order`);
   if (data.error) status(data.error);
   if (data.ai === "not installed") {

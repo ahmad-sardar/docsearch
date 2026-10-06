@@ -66,6 +66,20 @@ Click a package name at the top to search only that package.
 Edit `packages.toml` to choose packages and versions, then run `search sync` (or see
 Versions below).
 
+## Typos and misspellings
+
+You don't have to spell right:
+
+- **Names with typos** (up to 2 letters off): `dataframe.mrege`, `torch.nn.Lienar`,
+  `HashMpa::insret` find `DataFrame.merge`, `torch.nn.Linear`, `HashMap::insert`.
+- **Misspelled words**, even spelled the way they sound: `remove dooplicate rows`,
+  `dikshunary keys`, `arguement parser`. A word the docs never use is matched to the words
+  they do use by letters, letter pieces and sound (a model fit on 21,000 real human
+  misspellings), and the corrected query is searched too; the status line shows it
+  (*also searched "remove duplicate rows"*).
+
+Correctly spelled searches are not changed by either. Measurements: `eval/results-spelling.md`.
+
 ## Strict search
 
 In the search box, put exact text in double quotes, like Google; the rest stays fuzzy:

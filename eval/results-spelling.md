@@ -52,3 +52,33 @@ fresh typos (seeds 2027, 2028). Search time unchanged (~60 ms).
 | test names (171) | 0.911 | 0.916 | +0.005 [+0.000, +0.015] | 1.0 |
 | names + 1 typo (171) | 0.516 | **0.884** | +0.367 [+0.306, +0.429] | <0.001 |
 | names + 2 typos (171) | 0.326 | **0.867** | +0.540 [+0.478, +0.603] | <0.001 |
+
+# Misspelled words (docsearch/spelling.py)
+
+A word the docs never use is compared with the ~52,000 words they do use, through letters
+(edits, similarity), letter pieces (shared trigrams) and sound (Metaphone, NYSIIS, Soundex,
+Match Rating codes), and how common each candidate is. The weights are fit on real human
+misspellings: the Birkbeck spelling error corpus and Wikipedia's list of common misspellings,
+21,245 misspellings of 4,106 words the docs use (eval/spelling.py; fit on dev words, 30%).
+
+Correcting single words (14,595 misspellings of the other words):
+
+| Lens | right word first | in top 3 | 1 letter off | 2 letters off | 3+ letters off |
+|---|---|---|---|---|---|
+| letters: fewest edits, then most common | 48.0% | 60.7% | 82% | 51% | 11% |
+| + letter pieces | 53.9% | 68.0% | 84% | 57% | 20% |
+| + sound (Metaphone, NYSIIS) | 59.4% | 72.9% | 87% | 64% | 27% |
+| **+ Soundex, Match Rating (used)** | **60.8%** | **73.4%** | 87% | 66% | 30% |
+
+Searching (prototype, dev): replacing misspelled words by the best guess, or by the top 2,
+did not help reliably and slightly hurt correct queries; searching the typed and the
+corrected query and fusing the two did. That is what the search does. Benchmark questions
+with real misspellings of their words (all such words of a question at once):
+
+| | misspelled questions: off | on | difference [95% CI] | p | correct questions: off -> on |
+|---|---|---|---|---|---|
+| dev (152 / 354) | 0.219 | 0.230 | +0.012 [-0.005, +0.030] | 0.20 | 0.357 -> 0.356 |
+| **test (547 / 768)** | **0.193** | **0.206** | **+0.013 [+0.003, +0.023]** | **0.011** | 0.364 -> 0.363 |
+
+The same questions spelled right score 0.234 (test): the correction recovers about a third
+of what misspellings cost. A search with a misspelled word takes ~6 ms more (median).

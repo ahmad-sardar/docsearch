@@ -16,6 +16,7 @@ dependencies = [
     "mlx>=0.32",                  # the meaning model runs on the Apple GPU (no PyTorch)
     "tokenizers>=0.20",
     "huggingface-hub>=0.30",      # downloads the model once (search add / embed)
+    "jellyfish>=1.2",
 ]
 
 [project.scripts]

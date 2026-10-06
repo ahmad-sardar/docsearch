@@ -361,9 +361,9 @@ def save_pages(name: str, sid: str, urls: list[str], workers: int, series: bool)
                 todo.insert(0, nxt)
     if store.images:                             # keep the images of the pages saved before
         known = store.dir / "_images" / "images.json"
-        kept = json.loads(known.read_text()) if known.exists() else {}
+        kept = json.loads(known.read_text(encoding="utf-8")) if known.exists() else {}
         store.finish(workers)
-        new = json.loads(known.read_text()) if known.exists() else {}
+        new = json.loads(known.read_text(encoding="utf-8")) if known.exists() else {}
         cli.write_atomic(known, json.dumps({**kept, **new}).encode())
     return entries, fails
 
@@ -546,7 +546,8 @@ def build_local(name: str, sid: str, src: Path, workers: int) -> tuple[list[Entr
     try:
         folder = unpack_zip(src, tmp) if tmp else src
         files = sorted(f for f in folder.rglob("*") if f.is_file() and f.suffix.lower() in
-                       (".html", ".htm", ".md", ".markdown") and not any(p.startswith(".") for p in f.parts))
+                       (".html", ".htm", ".md", ".markdown")
+                       and not any(p.startswith(".") for p in f.relative_to(folder).parts))
         if len(files) > LOCAL_LIMITS["files"]:
             cli.die(f"{folder}: more than {LOCAL_LIMITS['files']} pages.")
         say(f"  {len(files)} pages in {src}")

@@ -1,4 +1,5 @@
-"""Search with AI: a small language model reorders the top results (MLX, Apple GPU).
+"""Search with AI: a small language model reorders the top results (MLX on the Apple GPU,
+or numpy on the processor elsewhere: cpu.py).
 
 The model reads the question with each of the top results and scores how well that
 documentation entry answers it. It never writes text, so every answer is still an
@@ -7,13 +8,14 @@ query (np.sum, Vec::push) stay first: the benchmark showed the model would other
 move them down.
 
 Which model: the one the benchmark in eval/ picked (see eval/results-test.md), within a
-memory budget of 4 GB for the whole search page. Its files live on this Mac in
+memory budget of 4 GB for the whole search page. Its files live on this computer in
 data/models: `search setup` fetches them once, from a fixed commit of the Hugging Face
 repository, and checks them; searching never downloads anything.
 
-The model (Qwen3, 28 layers, 4-bit weights) runs here directly with MLX, like the meaning
-model in embedding.py: no PyTorch, no transformers. Only two of its outputs are needed,
-the scores of the words "yes" and "no".
+The model (Qwen3, 28 layers, 4-bit weights) runs here directly with MLX or numpy, like
+the meaning model in embedding.py: no PyTorch, no transformers. Only two of its outputs
+are needed, the scores of the words "yes" and "no". On the processor, the start of the
+prompt (instructions and question) is read once and shared by all the results.
 """
 from __future__ import annotations
 
@@ -72,7 +74,7 @@ class Qwen3:
     def __init__(self, folder: Path) -> None:
         import mlx.core as mx
         self.mx = mx
-        cfg = json.loads((folder / "config.json").read_text())
+        cfg = json.loads((folder / "config.json").read_text(encoding="utf-8"))
         if cfg.get("model_type") != "qwen3":
             raise ValueError(f"{folder}: not a Qwen3 model")
         self.cfg = cfg
@@ -143,11 +145,15 @@ class Reranker:
                 "(an API reference, guide or tutorial section) answers it")
 
     def __init__(self, folder: Path) -> None:
-        import mlx.core as mx
         from tokenizers import Tokenizer
-        mx.set_cache_limit(512 << 20)                # keep at most 512 MB of freed GPU memory
-        self.mx = mx
-        self.model = Qwen3(folder)
+        if cli.use_mlx():
+            import mlx.core as mx
+            mx.set_cache_limit(512 << 20)            # keep at most 512 MB of freed GPU memory
+            self.mx, self.model = mx, Qwen3(folder)
+        else:
+            from docsearch import cpu
+            self.mx = None
+            self.model = cpu.Qwen3(folder, json.loads((folder / "config.json").read_text(encoding="utf-8")))
         self.tok = Tokenizer.from_file(str(folder / "tokenizer.json"))
         self.yes, self.no = self.tok.token_to_id("yes"), self.tok.token_to_id("no")
         self.lock = threading.Lock()
@@ -155,13 +161,24 @@ class Reranker:
     def _enc(self, text: str) -> list[int]:
         return self.tok.encode(text, add_special_tokens=False).ids
 
+    def _start(self, q: str) -> list[int]:
+        return self._enc(f"{self.PREFIX}<Instruct>: {self.INSTRUCT}\n<Query>: {q}\n<Document>: ")
+
+    def _rest(self, doc: str) -> list[int]:
+        return self._enc(doc)[:MAX_DOC_TOKENS] + self._enc(self.SUFFIX)
+
     def _ids(self, q: str, doc: str) -> list[int]:
-        return (self._enc(f"{self.PREFIX}<Instruct>: {self.INSTRUCT}\n<Query>: {q}\n<Document>: ")
-                + self._enc(doc)[:MAX_DOC_TOKENS] + self._enc(self.SUFFIX))
+        return self._start(q) + self._rest(doc)
 
     def scores(self, q: str, docs: list[str], batch: int = 8) -> list[float]:
         """How strongly the model says "yes, this answers it" (yes minus no), per document."""
         mx = self.mx
+        if mx is None:                               # numpy: the prompt start once, then each result
+            with self.lock:
+                _, past = self.model.run(self._start(q))
+                return [float(z[0] - z[1]) for z in
+                        (self.model.word_scores(self.model.run(self._rest(d), past)[0], [self.yes, self.no])
+                         for d in docs)]
         seqs = [self._ids(q, d) for d in docs]
         out: list[float] = []
         with self.lock:                              # one question at a time on the GPU
@@ -180,7 +197,7 @@ _load_lock = threading.Lock()
 
 
 def get() -> Reranker | None:
-    """The reranker, loaded on first use (None if its files are not on this Mac)."""
+    """The reranker, loaded on first use (None if its files are not on this computer)."""
     global _reranker
     with _load_lock:
         if _reranker is None:

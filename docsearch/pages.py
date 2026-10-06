@@ -7,7 +7,7 @@ allowlist (only harmless tags and attributes survive) and stored gzipped, with i
     data/index/<source>/pages/<path of the page on the docs site>.gz
     data/index/<source>/pages/_images/<sha1 of the image address>   (+ images.json: types)
 
-Safari then shows only these copies: 100% offline. Links to other websites are kept as
+The browser then shows only these copies: 100% offline. Links to other websites are kept as
 plain text (their address can be copied), so nothing in a page can go online. A strict
 Content-Security-Policy (see web.py) is the second line of defence: even if something
 slipped through, the browser would not run it.
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import os
 import re
 import urllib.parse
 from pathlib import Path
@@ -150,16 +151,33 @@ def sanitize(node, base: str, image=None, image_base: str | None = None) -> str:
 PAGE_PATH = re.compile(r"[\w.~+\-]+(?:/[\w.~+\-]+)*")
 
 
+# Names Windows keeps for devices (con.html is the console there), in any case, with or
+# without an extension.
+RESERVED = re.compile(r"(con|prn|aux|nul|com\d|lpt\d)(\..*)?", re.I)
+
+
+def windows_name(part: str) -> str:
+    """A path part Windows can store as it is: not a device name, not ending in a dot
+    (Windows drops it). Only used on Windows; the same page always maps to the same file."""
+    if RESERVED.fullmatch(part):
+        part = "_" + part
+    return part + "_" if part.endswith(".") else part
+
+
 def page_file(pages_dir: Path, rel: str) -> Path | None:
     """Where a page is stored; None for a path that could leave the folder."""
     rel = rel.split("#")[0].split("?")[0].strip("/") or "index.html"
     if not PAGE_PATH.fullmatch(rel) or any(p in (".", "..") for p in rel.split("/")):
         return None
+    if os.name == "nt":
+        rel = "/".join(windows_name(p) for p in rel.split("/"))
     f = pages_dir / (rel + ".gz")
     try:
         f.resolve().relative_to(pages_dir.resolve())
     except ValueError:
         return None
+    if os.name == "nt" and len(str(f.resolve())) >= 240:    # past Windows' 260-letter limit:
+        return Path("\\\\?\\" + str(f.resolve()))            # the long-path form
     return f
 
 

@@ -1,14 +1,15 @@
-"""docsearch in the browser: a small server on this Mac, shown in Safari.
+"""docsearch in the browser: a small server on this computer, shown in Safari (on a Mac)
+or the default browser.
 
-    search pandas mean      (in the terminal)  →  Safari shows the results and the docs
+    search pandas mean      (in the terminal)  →  the browser shows the results and the docs
 
-The server is a process on this Mac, listening on 127.0.0.1 only (that address never
-leaves the machine; nothing else can reach it). Safari is only the renderer. The server
+The server is a process on this computer, listening on 127.0.0.1 only (that address never
+leaves the machine; nothing else can reach it). The browser is only the renderer. The server
 keeps the search index in memory, so every search after the first is instant, and serves
 the stored copies of the docs pages and their images (see pages.py).
 
-100% offline: the server process blocks every connection that is not to this Mac
-(cli.offline_only), and the pages contain no links that could go online.
+100% offline: the server process blocks every connection that is not to this
+computer (cli.offline_only), and the pages contain no links that could go online.
 
 Safety: the docs HTML is allowlist-filtered when it is stored; every response also sends
 a strict Content-Security-Policy (only this server's own script and styles may run or
@@ -426,7 +427,7 @@ def serve(port: int = PORT) -> None:
         httpd.serve_forever()
     finally:
         try:
-            if json.loads(STATE.read_text()).get("pid") == os.getpid():
+            if json.loads(STATE.read_text(encoding="utf-8")).get("pid") == os.getpid():
                 STATE.unlink()
         except (OSError, ValueError):
             pass
@@ -451,9 +452,13 @@ def start() -> int:
         return port
     cli.say("Starting docsearch (loading the index, a few seconds the first time)...")
     STATE.unlink(missing_ok=True)
+    if os.name == "nt":                              # no console window, and it outlives this one
+        detach = {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
+    else:
+        detach = {"start_new_session": True}
     with open(LOG, "ab") as log:
         subprocess.Popen([sys.executable, "-m", "docsearch.web", "serve"], stdout=log, stderr=log,
-                         stdin=subprocess.DEVNULL, start_new_session=True, cwd=str(cli.ROOT))
+                         stdin=subprocess.DEVNULL, cwd=str(cli.ROOT), **detach)
     deadline = time.time() + 180
     while time.time() < deadline:
         time.sleep(0.25)
@@ -473,7 +478,7 @@ def stop() -> bool:
         STATE.unlink(missing_ok=True)
         return False
     try:
-        os.kill(pid, signal.SIGTERM)
+        os.kill(pid, signal.SIGTERM)                 # (on Windows: ends the process)
     except OSError:
         return False
     for _ in range(40):
@@ -484,7 +489,7 @@ def stop() -> bool:
 
 
 def open_browser(params: dict[str, str]) -> None:
-    """Open (or reuse) the docsearch page in Safari."""
+    """Open (or reuse) the docsearch page: in Safari on a Mac, else the default browser."""
     port = start()
     query = urllib.parse.urlencode({k: v for k, v in params.items() if v})
     url = f"http://127.0.0.1:{port}/" + (f"?{query}" if query else "")

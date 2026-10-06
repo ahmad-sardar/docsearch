@@ -1,8 +1,9 @@
-"""The meaning model (a small BERT sentence encoder) on Apple's GPU, through MLX.
+"""The meaning model (a small BERT sentence encoder) on Apple's GPU through MLX, or on the
+processor with numpy where MLX is not available (cpu.py).
 
 This replaces PyTorch + sentence-transformers (about 700 MB installed): the same model
-files, the same vectors (checked against sentence-transformers to a cosine of 0.9999+),
-but only MLX (Metal) and the `tokenizers` library are needed.
+files, the same vectors (checked against sentence-transformers to a cosine of 0.9999+;
+MLX and numpy agree to 0.99999+), but only MLX or numpy and `tokenizers` are needed.
 
 The model: sentence-transformers/multi-qa-MiniLM-L6-cos-v1 (BERT, 6 layers, 384 dims),
 mean pooling over the tokens, then unit length.
@@ -17,16 +18,21 @@ import numpy as np
 
 class SentenceEncoder:
     def __init__(self, folder: str | Path) -> None:
-        import mlx.core as mx
         from tokenizers import Tokenizer
+
+        from docsearch import cli, cpu
         folder = Path(folder)
-        self.mx = mx
-        self.cfg = json.loads((folder / "config.json").read_text())
+        self.cfg = json.loads((folder / "config.json").read_text(encoding="utf-8"))
         st = folder / "sentence_bert_config.json"
-        max_len = json.loads(st.read_text()).get("max_seq_length", 512) if st.exists() else 512
+        max_len = json.loads(st.read_text(encoding="utf-8")).get("max_seq_length", 512) if st.exists() else 512
         self.tok = Tokenizer.from_file(str(folder / "tokenizer.json"))
         self.tok.enable_truncation(max_length=max_len)
         self.tok.no_padding()
+        if not cli.use_mlx():
+            self.mx, self.cpu = None, cpu.Bert(folder, self.cfg)
+            return
+        import mlx.core as mx
+        self.mx, self.cpu = mx, None
         self.w = {k: v for k, v in mx.load(str(folder / "model.safetensors")).items() if k != "embeddings.position_ids"}
         self.heads = self.cfg["num_attention_heads"]
         self.eps = self.cfg.get("layer_norm_eps", 1e-12)
@@ -75,6 +81,13 @@ class SentenceEncoder:
         for k in range(0, len(texts), batch):
             idx = order[k:k + batch]
             L = max(len(encs[i].ids) for i in idx)
+            if mx is None:                                      # numpy, on the processor
+                ids = np.array([encs[i].ids + [0] * (L - len(encs[i].ids)) for i in idx])
+                mask = np.array([[1] * len(encs[i].ids) + [0] * (L - len(encs[i].ids)) for i in idx])
+                h = self.cpu.forward(ids, mask)
+                pooled = (h * mask[:, :, None]).sum(axis=1) / np.maximum(mask.sum(axis=1, keepdims=True), 1e-9)
+                out[idx] = pooled / np.maximum(np.linalg.norm(pooled, axis=1, keepdims=True), 1e-12)
+                continue
             ids = mx.array([encs[i].ids + [0] * (L - len(encs[i].ids)) for i in idx])
             mask = mx.array([[1] * len(encs[i].ids) + [0] * (L - len(encs[i].ids)) for i in idx])
             h = self._forward(ids, mask)

@@ -1,6 +1,6 @@
 # docsearch
 
-search docs from your terminal. read them in safari. offline.
+search docs from your terminal. read them in your browser. offline.
 
 reading documentation is hard. it's spread over a dozen sites, each with its own layout,
 its own search box, its own idea of where things go. you know the function exists, you
@@ -20,7 +20,8 @@ search sum of elements along an axis      # by meaning
 search ai how do i drop duplicate rows    # a question, ranked by a small local model
 ```
 
-safari opens with results on the left and the docs on the right. that's it.
+your browser opens with results on the left and the docs on the right (safari on a mac).
+that's it.
 
 ![docsearch: "matrix" in the cuda docs, ranked with ai](docs/screenshot.png)
 
@@ -30,11 +31,13 @@ python packages (numpy, pandas, torch, scikit-learn, scipy, anything on pypi), p
 python, rust, c, c++, go, javascript, ocaml, cuda, mojo, max and git. add whatever else
 you want.
 
-everything runs on your mac. once the docs are downloaded, nothing goes online.
+everything runs on your computer. once the docs are downloaded, nothing goes online.
 
 ## install
 
-needs a mac with apple silicon and [uv](https://docs.astral.sh/uv/).
+needs [uv](https://docs.astral.sh/uv/) and git.
+
+### mac
 
 ```bash
 git clone https://github.com/ahmad-sardar/docsearch ~/tools && cd ~/tools
@@ -42,6 +45,23 @@ uv sync
 .venv/bin/search setup        # downloads the models and the docs, once. takes a while.
 echo "alias search='$HOME/tools/.venv/bin/search'" >> ~/.zshrc && source ~/.zshrc
 ```
+
+### windows (and linux)
+
+in powershell:
+
+```powershell
+git clone https://github.com/ahmad-sardar/docsearch $HOME\tools
+cd $HOME\tools
+uv tool install --editable .     # puts the search command on your PATH
+uv tool update-shell             # then open a new terminal
+search setup                     # downloads the models and the docs, once. takes a while.
+```
+
+on a mac with apple silicon the models run on the gpu. everywhere else they run on the
+processor: same results, just slower. computing the vectors in `search setup` and
+`search add` takes longer, and `search ai` takes longer than the ~3 s on a mac. plain search
+is still instant. no man pages on windows.
 
 your list of docs lives in `packages.toml`. edit it and run `search sync`.
 
@@ -74,8 +94,9 @@ contents.
 - `"drop_duplicates"` in quotes: exact match only
 - `/^numpy\.linalg\./` between slashes: regex on names
 - `search -e drop_duplicates`: exact match from the terminal (the shell eats quotes)
-- `search ai ...`: for questions and ideas. a small model on your mac reorders the top
-  results. slower (~3 s), better for "how do i...". plain search is better for names.
+- `search ai ...`: for questions and ideas. a small model on your computer reorders the
+  top results. slower (~3 s on a mac), better for "how do i...". plain search is better
+  for names.
 
 ## adding docs
 

@@ -1,7 +1,7 @@
 [project]
 name = "docsearch"
 version = "0.1.0"
-description = "Search official documentation from the terminal and read it in Safari, 100% offline."
+description = "Search official documentation from the terminal and read it in your browser, 100% offline."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -15,14 +15,15 @@ dependencies = [
     "httpx>=0.27",
     "pygments>=2.14",
     "numpy>=1.24",
-    "mlx>=0.32",                  # the meaning model runs on the Apple GPU (no PyTorch)
+    # the models run on the Apple GPU (no PyTorch); elsewhere on the processor with numpy
+    "mlx>=0.32; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "tokenizers>=0.20",
     "huggingface-hub>=0.30",      # downloads the model once (search add / embed)
     "jellyfish>=1.2",
 ]
 
 [project.scripts]
-search = "docsearch.cli:main"   # search numpy svd  (opens Safari)
+search = "docsearch.cli:main"   # search numpy svd  (opens the browser)
 
 [build-system]
 requires = ["hatchling"]

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 search: search Python package docs and man pages by name, spelling or meaning, and read
-them in Safari. Everything runs on this Mac and is 100% offline: only `search add` and
+them in the browser (Safari on a Mac). Everything runs on this computer and is 100% offline: only `search add` and
 `search sync` (and `search embed`, to download the meaning model once) use the internet.
 
 Build an index once per source (downloads the docs pages and their images):
@@ -15,7 +15,7 @@ Build an index once per source (downloads the docs pages and their images):
     search add man:tmux              # any other man page
     search list | remove NAME | embed NAME
 
-Search (opens Safari: results on the left, the documentation as real HTML):
+Search (opens the browser: results on the left, the documentation as real HTML):
     search                           # the search page
     search numpy svd                 # svd, in numpy
     search pandas numpy mean         # several packages
@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures as cf
+import functools
 import json
 import os
 import re
@@ -179,7 +180,7 @@ class Failed(urllib.error.URLError):
 # What each kind of failure means, and whether waiting can fix it.
 WHY = {
     "dns": "the name does not exist (DNS lookup failed): check the address and your internet connection",
-    "offline": "no route to the site: is this Mac online?",
+    "offline": "no route to the site: is this computer online?",
     "refused": "the server refused the connection",
     "certificate": "its HTTPS certificate is not valid ({detail}); docsearch only downloads from sites "
                    "whose identity can be checked",
@@ -855,13 +856,17 @@ ITEM_RE = re.compile(r"OPTION|COMMAND|BUILTIN|VARIABLE|PARAMETER|EXPANSION", re.
 MAN_NAME = re.compile(r"[A-Za-z0-9_][\w.+:@-]{0,99}")   # never starts with '-': not an option
 
 
+# A command's output as text (UTF-8 everywhere; Windows would otherwise guess its code page)
+OUTPUT = {"capture_output": True, "text": True, "encoding": "utf-8", "errors": "replace"}
+
+
 def read_man(page: str) -> str | None:
     if not shutil.which("man") or not MAN_NAME.fullmatch(page):
         return None
     env = dict(os.environ, MANPAGER="cat", PAGER="cat", MANWIDTH="100", GROFF_NO_SGR="1")
     env.pop("MAN_KEEP_FORMATTING", None)
     try:
-        r = subprocess.run(["man", page], capture_output=True, text=True, env=env, timeout=60)
+        r = subprocess.run(["man", page], **OUTPUT, env=env, timeout=60)
     except (OSError, subprocess.TimeoutExpired):
         return None
     if r.returncode != 0 or not r.stdout.strip():
@@ -981,7 +986,7 @@ def git_page_names() -> list[str]:
     pat = re.compile(r"^\s{2,}([a-z][a-z0-9-]*)(?:\s{2,}\S.*)?$")
     for flag, prefix in (("-a", "git-"), ("-g", "git")):
         try:
-            r = subprocess.run(["git", "help", flag], capture_output=True, text=True, env=env, timeout=30)
+            r = subprocess.run(["git", "help", flag], **OUTPUT, env=env, timeout=30)
         except OSError:
             die("git is not installed or not on PATH.")
         for line in r.stdout.splitlines():
@@ -995,7 +1000,7 @@ def build_git(workers: int) -> list[Entry]:
     pages = git_page_names()
     say(f"  {len(pages)} git manual pages")
     try:
-        html_dir = Path(subprocess.run(["git", "--html-path"], capture_output=True, text=True).stdout.strip())
+        html_dir = Path(subprocess.run(["git", "--html-path"], **OUTPUT).stdout.strip())
     except OSError:
         html_dir = Path()
     env = dict(os.environ, GIT_PAGER="cat", PAGER="cat")
@@ -1010,7 +1015,7 @@ def build_git(workers: int) -> list[Entry]:
             clean_soup(soup)
             return split_markdown(page, html_to_md(str(soup.body or soup)), "git", str(html_file))
         if page.startswith("git-"):                       # last resort: the short usage text
-            r = subprocess.run(["git", page[4:], "-h"], capture_output=True, text=True, env=env)
+            r = subprocess.run(["git", page[4:], "-h"], **OUTPUT, env=env)
             usage = (r.stdout or r.stderr).strip()
             if usage:
                 return [Entry(title=f"{page} › Usage", kind="usage", location=f"git {page[4:]} -h",
@@ -1027,13 +1032,13 @@ def build_man(page: str, source: str) -> list[Entry]:
         return split_man(page, raw, source)
     if page == "bash" and shutil.which("bash"):             # no man page: use bash's own help
         say("  no bash man page here; using 'help' text of the bash builtins instead")
-        names = subprocess.run(["bash", "-c", "compgen -b"], capture_output=True, text=True).stdout.split()
+        names = subprocess.run(["bash", "-c", "compgen -b"], **OUTPUT).stdout.split()
         out = []
         for b in dict.fromkeys(names):
             if not MAN_NAME.fullmatch(b):
                 continue
             txt = subprocess.run(["bash", "-c", 'help -m -- "$1"', "bash", b],   # no shell string
-                                 capture_output=True, text=True).stdout
+                                 **OUTPUT).stdout
             if txt.strip():
                 out.append(Entry(title=f"bash builtin › {b}", kind="help", location=f"bash: help {b}",
                                  text=fence(txt.splitlines()), source=source))
@@ -1068,7 +1073,7 @@ def private_dir(d: Path) -> None:
     """Index folders are readable only by you (they decide what the tool shows and runs)."""
     for p in (HOME, d):
         p.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if p.stat().st_mode & 0o077:
+        if os.name != "nt" and p.stat().st_mode & 0o077:     # (Windows: the user folder's own rights)
             p.chmod(0o700)
 
 
@@ -1146,6 +1151,20 @@ def model_cached() -> bool:
     return all((pinned_dir(MODEL_NAME, MODEL_REVISION) / f).exists() for f in MODEL_FILES)
 
 
+@functools.cache
+def use_mlx() -> bool:
+    """Run the models with MLX on the Apple GPU when it is installed (Apple-silicon Macs);
+    otherwise on the processor with numpy (Windows, Linux, Intel Macs; see cpu.py).
+    DOCSEARCH_BACKEND=numpy uses the processor anyway."""
+    if os.environ.get("DOCSEARCH_BACKEND", "").lower() == "numpy":
+        return False
+    try:
+        import mlx.core  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 def get_model(download: bool = False):
     """Load the meaning model, with no network access. Only `search setup`, `add` and
     `embed` may download it, once. Searching never contacts Hugging Face."""
@@ -1153,10 +1172,10 @@ def get_model(download: bool = False):
     if _model is None:
         if not model_cached():
             if not download:
-                die("the meaning model is not on this Mac yet. Run: search setup")
+                die("the meaning model is not on this computer yet. Run: search setup")
             say(f"Downloading the meaning model {MODEL_NAME} (once, about 90 MB)...")
             fetch_pinned(MODEL_NAME, MODEL_REVISION, MODEL_FILES)
-        from docsearch.embedding import SentenceEncoder      # MLX on the Apple GPU, no PyTorch
+        from docsearch.embedding import SentenceEncoder      # MLX or numpy, no PyTorch
         _model = SentenceEncoder(pinned_dir(MODEL_NAME, MODEL_REVISION))
     return _model
 
@@ -1168,7 +1187,7 @@ def embed_source(sid: str) -> None:
     meta, entries = load(sid)
     texts = [f"{e.title}\n{plain(e.text)[:EMBED_CHARS]}" for e in entries]
     say(f"  computing {len(texts)} vectors for '{sid}'")
-    vecs = get_model(download=True).encode(texts, batch=64)          # MLX, on the Apple GPU
+    vecs = get_model(download=True).encode(texts, batch=64)
     tmp = HOME / sid / "emb.tmp.npy"
     np.save(tmp, vecs.astype(np.float32))
     os.replace(tmp, HOME / sid / "emb.npy")
@@ -1249,6 +1268,20 @@ def trigrams(s: str) -> set[str]:
     return {s[k:k + 3] for k in range(len(s) - 2)}
 
 
+class FileSlices:
+    """Bytes of a file by position, opening it for each read. Windows cannot delete a file
+    another program holds open (a memory map does), so there the running search page holds
+    none, and remove and upgrade can replace index folders under it."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def __getitem__(self, part: slice) -> bytes:
+        with open(self.path, "rb") as f:
+            f.seek(part.start)
+            return f.read(part.stop - part.start)
+
+
 def tails(sid: str, entries: list[Entry]):
     """What a running search does not keep in memory of each text (from KEEP_CHARS on), in
     one file read by position (tails.bin, offsets in tails.npy): reading one entry's whole
@@ -1264,8 +1297,9 @@ def tails(sid: str, entries: list[Entry]):
         np.save(tmp, np.cumsum([0] + [len(x) for x in parts]).astype(np.int64))
         os.replace(tmp, offs_f)
     offs = np.load(offs_f)
-    data = np.memmap(data_f, dtype=np.uint8, mode="r") if data_f.stat().st_size else np.zeros(0, np.uint8)
-    return offs, data
+    if not data_f.stat().st_size:
+        return offs, np.zeros(0, np.uint8)
+    return offs, (FileSlices(data_f) if os.name == "nt" else np.memmap(data_f, dtype=np.uint8, mode="r"))
 
 
 # --------------------------------------------------------------------------- strict search
@@ -1454,9 +1488,12 @@ class Index:
         from docsearch.spelling import Speller             # misspelled words (see search)
         self.speller: Speller | None = Speller({t: len(v[0]) for t, v in self.post.items()})
         if mode != "spell":
-            import mlx.core as mx
-            # on the GPU at half precision: half the memory, and the similarity is computed there
-            self.emb = mx.array(np.concatenate(vecs)).astype(mx.float16)
+            if use_mlx():
+                import mlx.core as mx
+                # on the GPU at half precision: half the memory, and the similarity is computed there
+                self.emb = mx.array(np.concatenate(vecs)).astype(mx.float16)
+            else:
+                self.emb = np.concatenate(vecs).astype(np.float32)
             self.model = get_model()
             self.model.encode(["warm up"])               # the first search is then fast
 
@@ -1516,8 +1553,13 @@ class Index:
 
     # Meaning: embedding similarity ---------------------------------------------------
     def rank_meaning(self, q: str) -> list[int]:
-        import mlx.core as mx
         import numpy as np
+        if not use_mlx():
+            sims = self.emb @ self.model.encode([q])[0]     # cosine similarity (unit vectors)
+            k = min(CANDIDATES, len(sims))
+            top = np.argpartition(-sims, k - 1)[:k]
+            return [int(i) for i in top[np.lexsort((top, -sims[top]))]]
+        import mlx.core as mx
         qv = mx.array(self.model.encode([q])[0]).astype(mx.float16)
         sims = self.emb @ qv                       # cosine similarity (vectors are unit length)
         k = min(CANDIDATES, sims.shape[0])
@@ -1839,7 +1881,7 @@ def cmd_add(args) -> None:
             kind = e.kind if isinstance(e, Failed) else "other"
             say(f"  Could not download: {getattr(e, 'reason', e)}")
             if kind == "certificate" and "local issuer" in str(e):    # this Mac's Python, not the site
-                say("  Python on this Mac cannot check certificates. Fix: cd ~/tools && uv add truststore")
+                say("  Python on this computer cannot check certificates. Fix: cd ~/tools && uv add truststore")
             else:
                 say(f"  {NEXT.get(kind, NEXT['other'])}")
             say(f"  {LOCAL_TIP.format(name=name)}")
@@ -1877,7 +1919,7 @@ def cmd_add(args) -> None:
 
 LOCAL_PATH = re.compile(r"^(/|~|\.{1,2}/)")       # NAME=/path, ~/path, ./path: a local copy
 NEXT = {
-    "dns": "Check the address; if it is right, check this Mac's internet connection.",
+    "dns": "Check the address; if it is right, check this computer's internet connection.",
     "offline": "Connect to the internet and run the same command again.",
     "refused": "The site is not answering. Try again later.",
     "timeout": "The site is slow or overloaded. Try again later, or more gently: --workers 2",
@@ -1897,7 +1939,7 @@ NEXT = {
     "other": "",
 }
 LOCAL_TIP = ("Another way, which always works: download the docs yourself (many projects offer an HTML "
-             ".zip: look for 'Download' or 'Offline'; or save the pages from Safari), then: "
+             ".zip: look for 'Download' or 'Offline'; or save the pages from your browser), then: "
              "search add {name}=/path/to/folder-or.zip")
 
 
@@ -2114,7 +2156,7 @@ def cmd_sync(args) -> None:
     for name, urls in (tomllib.loads(CONFIG.read_text(encoding="utf-8")).get("saved") or {}).items():
         sid = source_id(name)
         keep.add(sid)
-        have = set(json.loads((HOME / sid / "meta.json").read_text()).get("urls", [])) \
+        have = set(json.loads((HOME / sid / "meta.json").read_text(encoding="utf-8")).get("urls", [])) \
             if (HOME / sid / "meta.json").exists() else set()
         missing = [u for u in urls if isinstance(u, str) and safe_url(u) and u not in have]
         if missing:
@@ -2347,8 +2389,8 @@ def cmd_upgrade(args) -> None:
         if not have:
             say(f"{name}: not indexed. Add it with: search add {spec}")
             continue
-        meta = json.loads((HOME / (base if base in have else have[0]) / "meta.json").read_text())
-        old = ", ".join(f"{s} ({json.loads((HOME / s / 'meta.json').read_text()).get('version') or 'no version'})"
+        meta = json.loads((HOME / (base if base in have else have[0]) / "meta.json").read_text(encoding="utf-8"))
+        old = ", ".join(f"{s} ({json.loads((HOME / s / 'meta.json').read_text(encoding="utf-8")).get('version') or 'no version'})"
                         for s in have)
         if not want:
             now = current_version(meta) if base in have else ""     # a pinned version's site is not the newest
@@ -2369,7 +2411,7 @@ def cmd_upgrade(args) -> None:
             say(f"  {name}: the new docs could not be downloaded; the old ones are kept.")
             continue
         same = d.name in have
-        why = incomplete(d, json.loads((HOME / d.name / "meta.json").read_text()) if same else None)
+        why = incomplete(d, json.loads((HOME / d.name / "meta.json").read_text(encoding="utf-8")) if same else None)
         if why and not args.accept_partial:
             shutil.rmtree(STAGING, ignore_errors=True)
             say(f"  {name}: the new download looks incomplete ({why}); the old docs are kept. "
@@ -2377,7 +2419,7 @@ def cmd_upgrade(args) -> None:
             continue
         install_staged(d, [s for s in have if s != d.name])
         config_set(name, want or "latest")
-        new = json.loads((HOME / d.name / "meta.json").read_text()).get("version") or "no version number"
+        new = json.loads((HOME / d.name / "meta.json").read_text(encoding="utf-8")).get("version") or "no version number"
         say(f"  {name}: now {d.name} ({new})")
 
 
@@ -2443,7 +2485,7 @@ def config_set(name: str, value, table: str = "packages") -> None:
 
 def remember(spec: str) -> None:
     """After `search add`: list the new docs in packages.toml, so `search sync` keeps them
-    (and a copy of the project on another Mac gets them too)."""
+    (and a copy of the project on another computer gets them too)."""
     import tomllib
     if spec.startswith("pypi:"):
         say(f"  (not added to {CONFIG.name}: list it there by hand if you want sync to keep it)")
@@ -2492,7 +2534,7 @@ def split_sources(words: list[str]) -> tuple[list[str], str]:
 
 def offline_only() -> None:
     """Cut this process off from the internet. From here on it can only connect to this
-    Mac (127.0.0.1, ::1, local sockets); any other address raises an error instead of
+    computer (127.0.0.1, ::1, local sockets); any other address raises an error instead of
     connecting. docsearch uses the internet only in `search add` and `search sync`."""
     import ipaddress
     import socket
@@ -2539,7 +2581,7 @@ def offline_only() -> None:
 
 
 def quick_search(words: list[str], ai: bool = False) -> None:
-    """search numpy svd  ->  Safari opens with the results for 'svd' in numpy.
+    """search numpy svd  ->  the browser opens with the results for 'svd' in numpy.
     Leading package names choose the packages; without one, all packages are searched.
     search ai IDEA  ->  the same, and the AI model reorders the top results."""
     from docsearch import rerank, web
@@ -2569,6 +2611,9 @@ def index_changed() -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    if os.name == "nt":                     # output piped to a file would be in the code page
+        for stream in (sys.stdout, sys.stderr):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     p = argparse.ArgumentParser(prog="search", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -2619,7 +2664,7 @@ def main(argv: list[str] | None = None) -> None:
         u.add_argument("--accept-partial", action="store_true",
                        help="replace docs you have even if the new download looks incomplete")
         u.set_defaults(func=cmd_upgrade)
-    sub.add_parser("ai", help="search with AI: search ai IDEA (a model on this Mac reorders the top results)")
+    sub.add_parser("ai", help="search with AI: search ai IDEA (a model on this computer reorders the top results)")
     argv = sys.argv[1:] if argv is None else argv
     if not argv or argv[0] not in ONLINE:          # everything but indexing stays offline
         offline_only()

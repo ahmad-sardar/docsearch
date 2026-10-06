@@ -1,0 +1,31 @@
+# On a fresh Windows and Linux machine: install as the README says, then index a small
+# folder of docs and search it end to end (tests/smoke.py). The models run on the
+# processor there (numpy), as they would for anyone without an Apple-silicon Mac.
+name: smoke
+on:
+  push:
+    branches: [windows]
+  workflow_dispatch:
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: install (README)
+        run: uv tool install --editable .
+      - name: the search command works (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '& "$(uv tool dir --bin)\search.exe" known'
+      - name: the search command works (linux)
+        if: runner.os != 'Windows'
+        run: '"$(uv tool dir --bin)/search" known'
+      - name: index, search, remove
+        run: |
+          uv sync
+          uv run python tests/smoke.py

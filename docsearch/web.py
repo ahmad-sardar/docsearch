@@ -39,7 +39,7 @@ from docsearch import pages as offline
 
 STATIC = Path(__file__).parent / "static"
 STATIC_TYPES = {"index.html": "text/html; charset=utf-8", "app.css": "text/css; charset=utf-8",
-                "app.js": "text/javascript; charset=utf-8"}
+                "app.js": "text/javascript; charset=utf-8", "icon.svg": "image/svg+xml", "icon.png": "image/png"}
 STATE = cli.DATA / "server.json"            # {"pid": ..., "port": ...} of the running server
 LOG = cli.DATA / "server.log"
 PORT = int(os.environ.get("DOCSEARCH_PORT", "8765"))
@@ -298,8 +298,8 @@ class Handler(BaseHTTPRequestHandler):
                 if found is None:
                     return self.send(404, b"not found", "text/plain")
                 return self.send(200, found[0], found[1], ASSET_CSP, "max-age=86400")
-            if url.path == "/favicon.ico":
-                return self.send(204, b"", "image/x-icon")
+            if url.path in ("/favicon.ico", "/apple-touch-icon.png"):     # asked for without the page
+                return self.send(200, (STATIC / "icon.png").read_bytes(), "image/png")
             if url.path == "/api/info":
                 return self.json(lib.info())
             if url.path == "/api/search":

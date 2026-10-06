@@ -121,6 +121,7 @@ async function search({ openFirst = true, append = false, ai = false } = {}) {
   const where = state.srcs.size ? searchedSources().join(", ") : "all packages";
   status(state.q ? `${data.total} results for “${state.q}” · ${where}${data.ai === "ranked" ? " · ranked with AI" : ""}`
                  : `${data.total} entries · ${where}, in reading order`);
+  if (data.error) status(data.error);
   if (data.ai === "not installed") {
     toast("The AI model is not on this Mac (docsearch/data/models)");
     setAI(false);

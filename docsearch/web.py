@@ -84,7 +84,7 @@ class Library:
         self.default = {min(v, key=lambda s: ("@" in s, s)) for v in groups.values()}
         self.summaries: dict[int, str] = {}
         self.image_types: dict[str, dict[str, str]] = {}
-        self._full: dict = {}
+        self._browse_pos: dict[int, int] = {}
         self.pygments = pygments_css()
         self.index.search("warm up")                 # load caches before the first request
 
@@ -118,22 +118,38 @@ class Library:
     def search(self, q: str, srcs: set[str], offset: int, limit: int, ai: bool = False) -> dict:
         q = q.strip()
         srcs = srcs or self.default                  # never two versions of one package at once
+        rest, phrases, patterns = cli.parse_strict(q)
+        plain_q = " ".join([rest] + phrases).strip()     # what ranks the results (and the AI reads)
         if not q:                                    # no query: all the docs, in reading order
             ids = [i for i in self.index.browse if not srcs or self.sid_of[i] in srcs]
+        elif phrases or patterns:                    # strict: every match, the best first
+            with self.lock:
+                try:
+                    found = self.index.strict(phrases, patterns, self.full_text)
+                except ValueError as e:
+                    return {"q": q, "total": 0, "ai": None, "items": [], "error": str(e)}
+                hits = self.index.search(plain_q, limit=3000) if plain_q else []
+            allowed = {i for i in found if (not srcs or self.sid_of[i] in srcs) and not self.index.duplicate(i)}
+            ranked = [i for i, _, _ in hits if i in allowed]
+            if not self._browse_pos:
+                self._browse_pos = {i: k for k, i in enumerate(self.index.browse)}
+            seen = set(ranked)
+            ids = ranked + sorted((i for i in allowed if i not in seen),
+                                  key=lambda i: self._browse_pos.get(i, len(self._browse_pos)))
         else:
             with self.lock:
                 hits = self.index.search(q, limit=3000 if srcs else cli.SHOW)
             ids = [i for i, _, _ in hits if not srcs or self.sid_of[i] in srcs][:cli.SHOW]
         state = None
-        if ai and q:                                 # the model reorders the top results
+        if ai and plain_q:                           # the model reorders the top results
             from docsearch import rerank
             model = rerank.get()
             if model is None:
                 state = "not installed"
             else:
-                s = model.scores(q, [self.rerank_text(i) for i in ids[:rerank.TOP]])
+                s = model.scores(plain_q, [self.rerank_text(i) for i in ids[:rerank.TOP]])
                 with self.lock:
-                    exact = set(self.index.rank_name(q)[0])
+                    exact = set(self.index.rank_name(plain_q)[0])
                 ids = rerank.reorder(ids, s, exact)
                 state = "ranked"
         return {"q": q, "total": len(ids), "ai": state,
@@ -183,13 +199,7 @@ class Library:
 
     def full_text(self, i: int) -> str:
         """An entry's whole text (memory keeps only its start; see cli.KEEP_CHARS)."""
-        e = self.index.entries[i]
-        if i not in self.index.cut:
-            return e.text
-        sid = self.sid_of[i]
-        if self._full.get("sid") != sid:                 # one source's texts at a time
-            self._full = {"sid": sid, "texts": {x.location: x.text for x in cli.load(sid)[1]}}
-        return self._full["texts"].get(e.location, e.text)
+        return self.index.full_text(i)
 
     def page(self, path: str) -> dict | None:
         sid, _, rel = path.partition("/")

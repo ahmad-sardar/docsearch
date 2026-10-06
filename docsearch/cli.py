@@ -1099,6 +1099,56 @@ def tokens(s: str) -> list[str]:
     return TOKEN.findall(s.lower())
 
 
+def tails(sid: str, entries: list[Entry]):
+    """What a running search does not keep in memory of each text (from KEEP_CHARS on), in
+    one file read by position (tails.bin, offsets in tails.npy): reading one entry's whole
+    text then costs microseconds. Built once per index, from the full texts in `entries`."""
+    import numpy as np
+    d = HOME / sid
+    data_f, offs_f, src = d / "tails.bin", d / "tails.npy", d / "entries.json"
+    if not (offs_f.exists() and data_f.exists() and offs_f.stat().st_mtime >= src.stat().st_mtime
+            and len(np.load(offs_f, mmap_mode="r")) == len(entries) + 1):
+        parts = [e.text[KEEP_CHARS:].encode("utf-8") for e in entries]
+        write_atomic(data_f, b"".join(parts))
+        tmp = d / "tails.tmp.npy"
+        np.save(tmp, np.cumsum([0] + [len(x) for x in parts]).astype(np.int64))
+        os.replace(tmp, offs_f)
+    offs = np.load(offs_f)
+    data = np.memmap(data_f, dtype=np.uint8, mode="r") if data_f.stat().st_size else np.zeros(0, np.uint8)
+    return offs, data
+
+
+# --------------------------------------------------------------------------- strict search
+
+# "exact words" anywhere in the query; /regex/ as a word of its own (so cpp/vector/push stays
+# an ordinary search)
+STRICT = re.compile(r'"([^"]+)"|(?:(?<=\s)|^)/((?:\\.|[^/\\])+)/(?=\s|$)')
+
+
+def parse_strict(q: str) -> tuple[str, list[str], list[str]]:
+    """'pandas "keep=" first' -> ('pandas first', ['keep='], []): the fuzzy rest, the quoted
+    phrases, the /patterns/."""
+    phrases: list[str] = []
+    patterns: list[str] = []
+
+    def take(m) -> str:
+        (phrases if m.group(1) is not None else patterns).append(m.group(1) if m.group(1) is not None else m.group(2))
+        return " "
+    rest = STRICT.sub(take, q)
+    return " ".join(rest.split()), [p for p in phrases if p.strip()], patterns
+
+
+def phrase_regex(p: str) -> re.Pattern:
+    """A quoted phrase as a pattern: exactly these words in this order (any spacing), whole
+    words at its ends (sum: not cumsum or sum_x), any case unless it has a capital letter."""
+    body = r"\s+".join(re.escape(w) for w in p.split())
+    if re.match(r"\w", p.strip()):
+        body = r"(?<!\w)" + body
+    if re.search(r"\w$", p.strip()):
+        body += r"(?!\w)"
+    return re.compile(body, 0 if any(c.isupper() for c in p) else re.I)
+
+
 def keyword_postings(sid: str, entries: list[Entry]):
     """Inverted index of one source: word -> (entry ids, counts). Built once, then cached."""
     from collections import Counter
@@ -1181,6 +1231,7 @@ class Index:
         self.mode = mode
         self.entries: list[Entry] = []
         self.cut: set[int] = set()           # entries whose text is shortened in memory
+        self.tails: list = []                # per source: (first entry, offsets, the rest on disk)
         vecs, posts, lens = [], [], []
         self.labels: list[str] = []          # "numpy 2.5": the name and the docs version
         for spec in specs:
@@ -1190,6 +1241,7 @@ class Index:
             post, ln = keyword_postings(sid, ents)       # (built from the full text, cached)
             posts.append((post, len(self.entries)))
             lens.append(ln)
+            self.tails.append((len(self.entries), *tails(sid, ents)))
             for e in ents:          # memory: keep the start of each text (summaries, snippets);
                 if len(e.text) > KEEP_CHARS:              # the rest is read from disk if needed
                     self.cut.add(len(self.entries))
@@ -1329,6 +1381,43 @@ class Index:
             lists.append(("meaning", self.rank_meaning(q), 1.0))
         # A page about one API object (numpy.sum's page) repeats that object: keep the object.
         return [h for h in rrf(lists) if not self.duplicate(h[0])][:limit]
+
+    def full_text(self, i: int) -> str:
+        """An entry's whole text: the start kept in memory, the rest read from its tails file."""
+        e = self.entries[i]
+        if i not in self.cut:
+            return e.text
+        import bisect
+        start, offs, data = self.tails[bisect.bisect_right([t[0] for t in self.tails], i) - 1]
+        k = i - start
+        return e.text + bytes(data[offs[k]:offs[k + 1]]).decode("utf-8", "replace")
+
+    def strict(self, phrases: list[str], patterns: list[str], full_text) -> list[int]:
+        """Every entry that contains each quoted phrase (in its name or text) and whose name
+        matches each /pattern/. The keyword index narrows the candidates first; texts kept
+        only partly in memory are read in full (full_text) when their start does not match."""
+        try:
+            regs = [re.compile(p) for p in patterns if len(p) <= 200]
+        except re.error as e:
+            raise ValueError(f"not a valid /pattern/: {e}") from None
+        if len(regs) != len(patterns):
+            raise ValueError("a /pattern/ may be at most 200 characters")
+        phr = [phrase_regex(p) for p in phrases]
+        cand = None
+        for p in phrases:
+            for t in set(tokens(p)):
+                ids = set(self.post[t][0].tolist()) if t in self.post else set()
+                cand = ids if cand is None else cand & ids
+        out = []
+        for i in sorted(cand) if cand is not None else range(len(self.entries)):
+            e = self.entries[i]
+            name = api_name(e.title) if e.kind not in PAGE_KINDS else e.title
+            if not all(r.search(name) for r in regs):
+                continue
+            if all(r.search(e.title) or r.search(e.text) for r in phr) or (
+                    i in self.cut and all(r.search(e.title) or r.search(full_text(i)) for r in phr)):
+                out.append(i)
+        return out
 
     def duplicate(self, i: int) -> bool:
         e = self.entries[i]
@@ -2053,6 +2142,10 @@ def main(argv: list[str] | None = None) -> None:
         return
     if argv[0] == "ai":                            # search ai IDEA (any words, even "-O3")
         quick_search(list(argv[1:]), ai=True)
+        return
+    if argv[0] in ("-e", "--exact"):               # search -e drop_duplicates: "drop_duplicates"
+        sources, q = split_sources(list(argv[1:]))  # (the shell removes quotes typed around words)
+        quick_search(sources + [f'"{q}"'] if q else sources)
         return
     if argv[0] not in COMMANDS and not argv[0].startswith("-"):
         quick_search(list(argv))

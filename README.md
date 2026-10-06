@@ -36,6 +36,7 @@ search numpy svd         # Safari opens: results on the left, the docs on the ri
 search pandas mean       # one package
 search sum of elements   # no package named: all of them
 search ai how do I drop duplicate rows   # an idea or a question: AI reorders the results
+search -e drop_duplicates               # strict: exactly this (see Strict search)
 search                   # just the search page
 search list              # what is indexed, and which docs version
 search stop              # stop the background server (it starts again by itself)
@@ -64,6 +65,24 @@ Click a package name at the top to search only that package.
 
 Edit `packages.toml` to choose packages and versions, then run `search sync` (or see
 Versions below).
+
+## Strict search
+
+In the search box, put exact text in double quotes, like Google; the rest stays fuzzy:
+
+| Query | Finds |
+|---|---|
+| `"drop_duplicates"` | every entry that contains exactly that, all of them (not just the top 100) |
+| `pandas "keep=" first` | entries containing `keep=`, ranked by the rest of the query |
+| `"Vec::push"` | `::` and other symbols are matched exactly too |
+| `/^numpy\.linalg\./` | names matching a regular expression (a `/pattern/` as a word of its own) |
+| `"sum of" /\.sum$/` | both: the phrase in the text and a name ending in `.sum` |
+
+Quoted text matches whole words (`"sum"` finds `numpy.sum`, not `cumsum`), in any case
+unless it has a capital letter (`"DataFrame"` is case-sensitive), and is searched in the
+names and the full text. An unclosed quote, or a `/` inside a word (`cpp/vector`), is an
+ordinary search. In the terminal the shell removes quotes, so use `search -e WORDS` (or
+`search '"WORDS"'`); `search -e pandas keep=` searches pandas only.
 
 ## Search with AI
 

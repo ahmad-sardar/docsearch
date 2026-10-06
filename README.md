@@ -22,6 +22,8 @@ search ai how do i drop duplicate rows    # a question, ranked by a small local 
 
 safari opens with results on the left and the docs on the right. that's it.
 
+![docsearch: "matrix" in the cuda docs, ranked with ai](docs/screenshot.png)
+
 ## what's in it
 
 python packages (numpy, pandas, torch, scikit-learn, scipy, anything on pypi), plus

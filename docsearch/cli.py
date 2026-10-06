@@ -1100,6 +1100,8 @@ def tokens(s: str) -> list[str]:
 
 
 TRIGRAM_KEEP = 5000           # titles the spelling ranker scores (see Index.rank_edit)
+TYPO_EDITS = 2                # letters a misspelled API name may have wrong (Index.rank_typo)
+TYPO_WEIGHT = 2.0             # its vote in the fusion (exact name: 3; chosen on the benchmark)
 
 
 def trigrams(s: str) -> set[str]:
@@ -1295,6 +1297,9 @@ class Index:
             self.full_names.add(".".join(parts))
             for k in range(len(parts)):
                 self.names.setdefault(".".join(parts[k:]), []).append(i)
+        self.keys_by_len: dict[int, list[str]] = {}      # API name keys by length (rank_typo)
+        for k in self.names:
+            self.keys_by_len.setdefault(len(k), []).append(k)
         # The list shown before you type: every entry, in the order the docs are read
         # (table of contents, then each page top to bottom; see order.py).
         from docsearch import order
@@ -1379,15 +1384,50 @@ class Index:
         s = np.array(sims[mx.array(top)].astype(mx.float32))
         return [int(i) for i in top[np.argsort(-s)]]
 
-    def rank_name(self, q: str) -> tuple[list[int], list[int]]:
-        """(API names equal to the query, names starting with it). Short paths first,
-        so 'sum' gives numpy.sum before numpy.ma.sum."""
+    @staticmethod
+    def name_key(q: str) -> str | None:
+        """The query as an API name key: 'np.linalg svd' -> 'numpy.linalg_svd', 'Vec::push'
+        -> 'vec.push' (None if it cannot be a name)."""
         key = re.sub(r"\s+", "_", q.strip().lower()).replace("::", ".")   # read csv -> read_csv
         for short, full in ALIASES.items():
             if key.startswith(short + "."):
                 key = full + key[len(short):]
                 break
-        if not re.fullmatch(r"[\w.]+", key):
+        return key if re.fullmatch(r"[\w.]+", key) else None
+
+    def name_order(self, i: int):
+        name = api_name(self.entries[i].title)
+        return name.count("."), len(name)
+
+    def rank_typo(self, q: str) -> list[int]:
+        """API names the query misspells (dataframe.mrege, torch.nn.Lienar, Vec::psuh): at
+        most TYPO_EDITS letters missing, extra, wrong or swapped, fewer for short names.
+        Only when no name is spelled exactly like the query. Closest first."""
+        import numpy as np
+        from rapidfuzz import process
+        from rapidfuzz.distance import OSA
+        key = self.name_key(q)
+        if key is None or key in self.names:
+            return []
+        most = min(TYPO_EDITS, 0 if len(key) < 4 else 1 if len(key) < 6 else 2)
+        if most == 0:
+            return []
+        cand = [k for n in range(len(key) - most, len(key) + most + 1) for k in self.keys_by_len.get(n, [])]
+        if not cand:
+            return []
+        d = process.cdist(cand, [key], scorer=OSA.distance, score_cutoff=most, dtype=np.int32, workers=-1)[:, 0]
+        out: list[int] = []
+        for _, k in sorted((int(d[j]), cand[j]) for j in np.flatnonzero(d <= most)):
+            out += sorted(set(self.names[k]) - set(out), key=self.name_order)
+            if len(out) >= CANDIDATES:
+                break
+        return out[:CANDIDATES]
+
+    def rank_name(self, q: str) -> tuple[list[int], list[int]]:
+        """(API names equal to the query, names starting with it). Short paths first,
+        so 'sum' gives numpy.sum before numpy.ma.sum."""
+        key = self.name_key(q)
+        if key is None:
             return [], []
         exact = self.names.get(key, [])
         prefix = [i for k, ids in self.names.items() if k != key and k.startswith(key) for i in ids] \
@@ -1409,7 +1449,7 @@ class Index:
         exact, prefix = self.rank_name(q)
         # An exact API name is the strongest evidence (nn.Linear -> torch.nn.Linear); a name
         # that only starts with the query (torch.nn.Linear.forward) counts much less.
-        lists = [("name", exact, 3.0), ("prefix", prefix, 1.0)]
+        lists = [("name", exact, 3.0), ("prefix", prefix, 1.0), ("typo", self.rank_typo(q), TYPO_WEIGHT)]
         if edit is not None:
             # The two title rankers share one vote; the full-text word ranker has one vote.
             abbrev, words = self.rank_abbrev(q), self.rank_words(q)

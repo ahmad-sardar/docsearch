@@ -187,8 +187,10 @@ search save https://docs.python.org/3/tutorial/classes.html --series   # and the
 search save URL --to rust-reading                                  # your own collections
 ```
 
-The article's text is taken out of the site around it, as Safari's Reader does (no menus,
-sidebars, ads, comments or newsletter boxes), and kept with its code and images: it reads
+The article's text is taken out of the site around it by a general method, the one behind
+Firefox's Reader View (no rules for particular sites: links without sentences of their own
+are navigation, code and data tables always stay; `eval/results-articles.md` measures it on
+14 sites), and kept with its code and images: it reads
 and searches like the docs, under its collection's name ("tutorials" by default).
 `--series` follows the page's "Next" links within the same section (up to 50 parts).
 Saving again adds to the collection; `packages.toml` lists the pages (`[saved]`), so
@@ -276,3 +278,9 @@ docsearch does not try to get around bot checks or logins.
 | `docsearch/static/` | the page: HTML, stylesheet, script |
 | `data/` | downloaded docs, indexes and the two models (not in git; `search setup` fills it) |
 | `.venv/` | the environment (not in git; rebuilt by `uv sync`) |
+
+## Contributors
+
+- [@ahmad-sardar](https://github.com/ahmad-sardar): author and maintainer
+- Claude (Anthropic's AI model, via Claude Code): co-author; its commits carry a
+  `Co-Authored-By: Claude` line, which GitHub shows as a co-author

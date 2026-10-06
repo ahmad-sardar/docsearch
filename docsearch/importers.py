@@ -17,7 +17,6 @@ Store, with its images (see pages.py). robots.txt is respected.
 from __future__ import annotations
 
 import concurrent.futures as cf
-import copy
 import gzip
 import json
 import os
@@ -28,7 +27,7 @@ import urllib.parse
 import urllib.robotparser
 from pathlib import Path
 
-from docsearch import cli
+from docsearch import article, cli
 from docsearch import pages as offline
 from docsearch.cli import Entry, say
 
@@ -225,13 +224,8 @@ def website_page(sid: str, name: str, root: str, pages_dir: Path, url: str, html
     cli.clean_soup(soup)                       # (after the links: chapter lists live in <nav>)
     for el in soup.select(DROP + (", " + spec["drop"] if spec.get("drop") else "")):
         el.decompose()
-    title = None
-    if spec.get("article"):                    # a saved article: its text, not the site around it
-        h1 = soup.find("h1")
-        title = copy.copy(h1) if h1 is not None else None      # often in a <header>, dropped next
-        for el in soup.select(ARTICLE_DROP):
-            el.decompose()
-    main = article_main(soup) if spec.get("article") else None
+    # a saved article: its text without the site around it (a general method, see article.py)
+    main = article.extract(soup) if spec.get("article") else None
     selectors = ([spec["main"]] if spec.get("main") else []) + [
         "#mw-content-text", "article.bd-article", 'div[role="main"]', "main", "article", "#content", ".content", "div.body"]
     for sel in selectors if main is None else []:
@@ -240,21 +234,6 @@ def website_page(sid: str, name: str, root: str, pages_dir: Path, url: str, html
             break
     if main is None:
         main = soup.body or soup
-    if spec.get("article"):
-        total = len(main.get_text(" ", strip=True)) or 1
-        for el in main.find_all(True):          # boxes inside the article named as clutter
-            if getattr(el, "decomposed", False) or el.attrs is None:
-                continue
-            names = list(el.get("class") or []) + [el.get("id") or ""]
-            if (any(CLUTTER.search(n) for n in names) or NAV_CLUTTER.search(" ".join(names))) \
-                    and len(el.get_text(" ", strip=True)) < 0.3 * total:
-                el.decompose()
-        for el in main.find_all(["div", "p", "aside", "span", "a"]):    # empty ad slots and their labels
-            if not getattr(el, "decomposed", False) and el.attrs is not None and AD_LABEL.fullmatch(
-                    el.get_text(" ", strip=True)):
-                el.decompose()
-        if main.find("h1") is None and title is not None:
-            main.insert(0, title)               # the title sits above the text on many blogs
     h1 = main.find("h1") or soup.find("h1")
     title = heading_text(h1) if h1 else (soup.title.get_text(strip=True) if soup.title else url)
     entries: list[Entry] = []
@@ -323,44 +302,6 @@ def website_page(sid: str, name: str, root: str, pages_dir: Path, url: str, html
     return entries, images, links
 
 
-# around an article: comments, sharing, related posts, newsletter boxes, ads
-ARTICLE_DROP = ("header, aside, form, iframe, .comments, #comments, .comment, .share, .sharing, .social, "
-                ".related, .related-posts, .newsletter, .subscribe, .advert, .ad, .ads, .sponsor, .cookie, "
-                "[role=complementary], [role=banner], [aria-label=breadcrumb]")
-
-
-CLUTTER = re.compile(r"(^|[-_])(sidebar|ads?|advert\w*|promo\w*|sponsor\w*|newsletter|subscribe|signup|cta|"
-                     r"related|share|sharing|social|comments?|popup|modal|banner|cookie)($|[-_])", re.I)
-
-
-AD_LABEL = re.compile(r"(remove ads|advertisement|advertising|sponsored( content)?|ads? by \w+|ad)", re.I)
-
-
-# the series' own navigation: previous/next lesson, page numbers, breadcrumbs
-NAV_CLUTTER = re.compile(r"prevnext|prev-next|pagination|post-navigation|nav-button|nav-links?\b|breadcrumb|"
-                         r"next-post|prev-post|previous-post|next-lesson|prev-lesson", re.I)
-
-
-def article_main(soup):
-    """The element holding an article's text, as Reader views find it: the one with the most
-    paragraph and code text, preferring a child that holds nearly all of it."""
-    def weight(el) -> int:
-        return sum(len(x.get_text(" ", strip=True)) for x in el.find_all(["p", "pre", "li", "blockquote"]))
-    best = soup.find("article") or soup.find("main") or soup.body or soup
-    candidates = [el for el in soup.find_all(["article", "main", "div", "section"])]
-    if candidates:
-        scored = max(candidates, key=weight)
-        if weight(scored) > 1.3 * weight(best) or weight(best) == 0:
-            best = scored
-    while True:                                  # step into a child that is nearly all of it
-        total = weight(best)
-        inner = [c for c in best.find_all(["article", "main", "div", "section"], recursive=False)]
-        heavy = next((c for c in inner if total and weight(c) >= 0.85 * total), None)
-        if heavy is None:
-            return best
-        best = heavy
-
-
 # A path segment naming a language (fr, pt_BR, zh_HANS-CN...) or a version (2.43.0, v1.2)
 LANGUAGE = re.compile(r"(ar|bg|bn|ca|cs|da|de|el|es|et|fa|fi|fr|he|hi|hr|hu|id|it|ja|ko|lt|lv|ms|nb|nl|no|pl|"
                       r"pt|ro|ru|sk|sl|sr|sv|th|tr|uk|vi|zh)([-_][a-z0-9]{2,4}){0,2}", re.I)
@@ -402,8 +343,11 @@ def save_pages(name: str, sid: str, urls: list[str], workers: int, series: bool)
             fails.add(url, e)
             continue
         found, imgs, _ = website_page(sid, name, "https://", store.dir, url, html, real, {"article": True})
-        if not found or sum(len(e.text.strip()) for e in found) < 40:
-            fails.add(url, cli.Failed("empty", url))
+        if not found or len(re.findall(r"\w+", found[0].text)) < 100:   # no article of its own: the
+            fails.add(url, cli.Failed("empty", url))                    # text is drawn by JavaScript
+            stored = offline.page_file(store.dir, url.split("#")[0][len("https://"):])
+            if stored is not None:
+                stored.unlink(missing_ok=True)                          # and its page is not kept
             continue
         for e in found:
             e.kind = "tutorial" if e.kind in ("page", "api") else e.kind

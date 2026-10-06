@@ -240,6 +240,8 @@ def website_page(sid: str, name: str, root: str, pages_dir: Path, url: str, html
         m = re.search(spec["api_path"] + r"(.+?)/?$", urllib.parse.urlparse(url).path)
         if m:
             api = ".".join(p for p in m.group(1).split("/") if p)
+    if api and spec.get("api_rename"):                   # git-commit -> git commit
+        api = re.sub(spec["api_rename"][0], spec["api_rename"][1], api)
     page_md = cli.html_to_md(str(main))
     entries.append(Entry(title=api or title, kind=spec.get("api_kind", "api") if api else "page",
                          location=url, text=page_md[:cli.PREVIEW_CHARS], source=name))
@@ -273,6 +275,17 @@ def website_page(sid: str, name: str, root: str, pages_dir: Path, url: str, html
             kind = h.get("data-kind") or ("type" if g.get("tname") else "method" if g.get("rtype") else "function")
             text = f"```\n{heading_text(h)}\n```\n\n{cli.html_to_md(''.join(body))}"
             entries.append(Entry(title=member, kind=kind, location=f"{url}#{h['id']}",
+                                 text=text[:cli.PREVIEW_CHARS], source=name))
+    # options in a definition list (git commit: <dt id=...>--amend</dt><dd>...</dd>)
+    if spec.get("options") and api:
+        for dt in main.find_all("dt"):
+            hid = dt.get("id") or (dt.find(attrs={"id": True}) or {}).get("id")
+            term = " ".join(dt.get_text(" ", strip=True).split())
+            if not hid or not term.startswith("-"):
+                continue
+            dd = dt.find_next_sibling("dd")
+            text = f"```\n{api} {term}\n```\n\n{cli.html_to_md(str(dd)) if dd is not None else ''}"
+            entries.append(Entry(title=f"{api} {term}", kind="option", location=f"{url}#{hid}",
                                  text=text[:cli.PREVIEW_CHARS], source=name))
     # sections: API pages list their members as sections (Mojo: "List.append")
     for hid, head, body, level, under in section_parts(main):

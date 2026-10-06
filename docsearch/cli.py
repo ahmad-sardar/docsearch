@@ -269,7 +269,8 @@ def http_get_once(url: str, timeout: float = 20) -> tuple[bytes, str]:
                 if r.is_redirect:
                     nxt = urllib.parse.urljoin(url, r.headers.get("location", ""))
                     if url.startswith("https:") and not nxt.startswith("https:"):
-                        raise Failed("redirect", url, f"it redirects from HTTPS to {nxt!r}, which is refused")
+                        raise Failed("redirect", url, f"it redirects from HTTPS to plain HTTP ({nxt}), "
+                                                      "which is refused")
                     url = nxt
                     continue
                 if r.status_code >= 400:
@@ -308,19 +309,26 @@ class Failures:
         self.by_kind: dict[str, list[str]] = {}
 
     def add(self, url: str, e: BaseException) -> None:
-        kind = e.kind if isinstance(e, Failed) else "other"
-        self.by_kind.setdefault(kind, []).append(url if isinstance(e, Failed) else f"{url} ({e})")
+        if not isinstance(e, Failed):
+            e = Failed("other", url, str(getattr(e, "reason", e)) or type(e).__name__)
+        key = e.kind if e.kind not in ("redirect", "other") else f"{e.kind}:{e.detail}"
+        self.by_kind.setdefault(key, []).append(url)
 
     def __len__(self) -> int:
         return sum(len(v) for v in self.by_kind.values())
 
     def report(self) -> None:
-        for kind, urls in sorted(self.by_kind.items(), key=lambda kv: -len(kv[1])):
-            why = WHY[kind].format(detail="").replace(" ()", "")
-            say(f"    {len(urls)} × {why}  (e.g. {urls[0]})")
+        for key, urls in sorted(self.by_kind.items(), key=lambda kv: -len(kv[1])):
+            say(f"    {len(urls)} × {describe(key)}  (e.g. {urls[0]})")
 
     def as_meta(self) -> dict:
         return {k: {"count": len(v), "example": v[0]} for k, v in self.by_kind.items()}
+
+
+def describe(key: str) -> str:
+    """A failure kind (or "redirect:<what happened>") in words."""
+    kind, _, detail = key.partition(":")
+    return WHY.get(kind, "{detail}").format(detail=detail).replace(" ()", "") or kind
 
 
 CONTROL = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
@@ -468,9 +476,9 @@ def get_page_at(url: str) -> tuple[bytes, str]:
             return html, final
         nxt = urllib.parse.urljoin(final, m.group(1).decode("utf-8", "replace"))
         if not same_site(final, nxt):
-            raise urllib.error.URLError(f"{url} redirects to another site: {nxt}")
+            raise Failed("redirect", url, f"it redirects to another site ({nxt}), which is not followed")
         url = nxt
-    raise urllib.error.URLError(f"{url}: too many redirects")
+    raise Failed("redirect", url, "too many redirects")
 
 
 def same_site(root: str, url: str) -> bool:
@@ -1743,7 +1751,7 @@ def cmd_add(args) -> None:
                 say(f"  {plan.get('about', name)}")
                 entries, extra = build_known(name, sid, plan, args.workers, args.max_pages)
                 meta.update(extra)
-            elif spec == "git":
+            elif spec == "git-man":                      # the git manual pages on this Mac
                 entries = build_git(args.workers)
                 meta.update(kind="man", root="man pages")
             elif spec == "bash":
@@ -1838,8 +1846,8 @@ def cmd_add(args) -> None:
             causes = sorted((meta.get("failures") or {}).items(), key=lambda kv: -kv[1]["count"])
             if causes:
                 kind, c = causes[0]
-                say(f"  Why: {WHY[kind].format(detail='').replace(' ()', '')} ({c['count']} pages, e.g. {c['example']})")
-                say(f"  {NEXT.get(kind, NEXT['other'])}")
+                say(f"  Why: {describe(kind)} ({c['count']} pages, e.g. {c['example']})")
+                say(f"  {NEXT.get(kind.partition(':')[0], NEXT['other'])}")
             say(f"  {LOCAL_TIP.format(name=name)}")
             continue
         if sid != source_id(name):                  # a second version: its entries say which
@@ -1893,7 +1901,7 @@ def try_alternatives(name: str, sid: str, meta: dict, args) -> tuple[list[Entry]
     from docsearch import importers
     root = meta["root"]
     causes = meta.get("failures") or {}
-    if causes and all(k in ("dns", "offline", "certificate", "bot-check", "login") for k in causes):
+    if causes and all(k.partition(":")[0] in ("dns", "offline", "certificate", "bot-check", "login") for k in causes):
         return [], {}                                  # the same site: no other way in
     origin = "{0.scheme}://{0.netloc}/".format(urllib.parse.urlparse(root))
     tries = dict.fromkeys([(("llms.txt", "llms", urllib.parse.urljoin(root, "llms.txt"))),
@@ -1996,7 +2004,7 @@ CONFIG_TEMPLATE = """\
 numpy = "latest"
 
 [man]
-pages = ["git"]          # also: "bash", or any man page name such as "tmux"
+pages = []               # man pages on this Mac: "git" (all git manual pages), "bash", "tmux"...
 """
 
 PKG_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
@@ -2039,7 +2047,7 @@ def read_config() -> list[tuple[str, bool]]:
     for page in (cfg.get("man") or {}).get("pages", []):
         if not isinstance(page, str) or not MAN_NAME.fullmatch(page):
             die(f"{CONFIG}: '{page}' is not a man page name.")
-        out.append((page if page in ("git", "bash") else f"man:{page}", True))
+        out.append(("git-man" if page == "git" else page if page == "bash" else f"man:{page}", True))
     return out
 
 
@@ -2353,8 +2361,8 @@ def remember(spec: str) -> None:
     if spec.startswith("pypi:"):
         say(f"  (not added to {CONFIG.name}: list it there by hand if you want sync to keep it)")
         return
-    if spec in ("git", "bash") or spec.startswith("man:"):
-        page = spec.removeprefix("man:")
+    if spec in ("git-man", "bash") or spec.startswith("man:"):
+        page = "git" if spec == "git-man" else spec.removeprefix("man:")
         cfg = tomllib.loads(CONFIG.read_text(encoding="utf-8")) if CONFIG.exists() else {}
         pages = (cfg.get("man") or {}).get("pages", [])
         if page not in pages and CONFIG.exists():

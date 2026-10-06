@@ -88,6 +88,18 @@ KNOWN: dict[str, dict] = {
              "member_re": r"^(func\s+(\((?:\w+\s+)?\*?(?P<rtype>\w+)(\[[^\]]*\])?\)\s+)?(?P<name>\w+)|type\s+(?P<tname>\w+))"},
         ],
     },
+    "git": {
+        "about": "Git: the reference (every command and option) and the Pro Git book (git-scm.com)",
+        "root": "https://git-scm.com/",
+        "version_from": ["https://git-scm.com/docs/git", r"last updated in (\d+\.\d+\.\d+)"],
+        "parts": [
+            {"kind": "website", "start": "https://git-scm.com/book/en/v2",
+             "prefix": "https://git-scm.com/book/en/v2", "main": "#main", "exclude": r"/ch00/|\?"},
+            {"kind": "website", "start": "https://git-scm.com/docs", "prefix": "https://git-scm.com/docs/",
+             "main": "#main", "depth": 2, "api_path": r"/docs/", "api_rename": [r"^git-", "git "],
+             "options": True, "exclude": r"/docs/[^/]+/.|\?|#"},
+        ],
+    },
     "javascript": {
         "about": "JavaScript: the language reference and guide (MDN)",
         "kind": "website", "root": "https://developer.mozilla.org/",

@@ -159,10 +159,17 @@ search add python==3.12          # one version
 search add mydocs=https://...    # any docs site (Sphinx, MkDocs, or read as a website)
 search add pypi:NAME             # the PyPI package NAME, when NAME is also a language
 search known                     # the languages and toolkits that can be added by name
+search add mydocs=~/Downloads/mydocs-html.zip    # docs you downloaded yourself (a folder or .zip)
 ```
 
 `search known` lists: Python, Rust (std, the Book, the Reference), OCaml, C and C++
-(cppreference), CUDA, Mojo, MAX, Go and JavaScript (MDN). These names never go through PyPI.
+(cppreference), CUDA, Mojo, MAX, Go, JavaScript (MDN) and Git. These names never go through PyPI.
+
+Sites that are not built like documentation get a profile in `docsearch/sources.py` that
+says where the text is and what the entries are. Git (git-scm.com), for example: every
+command is an entry (`git commit`), every option too (`git commit --amend`, with its
+description), and the Pro Git book follows in chapter order. (`git-man` indexes the git
+manual pages on this Mac instead.)
 
 **Wrong docs are not added silently.** When a name could mean another project — docs
 titled differently from the name, or a docs site that PyPI does not list and that was
@@ -172,10 +179,40 @@ to the Python docs instead of an old PyPI backport. Already added the wrong docs
 **Docs…** in the page: it lists every indexed source with its address, and **Remove**
 deletes one (also from `packages.toml`). In the terminal: `search remove NAME`.
 
+## Tutorials and articles you like
+
+```bash
+search save https://realpython.com/python-f-strings/              # one article
+search save https://docs.python.org/3/tutorial/classes.html --series   # and the parts after it
+search save URL --to rust-reading                                  # your own collections
+```
+
+The article's text is taken out of the site around it, as Safari's Reader does (no menus,
+sidebars, ads, comments or newsletter boxes), and kept with its code and images: it reads
+and searches like the docs, under its collection's name ("tutorials" by default).
+`--series` follows the page's "Next" links within the same section (up to 50 parts).
+Saving again adds to the collection; `packages.toml` lists the pages (`[saved]`), so
+`search sync` brings them to another copy of the project. `search remove tutorials`
+deletes a collection.
+
 ## When a download fails
 
-Docs sites go down, rate-limit, or time out. docsearch never lets that cost you the docs
-you have:
+Docs sites go down, rate-limit, time out, or refuse programs. docsearch tells you which,
+tries the other ways in, and never lets it cost you the docs you have.
+
+**Why it failed.** Every failure is named: the name does not exist, no internet, refused,
+broken certificate, timeout, a bot check (Cloudflare...), a login, forbidden, not found,
+rate-limited, a server error, the site's robots.txt, or a page built only by JavaScript (a
+web app). Pages that failed are summarized by cause with an example, then what to do next.
+
+**Other ways in.** When a site's pages give nothing, docsearch tries the other official
+ways it offers: its `llms.txt` (a list of its pages for programs, also on sister sites of
+the same organization: OpenAI's docs app has none of its text in the page, but its
+llms.txt lists them all) and its sitemap. The way that always works: download the docs
+yourself (many projects offer an HTML .zip) and `search add NAME=/path/to/folder-or.zip`.
+docsearch does not try to get around bot checks or logins.
+
+**Keeping what you have:**
 
 1. **Retries.** A page that times out, drops the connection, or gets "too many requests"
    (429) or a server error (5xx) is tried again up to 3 times, after 1, 3 and 9 seconds (or

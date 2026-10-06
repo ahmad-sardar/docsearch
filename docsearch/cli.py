@@ -2082,6 +2082,17 @@ def cmd_sync(args) -> None:
             continue
         cmd_add(argparse.Namespace(sources=[spec], workers=args.workers, max_pages=None, no_embed=not embed,
                                    yes=False, accept_partial=args.accept_partial))
+    import tomllib                                       # saved pages ([saved] in packages.toml)
+    for name, urls in (tomllib.loads(CONFIG.read_text(encoding="utf-8")).get("saved") or {}).items():
+        sid = source_id(name)
+        keep.add(sid)
+        have = set(json.loads((HOME / sid / "meta.json").read_text()).get("urls", [])) \
+            if (HOME / sid / "meta.json").exists() else set()
+        missing = [u for u in urls if isinstance(u, str) and safe_url(u) and u not in have]
+        if missing:
+            cmd_save(argparse.Namespace(urls=missing, to=name, series=False, workers=args.workers))
+        else:
+            say(f"{name}: up to date ({len(have)} saved pages)")
     extra = sorted(d.name for d in HOME.iterdir() if (d / "meta.json").exists() and d.name not in keep) \
         if HOME.exists() else []
     if extra and args.prune:
@@ -2225,6 +2236,48 @@ def install_staged(d: Path, replace: list[str]) -> None:
     shutil.rmtree(STAGING, ignore_errors=True)
 
 
+def cmd_save(args) -> None:
+    """search save URL... [--to NAME] [--series]: tutorials and articles you like, kept to read
+    and search offline, in a collection (NAME, "tutorials" by default). Earlier saves stay;
+    saving a page again replaces its copy."""
+    from docsearch import importers
+    name, now = args.to, time.strftime("%Y-%m-%d %H:%M")
+    sid = source_id(name)
+    for u in args.urls:
+        if not safe_url(u):
+            die(f"'{u}' is not an https:// address.")
+    if (HOME / sid / "meta.json").exists():
+        meta, old = load(sid)
+        if meta.get("kind") != "saved":
+            die(f"'{name}' holds docs, not saved pages; choose another collection: --to NAME")
+    else:
+        meta, old = {"name": name, "spec": name, "kind": "saved", "root": "https://", "pages": True,
+                     "urls": [], "created": now, "model": None, "about": "pages you saved"}, []
+    say(f"Saving {len(args.urls)} page{'s' if len(args.urls) > 1 else ''} to '{name}'"
+        + (" (and the parts that follow)" if args.series else ""))
+    new, fails = importers.save_pages(name, sid, args.urls, args.workers, args.series)
+    if fails:
+        fails.report()
+        if not new:
+            kind = next(iter(fails.by_kind)).partition(":")[0]
+            say(f"  {NEXT.get(kind, NEXT['other'])}".rstrip())
+    if not new:
+        say("  Nothing saved.")
+        return
+    pages = [e.location for e in new if "#" not in e.location]
+    for e in new:
+        e.source = name
+    kept = [e for e in old if e.location.split("#")[0] not in set(pages)]
+    meta.update(urls=list(dict.fromkeys(meta.get("urls", []) + pages)), updated=now, count=len(kept) + len(new))
+    meta["nav"] = meta["urls"]                       # read in the order you saved them
+    save(sid, kept + new, meta)
+    for e in new:
+        if "#" not in e.location:
+            say(f"  saved: {e.title}  ({e.location})")
+    embed_source(sid)
+    config_set(name, meta["urls"], table="saved")
+
+
 def cmd_setup(args) -> None:
     """A new copy of the project: your docs list, the two models (fixed commits on Hugging
     Face, checked), then the docs themselves. Online, once; searching never downloads."""
@@ -2322,33 +2375,38 @@ def toml_value(v) -> str:
     return json.dumps(str(v))
 
 
-def config_set(name: str, value) -> None:
-    """Set name's line in the [packages] table of packages.toml (keeping its comment), or
-    add the line at the end of that table."""
+def config_set(name: str, value, table: str = "packages") -> None:
+    """Set name's line in a table of packages.toml ([packages], or [saved] for collections),
+    keeping its comment; or add it at the end of that table (made if missing)."""
     if not CONFIG.exists():
         CONFIG.write_text(CONFIG_TEMPLATE.split("[packages]")[0] + "[packages]\n", encoding="utf-8")
-    old = config_values(name)
+    old = config_values(name) if table == "packages" else None
     if isinstance(old, dict) and isinstance(value, str):         # { embed = false }: keep it
         value = {k: v for k, v in old.items() if k != "version"} | ({} if value == "latest" else {"version": value})
         value = value or "latest"
     lines = CONFIG.read_text(encoding="utf-8").splitlines(keepends=True)
     key = re.compile(rf'(\s*"?{re.escape(name)}"?\s*=\s*)(.*?)(\s*#.*)?$', re.I | re.S)
-    table, end, done = None, None, False
+    shown = json.dumps(value) if isinstance(value, list) and table != "packages" else toml_value(value)
+    current, end, done, has_table = None, None, False, False
     for k, ln in enumerate(lines):
         head = re.match(r"\s*\[([^\]]+)\]", ln)
         if head:
-            table = head.group(1).strip()
+            current = head.group(1).strip()
+            has_table = has_table or current == table
+            if current == table:
+                end = k
             continue
-        if table == "packages":
+        if current == table:
             if ln.strip():
                 end = k
             m = key.match(ln)
             if m and not done:
-                lines[k] = f"{m.group(1)}{toml_value(value)}{(m.group(3) or '').rstrip()}\n"
+                lines[k] = f"{m.group(1)}{shown}{(m.group(3) or '').rstrip()}\n"
                 done = True
-    if not done:
-        at = (end + 1) if end is not None else len(lines)
-        lines.insert(at, f"{name} = {toml_value(value)}\n")
+    if not done and has_table:
+        lines.insert(end + 1, f"{name} = {shown}\n")
+    elif not done:
+        lines += [("\n" if lines and lines[-1].strip() else ""), f"[{table}]\n", f"{name} = {shown}\n"]
     text = "".join(lines)
     if text != CONFIG.read_text(encoding="utf-8"):
         write_atomic(CONFIG, text.encode())
@@ -2389,8 +2447,8 @@ def remember(spec: str) -> None:
 
 
 COMMANDS = {"add", "sync", "list", "remove", "embed", "serve", "stop", "known", "ai", "upgrade", "downgrade",
-            "setup"}
-ONLINE = {"add", "sync", "embed", "upgrade", "downgrade", "setup"}   # the only commands that may go online
+            "setup", "save"}
+ONLINE = {"add", "sync", "embed", "upgrade", "downgrade", "setup", "save"}   # the only commands that may go online
                                        # (embed: only to download the model, once)
 
 
@@ -2513,6 +2571,12 @@ def main(argv: list[str] | None = None) -> None:
     sv.add_argument("--port", type=int, default=int(os.environ.get("DOCSEARCH_PORT", "8765")))
     sv.set_defaults(func=cmd_serve)
     sub.add_parser("stop", help="stop the background search page server").set_defaults(func=cmd_stop)
+    sv2 = sub.add_parser("save", help="keep tutorials or articles to read and search offline")
+    sv2.add_argument("urls", nargs="+", metavar="URL")
+    sv2.add_argument("--to", default="tutorials", metavar="NAME", help="the collection (default: tutorials)")
+    sv2.add_argument("--series", action="store_true", help="also the parts that follow (its Next links)")
+    sv2.add_argument("--workers", type=int, default=8, help="parallel image downloads (default 8)")
+    sv2.set_defaults(func=cmd_save)
     st = sub.add_parser("setup", help="a new copy: download the models and the docs (once)")
     st.add_argument("--workers", type=int, default=16, help="parallel downloads (default 16)")
     st.set_defaults(func=cmd_setup)
@@ -2545,7 +2609,7 @@ def main(argv: list[str] | None = None) -> None:
         return
     args = p.parse_args(argv)
     args.func(args)
-    if args.cmd in ("add", "sync", "remove", "embed", "upgrade", "downgrade", "setup"):
+    if args.cmd in ("add", "sync", "remove", "embed", "upgrade", "downgrade", "setup", "save"):
         index_changed()
 
 

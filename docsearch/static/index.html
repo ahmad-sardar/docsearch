@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>docsearch</title>
+<link rel="stylesheet" href="/static/pygments.css">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand">docsearch</div>
+  <label class="searchbox">
+    <svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4.5 4.5"/></svg>
+    <input id="q" type="search" placeholder="Search: a name (np.sum), some letters (lnsvd), or describe it" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Search the documentation">
+    <kbd>/</kbd>
+  </label>
+  <button id="ai" class="ai-toggle" aria-pressed="false" title="Search with AI: a small model on this Mac reorders the top results (offline). ⌘↩ ranks the current search once.">AI</button>
+  <nav id="sources" class="sources" aria-label="Packages"></nav>
+  <button id="manage" class="manage" title="See where each package's docs come from, and remove wrong ones">Docs…</button>
+</header>
+<div id="panel" class="panel" hidden>
+  <div class="panel-box" role="dialog" aria-modal="true" aria-labelledby="panel-title">
+    <div class="panel-head"><h2 id="panel-title">Indexed documentation</h2><button id="panel-close" aria-label="Close">✕</button></div>
+    <p class="panel-note">Check that each package points to the right documentation. Wrong docs (another project with a similar name)? Remove them here; to add the right ones, run <code>search add NAME=https://…</code> or <code>search known</code> in the terminal.</p>
+    <table id="panel-table"></table>
+  </div>
+</div>
+<div class="layout">
+  <aside class="results-pane" aria-label="Results">
+    <div id="status" class="status" aria-live="polite"></div>
+    <ol id="results" class="results" role="listbox" aria-label="Results"></ol>
+  </aside>
+  <main id="doc-pane" class="doc-pane">
+    <article id="doc" class="doc"></article>
+  </main>
+  <nav id="toc" class="toc" aria-label="On this page"></nav>
+</div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

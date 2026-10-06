@@ -1,0 +1,332 @@
+/* docsearch: a calm, legible reader for API documentation.
+   Layout after the clearest references (rustdoc, dartdoc on pub.dev, MDN):
+   results on the left, the docs in a readable column (~75 characters), an outline
+   on the right. Light and dark follow the system setting. */
+
+:root {
+  --bg: #f6f7f9;            /* page */
+  --panel: #ffffff;         /* reading surface */
+  --text: #1f2328;
+  --soft: #57606a;
+  --faint: #8b949e;
+  --border: #e3e6ea;
+  --accent: #3a6fd8;        /* one calm blue: links, focus, the chosen result */
+  --accent-soft: #eaf0fc;
+  --select: #e9effb;
+  --hover: #f2f4f7;
+  --code-bg: #f4f5f7;
+  --code-border: #e6e8eb;
+  --inline-bg: #eef0f3;
+  --name: #0b5cad;
+  --type: #7c3aed;
+  --default: #b45309;
+  --note: #3a6fd8;
+  --warn: #b7791f;
+  --danger: #cf222e;
+  --tip: #1a7f37;
+  --seealso: #7c3aed;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --shadow: 0 1px 2px rgb(0 0 0 / 5%), 0 4px 16px rgb(0 0 0 / 4%);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171c;
+    --panel: #1c1f25;
+    --text: #e4e8ee;
+    --soft: #aab3bf;
+    --faint: #7c8693;
+    --border: #2d323a;
+    --accent: #7aa2f7;
+    --accent-soft: #222c3e;
+    --select: #243049;
+    --hover: #21252c;
+    --code-bg: #23272f;
+    --code-border: #2e333c;
+    --inline-bg: #2a2f38;
+    --name: #7dcfff;
+    --type: #bb9af7;
+    --default: #ff9e64;
+    --note: #7aa2f7;
+    --warn: #e0af68;
+    --danger: #f7768e;
+    --tip: #9ece6a;
+    --seealso: #bb9af7;
+    --shadow: none;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.6 var(--font); -webkit-font-smoothing: antialiased;
+  display: grid; grid-template-rows: auto 1fr; overflow: hidden;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+kbd {
+  font: 12px var(--mono); color: var(--soft); background: var(--panel);
+  border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 0 6px;
+}
+
+/* ---- top bar ----------------------------------------------------------------- */
+.top {
+  display: flex; align-items: center; gap: 18px; padding: 10px 20px;
+  background: var(--panel); border-bottom: 1px solid var(--border);
+}
+.brand { font-weight: 700; letter-spacing: -0.01em; color: var(--soft); }
+.searchbox {
+  flex: 1; max-width: 720px; display: flex; align-items: center; gap: 10px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 0 12px;
+}
+.searchbox:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.searchbox svg { width: 17px; height: 17px; fill: none; stroke: var(--faint); stroke-width: 2; stroke-linecap: round; }
+.searchbox input {
+  flex: 1; border: 0; outline: 0; background: transparent; color: var(--text);
+  font: 16px var(--font); padding: 9px 0;
+}
+.searchbox input::-webkit-search-cancel-button { display: none; }
+.sources { display: flex; gap: 6px; flex-wrap: wrap; }
+.sources button {
+  font: 13px var(--font); color: var(--soft); background: transparent; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 999px; padding: 3px 11px;
+}
+.sources button .v { color: var(--faint); margin-left: 4px; }
+.sources button select.ver {
+  margin-left: 6px; font: 12px var(--font); color: inherit; background: transparent;
+  border: 0; border-left: 1px solid var(--border); padding: 0 0 0 6px; cursor: pointer;
+}
+.sources button:hover { background: var(--hover); }
+.sources button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+
+/* ---- three columns ----------------------------------------------------------- */
+.layout { display: grid; grid-template-columns: minmax(300px, 380px) 1fr 230px; min-height: 0; }
+@media (max-width: 1250px) { .layout { grid-template-columns: minmax(280px, 340px) 1fr; } .toc { display: none; } }
+.results-pane, .doc-pane, .toc { overflow-y: auto; min-height: 0; }
+
+/* ---- results ------------------------------------------------------------------ */
+.results-pane { border-right: 1px solid var(--border); background: var(--bg); }
+.status { font-size: 13px; color: var(--faint); padding: 12px 18px 6px; }
+.results { list-style: none; margin: 0; padding: 0 8px 24px; }
+.r {
+  display: grid; grid-template-columns: 30px 1fr; gap: 2px 6px; align-items: baseline;
+  padding: 8px 10px; border-radius: 8px; cursor: pointer; border-left: 3px solid transparent;
+}
+.r:hover { background: var(--hover); }
+.r[aria-selected="true"] { background: var(--select); border-left-color: var(--accent); }
+.r .n { font: 12px var(--mono); color: var(--faint); text-align: right; }
+/* a long name gives up its module path, never its last part: "sklearn.linear_mo….fit" */
+.r .name { font: 14.5px/1.4 var(--mono); display: flex; min-width: 0; white-space: nowrap; }
+.r .name .path { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.r .name .leaf { flex: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.r[aria-selected="true"] .name { flex-wrap: wrap; white-space: normal; overflow-wrap: anywhere; }
+.r[aria-selected="true"] .name .path, .r[aria-selected="true"] .name .leaf { overflow: visible; }
+.r .name .path { color: var(--soft); }
+.r .name .leaf { color: var(--text); font-weight: 650; }
+.r .name mark { background: transparent; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.r .meta { grid-column: 2; display: flex; gap: 8px; align-items: baseline; min-width: 0; font-size: 13px; }
+.r .kind { color: var(--type); flex: none; }
+.r .src { color: var(--faint); flex: none; }
+.r .sum { color: var(--soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.r:hover .sum, .r[aria-selected="true"] .sum { white-space: normal; }
+.more { text-align: center; color: var(--faint); font-size: 13px; padding: 10px; }
+
+/* ---- the document ------------------------------------------------------------- */
+.doc-pane { background: var(--panel); scroll-padding-top: 16px; }
+.doc { max-width: 82ch; margin: 0 auto; padding: 30px 44px 120px; overflow-wrap: break-word; }
+.doc-head { margin-bottom: 26px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }
+.crumbs { font: 13.5px var(--mono); color: var(--soft); }
+.crumbs span + span::before { content: "›"; margin: 0 7px; color: var(--faint); }
+.title-row { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 2px 0 10px; }
+.doc-head h1 { font: 650 30px/1.25 var(--mono); letter-spacing: -0.02em; margin: 0; color: var(--text); }
+.pill { font-size: 12.5px; border: 1px solid var(--border); border-radius: 999px; padding: 1px 10px; color: var(--soft); }
+.pill.kind { color: var(--type); border-color: color-mix(in srgb, var(--type) 35%, transparent); }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.actions button, .actions a {
+  font: 13px var(--font); color: var(--soft); background: var(--panel); cursor: pointer;
+  border: 1px solid var(--border); border-radius: 7px; padding: 4px 10px; text-decoration: none;
+}
+.actions button:hover, .actions a:hover { color: var(--text); background: var(--hover); }
+.actions .primary { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+
+.content > :first-child, .content dd > :first-child { margin-top: 0; }
+.content p { margin: 0 0 14px; }
+.content h1, .content h2, .content h3, .content h4 { line-height: 1.3; margin: 34px 0 12px; }
+.content h1 { font-size: 26px; }
+.content h2 { font-size: 21px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.content h3 { font-size: 18px; }
+.content h4 { font-size: 16px; }
+.content section { margin: 0; }
+.content ul, .content ol { padding-left: 1.4em; margin: 0 0 14px; }
+.content li { margin: 4px 0; }
+.content li > p { margin: 0 0 6px; }
+.content blockquote { margin: 0 0 14px; padding-left: 16px; border-left: 3px solid var(--border); color: var(--soft); }
+.content hr { border: 0; border-top: 1px solid var(--border); margin: 28px 0; }
+
+/* inline code */
+.content code, .content tt { font-family: var(--mono); font-size: 0.88em; }
+.content :not(pre) > code, .content code.literal {
+  background: var(--inline-bg); border-radius: 5px; padding: 0.12em 0.38em;
+}
+.content a code, .content a code.literal { color: var(--name); }
+
+/* code blocks */
+.content div.highlight { position: relative; margin: 14px 0 18px; }
+.content pre {
+  margin: 0; background: var(--code-bg) !important; border: 1px solid var(--code-border);
+  border-radius: 9px; padding: 13px 16px; font: 13.5px/1.6 var(--mono);
+  overflow-x: auto; white-space: pre; tab-size: 4;
+}
+body.wrap-code .content pre { white-space: pre-wrap; }
+.highlight .go { color: var(--soft) !important; }        /* example output */
+.highlight .gp { color: var(--accent) !important; user-select: none; }   /* >>> prompts: not copied */
+.copy-btn {
+  position: absolute; top: 7px; right: 7px; opacity: 0; transition: opacity .12s;
+  font: 12px var(--font); color: var(--soft); background: var(--panel);
+  border: 1px solid var(--border); border-radius: 6px; padding: 2px 9px; cursor: pointer;
+}
+div.highlight:hover .copy-btn, dt.sig:hover .copy-btn, .copy-btn:focus { opacity: 1; }
+
+/* ---- API objects (Sphinx markup) ------------------------------------------------- */
+.content dl { margin: 0 0 16px; }
+.content dl.py, .content dl.c, .content dl.cpp, .content dl.std { margin: 0 0 28px; }
+.content dt.sig {
+  position: relative; font: 14.5px/1.6 var(--mono); background: var(--code-bg);
+  border: 1px solid var(--code-border); border-left: 3px solid var(--accent);
+  border-radius: 8px; padding: 11px 70px 11px 15px; margin: 0 0 16px; overflow-wrap: anywhere;
+}
+.content dt.sig .sig-name { color: var(--name); font-weight: 650; }
+.content dt.sig .sig-prename { color: var(--soft); }
+.content dt.sig em.property { color: var(--type); font-style: normal; }
+.content dt.sig em.sig-param { font-style: normal; }
+.content dt.sig .default_value { color: var(--default); }
+.content dt.sig .sig-return, .content dt.sig .sig-return-typehint { color: var(--type); }
+.content dt.sig .n + .p, .content dt.sig .o { color: var(--soft); }
+.content dt.sig .indent { display: inline-block; width: 4ch; }   /* one parameter per line */
+
+.content dl.py > dd, .content dl.c > dd, .content dl.cpp > dd { margin: 0; }
+/* methods and attributes inside a class: each starts after a clear divider */
+.content dd dl.py { margin-top: 30px; padding-top: 22px; border-top: 1px solid var(--border); }
+.content dd dl.py > dt.sig { font-size: 14px; border-left-color: var(--name); }
+
+/* "Parameters", "Returns", "Raises": section labels, each with a rule */
+.content dl.field-list { display: block; margin: 22px 0; }
+.content dl.field-list > dt, .content p.rubric {
+  font: 700 12.5px/1.4 var(--font); letter-spacing: 0.07em; text-transform: uppercase;
+  color: var(--soft); margin: 28px 0 12px; padding-bottom: 7px; border-bottom: 1px solid var(--border);
+}
+.content dl.field-list > dt .colon { display: none; }
+.content dl.field-list > dd { margin: 0; }
+/* numpydoc: name : type, the description indented below */
+.content dl.field-list dd dl > dt { font-weight: 650; margin: 14px 0 3px; }
+.content dl.field-list dd dl > dt strong { font-family: var(--mono); font-size: 0.95em; }
+.content .classifier { font: 0.9em var(--mono); color: var(--type); font-weight: 400; margin-left: 0.8ch; }
+.content dl.field-list dd dl > dd { margin: 0 0 0 2.2ch; }
+/* Google/PyTorch style: • name (type) – description */
+.content dl.field-list ul.simple { list-style: none; padding-left: 0; }
+.content dl.field-list ul.simple > li { margin: 0 0 12px; }
+.content dl.field-list li > p > strong:first-child, .content dl.field-list dd > p > strong:first-child {
+  font-family: var(--mono); font-size: 0.95em;
+}
+/* "See also": names on the left, what they do beside them */
+.content dl.simple, .content div.seealso dl { margin: 0 0 14px; }
+.content div.seealso dl > dt { font-family: var(--mono); font-weight: 600; margin-top: 8px; }
+.content div.seealso dl > dd { margin: 0 0 0 2.2ch; color: var(--soft); }
+
+/* ---- notes, warnings, version changes ------------------------------------------- */
+.content div.admonition, .content aside.admonition, .content div.seealso {
+  --c: var(--note);
+  border: 1px solid color-mix(in srgb, var(--c) 30%, var(--border));
+  border-left: 4px solid var(--c); background: color-mix(in srgb, var(--c) 6%, transparent);
+  border-radius: 8px; padding: 10px 16px 4px; margin: 18px 0;
+}
+.content .admonition-title { font-weight: 700; color: var(--c); margin: 0 0 6px !important; }
+.content .warning, .content .caution, .content .attention { --c: var(--warn); }
+.content .danger, .content .error { --c: var(--danger); }
+.content .tip, .content .hint, .content .important { --c: var(--tip); }
+.content .seealso { --c: var(--seealso); }
+.content div.versionadded, .content div.versionchanged, .content div.deprecated {
+  border-left: 3px solid var(--tip); padding: 2px 0 2px 12px; margin: 12px 0; color: var(--soft);
+}
+.content div.deprecated { border-left-color: var(--danger); }
+.content span.versionmodified { font-style: italic; font-weight: 600; }
+
+/* ---- tables ------------------------------------------------------------------------ */
+.content table { border-collapse: collapse; width: 100%; margin: 16px 0 22px; font-size: 14.5px; display: block; overflow-x: auto; }
+.content th, .content td { border-bottom: 1px solid var(--border); padding: 7px 12px; text-align: left; vertical-align: top; }
+.content th { font-weight: 650; background: var(--code-bg); }
+.content tr:hover td { background: var(--hover); }
+.content table.autosummary td:first-child { font-family: var(--mono); white-space: nowrap; }
+
+/* ---- maths, images ----------------------------------------------------------------- */
+.content math { font-size: 1.08em; }
+.content math[display="block"] { display: block; margin: 14px 0; overflow-x: auto; }
+.offline-image {
+  display: inline-block; font-size: 13px; color: var(--soft); border: 1px dashed var(--border);
+  border-radius: 6px; padding: 2px 10px; margin: 4px 0;
+}
+.content img { max-width: 100%; height: auto; border-radius: 6px; }
+@media (prefers-color-scheme: dark) {       /* plots and diagrams are drawn for white paper */
+  .content img { background: #f4f5f7; padding: 6px; }
+}
+/* links to other websites: shown, not followed (docsearch is offline) */
+.content .ext-link { text-decoration: underline dotted var(--faint); text-underline-offset: 3px; cursor: copy; }
+.flash { animation: flash 1.8s ease-out; border-radius: 6px; }
+@keyframes flash { from { background: var(--accent-soft); box-shadow: 0 0 0 6px var(--accent-soft); } to { background: transparent; box-shadow: 0 0 0 6px transparent; } }
+
+/* ---- outline ---------------------------------------------------------------------- */
+.toc { padding: 30px 18px 40px 6px; font-size: 13.5px; background: var(--panel); }
+.toc h2 { font: 700 11.5px var(--font); letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); margin: 0 0 10px 12px; }
+.toc a { display: block; color: var(--soft); padding: 3px 12px; border-left: 2px solid var(--border); line-height: 1.4; }
+.toc a.sub { padding-left: 24px; font-family: var(--mono); font-size: 12.5px; }
+.toc a:hover { color: var(--text); text-decoration: none; border-left-color: var(--faint); }
+.toc a.on { color: var(--accent); border-left-color: var(--accent); }
+
+/* ---- welcome page, toast ------------------------------------------------------------ */
+.welcome h1 { font: 650 28px var(--font); margin: 0 0 8px; }
+.welcome .lead { color: var(--soft); font-size: 17px; margin: 0 0 24px; }
+.welcome table { display: table; }
+.welcome td:first-child { white-space: nowrap; }
+.toast {
+  position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 20px); opacity: 0;
+  background: var(--text); color: var(--panel); font-size: 14px; padding: 7px 16px;
+  border-radius: 999px; transition: all .18s; pointer-events: none; box-shadow: var(--shadow);
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.empty { color: var(--soft); padding: 40px 0; }
+
+/* ---- managing the indexed docs ------------------------------------------------------ */
+.manage {
+  font: 13px var(--font); color: var(--soft); background: transparent; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 8px; padding: 4px 12px; margin-left: auto;
+}
+.manage:hover { background: var(--hover); color: var(--text); }
+.panel { position: fixed; inset: 0; background: rgb(0 0 0 / 35%); display: grid; place-items: center; z-index: 10; }
+.panel[hidden] { display: none; }
+.panel-box {
+  width: min(900px, 92vw); max-height: 84vh; overflow: auto; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 12px; padding: 18px 22px; box-shadow: var(--shadow);
+}
+.panel-head { display: flex; align-items: center; justify-content: space-between; }
+.panel-head h2 { font-size: 18px; margin: 0; }
+.panel-head button { background: none; border: 0; color: var(--soft); font-size: 16px; cursor: pointer; }
+.panel-note { color: var(--soft); font-size: 14px; }
+.panel table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.panel td { padding: 9px 8px; border-top: 1px solid var(--border); vertical-align: top; }
+.panel td .about { color: var(--soft); }
+.panel td .root { font: 12.5px var(--mono); color: var(--faint); overflow-wrap: anywhere; }
+.panel .remove {
+  font: 13px var(--font); color: var(--danger); background: transparent; cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent); border-radius: 7px; padding: 3px 10px;
+}
+.panel .remove.sure { background: var(--danger); color: var(--panel); }
+
+/* ---- search with AI ------------------------------------------------------------------ */
+.ai-toggle {
+  font: 600 13px var(--font); color: var(--soft); background: transparent; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 8px; padding: 5px 11px;
+}
+.ai-toggle:hover { background: var(--hover); color: var(--text); }
+.ai-toggle[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }

@@ -1,0 +1,32 @@
+# The docs a new copy of docsearch starts with. `search setup` copies this file to
+# packages.toml (your own list, not in git); edit that one, then run: search sync
+#
+#   name = "latest"                             the current docs (PyPI finds the site)
+#   name = "1.26"                               the docs of one version
+#   name = { url = "https://.../" }             the docs at this address (HTTPS)
+#   name = { version = "2.1", embed = false }   no meaning search (no model, faster)
+#   name = ["latest", "1.26"]                   several versions, side by side
+#
+# `search add NAME` and `search upgrade` / `downgrade` keep packages.toml up to date.
+
+[packages]
+numpy = "latest"
+pandas = "latest"
+torch = "latest"
+scikit-learn = "latest"
+scipy = "latest"
+
+# Languages and toolkits (not PyPI packages; see `search known`)
+python = "latest"
+rust = "latest"
+ocaml = "latest"
+mojo = "latest"
+max = "latest"
+cuda = "latest"
+cpp = "latest"
+c = "latest"
+go = "latest"
+javascript = "latest"
+
+[man]
+pages = []          # for example: ["git", "bash", "tmux"]

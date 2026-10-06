@@ -2431,10 +2431,11 @@ def config_set(name: str, value, table: str = "packages") -> None:
             if m and not done:
                 lines[k] = f"{m.group(1)}{shown}{(m.group(3) or '').rstrip()}\n"
                 done = True
+    key_text = name if re.fullmatch(r"[A-Za-z0-9_-]+", name) else json.dumps(name)   # c++_x -> "c++_x"
     if not done and has_table:
-        lines.insert(end + 1, f"{name} = {shown}\n")
+        lines.insert(end + 1, f"{key_text} = {shown}\n")
     elif not done:
-        lines += [("\n" if lines and lines[-1].strip() else ""), f"[{table}]\n", f"{name} = {shown}\n"]
+        lines += [("\n" if lines and lines[-1].strip() else ""), f"[{table}]\n", f"{key_text} = {shown}\n"]
     text = "".join(lines)
     if text != CONFIG.read_text(encoding="utf-8"):
         write_atomic(CONFIG, text.encode())

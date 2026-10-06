@@ -40,14 +40,14 @@ KNOWN: dict[str, dict] = {
     "cpp": {
         "about": "C++: the language and standard library (cppreference.com)",
         "kind": "website", "root": "https://en.cppreference.com/",
-        "start": "https://en.cppreference.com/cpp", "prefix": "https://en.cppreference.com/cpp",
+        "start": "https://en.cppreference.com/cpp", "prefix": "https://en.cppreference.com/cpp/",
         "main": "#mw-content-text", "api": r"std::[\w:~<>, ]+(\(\))?", "max_pages": 8000,
         "exclude": r"action=|oldid=|printable=|/Special:",
     },
     "c": {
         "about": "C: the language and standard library (cppreference.com)",
         "kind": "website", "root": "https://en.cppreference.com/",
-        "start": "https://en.cppreference.com/c", "prefix": "https://en.cppreference.com/c",
+        "start": "https://en.cppreference.com/c", "prefix": "https://en.cppreference.com/c/",
         "main": "#mw-content-text", "max_pages": 3000,
         "exclude": r"action=|oldid=|printable=|/Special:",
     },

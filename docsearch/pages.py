@@ -55,7 +55,7 @@ MATH_ATTRS = {"mathvariant", "display", "stretchy", "fence", "separator", "lspac
               "largeop", "symmetric", "minsize", "maxsize", "width", "height", "depth",
               "notation", "open", "close", "separators", "form"}
 SAFE_CLASS = re.compile(r"[\w\- ]{0,200}")
-SAFE_ID = re.compile(r"[\w.:\-]{1,200}")
+SAFE_ID = re.compile(r"[\w.:/\-]{1,200}")         # (git-scm anchors contain /)
 
 
 def safe_href(href: str, base: str) -> str | None:

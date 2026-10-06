@@ -217,6 +217,9 @@ class Library:
                 "html": offline.localize_links(stored, self.sites), "web": site[0] + rel}
 
 
+HEADINGS = ("h1", "h2", "h3", "h4", "h5", "h6")
+
+
 def fragment(page_html: str, anchor: str, kind: str) -> str:
     """The part of a stored page that documents one entry (a class, a function, a section)."""
     if not anchor or kind == "doc":
@@ -225,12 +228,52 @@ def fragment(page_html: str, anchor: str, kind: str) -> str:
     el = soup.find(id=anchor)
     if el is None:
         return page_html
-    if el.name == "dt":                              # an API object: its whole <dl>
+    if el.name == "dt":
         dl = el.find_parent("dl")
-        return str(dl) if dl is not None else str(el)
+        if dl is None:
+            return str(el)
+        if len(dl.find_all("dd", recursive=False)) <= 1:   # an API object (Sphinx): its whole <dl>
+            return str(dl)
+        group = [el]                                      # one item of a list (git: an option):
+        for sib in el.find_next_siblings():               # its terms and their description
+            group.append(sib)
+            if sib.name == "dd":
+                break
+        return "<dl>" + "".join(str(x) for x in group) + "</dl>"
+    pre = el.find_parent("pre") if el.name in ("span", "a", "code") else None
+    if pre is not None:                                   # a signature (OCaml: <pre><span id=VALx>val x
+        nxt = pre.find_next_sibling()                     # ...</pre><div class="info">): it and its text
+        return str(pre) + (str(nxt) if nxt is not None and nxt.name in ("div", "p", "dl") else "")
+    if el.name not in HEADINGS and el.find_parent(HEADINGS) is not None:
+        el = el.find_parent(HEADINGS)                     # MediaWiki: <h3><span id=...>Title</span>
     if el.name in ("span", "a") and not el.get_text(strip=True):
-        nxt = el.find_next(["section", "div", "dl", "p"])
-        return str(nxt) if nxt is not None else page_html
+        heading = None
+        if heading is None:
+            nxt = el.find_next(["section", "div", "dl", "p"] + list(HEADINGS))
+            if nxt is None:
+                return page_html
+            if nxt.name not in HEADINGS:
+                return str(nxt)
+            heading = nxt
+        el = heading
+    if el.name in HEADINGS:                               # a heading: it and the text under it
+        parent, level = el.parent, int(el.name[1])
+        if parent is not None and parent.name in ("section", "div") and parent.find(HEADINGS) is el:
+            body = [str(parent)]                          # the section the heading starts, and
+            if len(parent.get_text(strip=True)) <= len(el.get_text(strip=True)) + 20:
+                for sib in parent.next_siblings:          # if it is only the heading (MDN), the
+                    name = getattr(sib, "name", None)                  # subsections after it
+                    first = sib if name in HEADINGS else sib.find(HEADINGS) if name else None
+                    if first is not None and int(first.name[1]) <= level:
+                        break
+                    body.append(str(sib))
+            return "".join(body)
+        body = [str(el)]
+        for sib in el.next_siblings:
+            if getattr(sib, "name", None) in HEADINGS and int(sib.name[1]) <= level:
+                break
+            body.append(str(sib))
+        return "".join(body)
     return str(el)
 
 

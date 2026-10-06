@@ -351,6 +351,23 @@ def article_main(soup):
         best = heavy
 
 
+# A path segment naming a language (fr, pt_BR, zh_HANS-CN...) or a version (2.43.0, v1.2)
+LANGUAGE = re.compile(r"(ar|bg|bn|ca|cs|da|de|el|es|et|fa|fi|fr|he|hi|hr|hu|id|it|ja|ko|lt|lv|ms|nb|nl|no|pl|"
+                      r"pt|ro|ru|sk|sl|sr|sv|th|tr|uk|vi|zh)([-_][a-z0-9]{2,4}){0,2}", re.I)
+VERSION_SEGMENT = re.compile(r"v?\d+(\.\d+)+")
+
+
+def other_variant(url: str, keep: set[str]) -> bool:
+    """Is this page another language's or another version's copy of the docs (git-scm:
+    /docs/git-commit/fr, /docs/git-commit/2.43.0)? Only English and the version you asked
+    for are read, unless the starting address itself is in that language or version."""
+    for seg in urllib.parse.urlparse(url).path.split("/"):
+        low = seg.lower()
+        if low and low not in keep and (LANGUAGE.fullmatch(low) or VERSION_SEGMENT.fullmatch(low)):
+            return True
+    return False
+
+
 def save_pages(name: str, sid: str, urls: list[str], workers: int, series: bool) -> tuple[list[Entry], cli.Failures]:
     """Articles and tutorials kept for reading offline (search save): each page's main text,
     split into sections; with `series`, the following parts too (its "next" links, same site,
@@ -490,6 +507,7 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
     exclude = re.compile(spec.get("exclude", r"$^"))
     frontier = [u for u in dict.fromkeys(frontier) if not exclude.search(u)]
     seen = set(frontier)
+    keep_segments = {seg.lower() for u in starts + prefixes for seg in urllib.parse.urlparse(u).path.split("/")}
     with cf.ThreadPoolExecutor(max_workers=workers) as net, \
             cf.ProcessPoolExecutor(max_workers=os.cpu_count() or 4) as cpu:
         while frontier and done < limit:
@@ -522,6 +540,7 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
                     for link in links:
                         if (link not in seen and cli.safe_url(link) and not exclude.search(link)
                                 and not link.endswith(".txt")        # llms.txt indexes, sources
+                                and not other_variant(link, keep_segments)    # translations, old versions
                                 and any(link.startswith(p) for p in prefixes)):
                             seen.add(link)
                             frontier.append(link)

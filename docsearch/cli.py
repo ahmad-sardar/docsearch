@@ -1739,7 +1739,13 @@ def cmd_add(args) -> None:
             refresh(spec, sid, args)                     # never risks the copy you have
             continue
         meta = {"name": name, "spec": spec, "created": time.strftime("%Y-%m-%d %H:%M"), "model": None}
-        plan = None if (forced_pypi or override) else sources.resolve(name, want)
+        if override and not LOCAL_PATH.match(override) and not urllib.parse.urlparse(override).path:
+            override += "/"                              # https://git-scm.com -> https://git-scm.com/
+        known_as = known_site(override) if override and not LOCAL_PATH.match(override) else None
+        if known_as:                                     # an address of docs we know: their profile
+            say(f"  {override} is the {known_as} docs: reading them as such (search known)")
+            override = ""
+        plan = None if (forced_pypi or override) else sources.resolve(known_as or name, want)
         if plan and not want and re.fullmatch(r"[\d.]+", sources.KNOWN[name].get("version", "")):
             plan = sources.resolve(name, published_version(plan) or "")    # the newest release
         try:
@@ -1930,6 +1936,28 @@ def try_alternatives(name: str, sid: str, meta: dict, args) -> tuple[list[Entry]
         if entries:
             return entries, {**extra, "kind": "website", "root": plan["root"], "pages": True, "via": url}
     return [], {}
+
+
+def known_site(url: str) -> str | None:
+    """The known docs (sources.py) an address belongs to: the one whose start or prefix
+    is the longest beginning of it, or the only one on its host."""
+    from docsearch import sources
+    best, length, on_host = None, 0, []
+    host = urllib.parse.urlparse(url).netloc
+    for key, entry in sources.KNOWN.items():
+        plan = sources.resolve(key, "")
+        addrs = []
+        for part in plan.get("parts") or [plan]:
+            for k in ("prefix", "start", "url", "root"):
+                v = part.get(k)
+                addrs += [v] if isinstance(v, str) else list(v or [])
+        addrs = [a for a in addrs + [plan.get("root") or ""] if a and urllib.parse.urlparse(a).netloc]
+        if any(urllib.parse.urlparse(a).netloc == host for a in addrs):
+            on_host.append(key)
+        for a in addrs:
+            if a and url.startswith(a.rstrip("/")) and len(a) > length:
+                best, length = key, len(a)
+    return best or (on_host[0] if len(on_host) == 1 else None)
 
 
 def organization(host: str) -> str:

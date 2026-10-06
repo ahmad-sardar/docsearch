@@ -17,6 +17,7 @@ Store, with its images (see pages.py). robots.txt is respected.
 from __future__ import annotations
 
 import concurrent.futures as cf
+import copy
 import gzip
 import json
 import os
@@ -224,7 +225,10 @@ def website_page(sid: str, name: str, root: str, pages_dir: Path, url: str, html
     cli.clean_soup(soup)                       # (after the links: chapter lists live in <nav>)
     for el in soup.select(DROP + (", " + spec["drop"] if spec.get("drop") else "")):
         el.decompose()
+    title = None
     if spec.get("article"):                    # a saved article: its text, not the site around it
+        h1 = soup.find("h1")
+        title = copy.copy(h1) if h1 is not None else None      # often in a <header>, dropped next
         for el in soup.select(ARTICLE_DROP):
             el.decompose()
     main = article_main(soup) if spec.get("article") else None
@@ -242,14 +246,15 @@ def website_page(sid: str, name: str, root: str, pages_dir: Path, url: str, html
             if getattr(el, "decomposed", False) or el.attrs is None:
                 continue
             names = list(el.get("class") or []) + [el.get("id") or ""]
-            if any(CLUTTER.search(n) for n in names) and len(el.get_text(" ", strip=True)) < 0.3 * total:
+            if (any(CLUTTER.search(n) for n in names) or NAV_CLUTTER.search(" ".join(names))) \
+                    and len(el.get_text(" ", strip=True)) < 0.3 * total:
                 el.decompose()
         for el in main.find_all(["div", "p", "aside", "span", "a"]):    # empty ad slots and their labels
             if not getattr(el, "decomposed", False) and el.attrs is not None and AD_LABEL.fullmatch(
                     el.get_text(" ", strip=True)):
                 el.decompose()
-        if main.find("h1") is None and soup.find("h1") is not None:
-            main.insert(0, soup.find("h1"))     # the title sits above the text on many blogs
+        if main.find("h1") is None and title is not None:
+            main.insert(0, title)               # the title sits above the text on many blogs
     h1 = main.find("h1") or soup.find("h1")
     title = heading_text(h1) if h1 else (soup.title.get_text(strip=True) if soup.title else url)
     entries: list[Entry] = []
@@ -329,6 +334,11 @@ CLUTTER = re.compile(r"(^|[-_])(sidebar|ads?|advert\w*|promo\w*|sponsor\w*|newsl
 
 
 AD_LABEL = re.compile(r"(remove ads|advertisement|advertising|sponsored( content)?|ads? by \w+|ad)", re.I)
+
+
+# the series' own navigation: previous/next lesson, page numbers, breadcrumbs
+NAV_CLUTTER = re.compile(r"prevnext|prev-next|pagination|post-navigation|nav-button|nav-links?\b|breadcrumb|"
+                         r"next-post|prev-post|previous-post|next-lesson|prev-lesson", re.I)
 
 
 def article_main(soup):

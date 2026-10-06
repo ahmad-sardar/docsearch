@@ -1917,7 +1917,8 @@ def cmd_add(args) -> None:
             remember(spec)
 
 
-LOCAL_PATH = re.compile(r"^(/|~|\.{1,2}/)")       # NAME=/path, ~/path, ./path: a local copy
+# NAME=/path, ~/path, ./path, and on Windows C:\path, .\path, \\server\share: a local copy
+LOCAL_PATH = re.compile(r"^(/|~|\.{1,2}[/\\]|[A-Za-z]:[/\\]|\\\\)")
 NEXT = {
     "dns": "Check the address; if it is right, check this computer's internet connection.",
     "offline": "Connect to the internet and run the same command again.",

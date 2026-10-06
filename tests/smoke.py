@@ -41,6 +41,11 @@ def check(ok: bool, what: str) -> None:
         sys.exit(1)
 
 
+def server_log() -> None:
+    if web.LOG.exists():
+        print("--- server.log\n" + web.LOG.read_text(encoding="utf-8", errors="replace")[-4000:])
+
+
 def get(port: int, path: str, **params) -> dict:
     url = f"http://127.0.0.1:{port}{path}?{urllib.parse.urlencode(params)}"
     with urllib.request.urlopen(url, timeout=600) as r:
@@ -83,4 +88,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BaseException:
+        server_log()
+        raise

@@ -58,10 +58,11 @@ uv tool update-shell             # then open a new terminal
 search setup                     # downloads the models and the docs, once. takes a while.
 ```
 
-on a mac with apple silicon the models run on the gpu. everywhere else they run on the
-processor: same results, just slower. computing the vectors in `search setup` and
-`search add` takes longer, and `search ai` takes longer than the ~3 s on a mac. plain search
-is still instant. no man pages on windows.
+no gpu needed. on a mac with apple silicon the models run on the gpu, everywhere else on
+the processor: same results (measured, see `eval/results-backends.md`), just slower.
+`search ai` takes ~6.5 s instead of ~3 s on a fast processor, more on a slow one, and
+computing the vectors in `search setup` and `search add` takes longer. plain search is
+still instant. needs ~3 GB of memory with ai. no man pages on windows.
 
 your list of docs lives in `packages.toml`. edit it and run `search sync`.
 

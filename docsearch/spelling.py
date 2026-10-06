@@ -70,12 +70,14 @@ class Speller:
         edits, and those that sound the same (or one sound apart); common ones first."""
         from rapidfuzz import fuzz, process
         from rapidfuzz.distance import OSA
+        if not self.words:                           # docs too small to have common words
+            return [], np.zeros((0, len(FEATURES)), np.float32)
         sim = process.cdist(self.words, [word], scorer=fuzz.ratio, dtype=np.uint8, workers=-1)[:, 0]
         edits = process.cdist(self.words, [word], scorer=OSA.distance, score_cutoff=3, dtype=np.uint8, workers=-1)[:, 0]
 
         def common(ids, n):
             return sorted(ids, key=lambda k: -self.freq[k])[:n]
-        cand = set(np.argpartition(-sim.astype(np.int32), 120)[:120].tolist())
+        cand = set(np.argpartition(-sim.astype(np.int32), min(120, len(sim) - 1))[:120].tolist())
         cand |= set(common(np.flatnonzero(edits <= 2).tolist(), 40))
         m, n, sx, mr = (self.jf.metaphone(word), self.jf.nysiis(word), self.jf.soundex(word),
                         self.jf.match_rating_codex(word))
@@ -99,6 +101,8 @@ class Speller:
         if (word, k) in self.cache:
             return self.cache[word, k]
         words, feats = self.candidates(word)
+        if not words:
+            return []
         z = ((feats - np.array(MEAN, np.float32)) / np.array(SCALE, np.float32)) @ np.array(WEIGHTS, np.float32)
         p = np.exp(z - z.max())
         p /= p.sum()
@@ -115,5 +119,6 @@ class Speller:
 
         def fix(m: re.Match) -> str:
             low = m.group(0).lower()
-            return self.suggest(low, 1)[0][0] if self.needs_correction(low) else m.group(0)
+            best = self.suggest(low, 1) if self.needs_correction(low) else []
+            return best[0][0] if best else m.group(0)
         return re.sub(r"[A-Za-z]+", fix, query)

@@ -156,6 +156,12 @@ deletes one (also from `packages.toml`). In the terminal: `search remove NAME`.
   process except `search setup` / `add` / `sync` / `embed` / `upgrade` / `downgrade`
   blocks any network connection that is not to this Mac, so nothing can go online even by
   accident.
+- **Nothing downloaded is ever run.** Docs are read as text; only HTTPS addresses are
+  fetched (certificate checked, no redirect to plain HTTP, at most 50 MB a file). The two
+  models are fetched file by file at a fixed commit, and every file is checked against the
+  SHA-256 Hugging Face publishes for it; a mismatch is deleted and not used. Weights are
+  `safetensors` (plain numbers): pickle files (`.bin`, `.pt`, `.pkl`), which can run code
+  when loaded, are never downloaded, and docsearch's own caches use no pickle either.
 - **Safe**: downloaded HTML passes an allowlist (only harmless tags and attributes), and
   the page forbids any script except docsearch's own (Content-Security-Policy). The
   server only answers requests addressed to 127.0.0.1/localhost, and changes nothing

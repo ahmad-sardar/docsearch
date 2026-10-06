@@ -17,9 +17,7 @@ the scores of the words "yes" and "no".
 """
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 import threading
 from pathlib import Path
 
@@ -30,8 +28,14 @@ from docsearch import cli
 # The chosen model, and the exact files (a commit of the model repository).
 MODEL = "mlx-community/Qwen3-Reranker-0.6B-4bit"
 REVISION = "5f324548f1d20c2b5a450f126fc6ef2fb1126524"
-FILES = ("config.json", "model.safetensors", "tokenizer.json", "tokenizer_config.json")
-SHA256 = "1d212560a5b1c36186787fdae19f11f20fecfc29bef91522e12a8e0d118f4545"   # model.safetensors
+# Exactly these files, each checked against the SHA-256 Hugging Face publishes for this
+# commit. Weights in safetensors only (plain numbers; pickle files can run code).
+FILES = {
+    "config.json": "09adff58b65e9305009c9caa4923b3365b18dd2f84135b44168aaf869278bea4",
+    "tokenizer.json": "be75606093db2094d7cd20f3c2f385c212750648bd6ea4fb2bf507a6a4c55506",
+    "tokenizer_config.json": "1689852cc9c45010de040c8302a8acdc0d2c4c6c740dd7e9dd0a8c704e16eada",
+    "model.safetensors": "1d212560a5b1c36186787fdae19f11f20fecfc29bef91522e12a8e0d118f4545",
+}
 TOP = 20                       # results it reads (more = slower, rarely better)
 MAX_DOC_TOKENS = 320           # of each result
 PIN = True                     # exact API-name matches stay first (chosen on the dev split)
@@ -39,27 +43,13 @@ FUSE: float | None = None      # also keep this much of the normal order (rank f
 
 
 def model_dir() -> Path | None:
-    folder = cli.MODELS / "hub" / f"models--{MODEL.replace('/', '--')}" / "snapshots" / REVISION
-    return folder if (folder / "model.safetensors").exists() else None
+    folder = cli.pinned_dir(MODEL, REVISION)
+    return folder if all((folder / f).exists() for f in FILES) else None
 
 
 def download() -> Path:
-    """Fetch the model files (only `search setup` does this, once) and check the weights
-    against the hash this file pins."""
-    os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
-    os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"           # never send your HF token
-    from huggingface_hub import hf_hub_download
-    for name in FILES:
-        hf_hub_download(MODEL, name, revision=REVISION, cache_dir=str(cli.MODELS / "hub"))
-    folder = model_dir()
-    digest = hashlib.sha256()
-    with open(folder / "model.safetensors", "rb") as f:
-        for block in iter(lambda: f.read(1 << 20), b""):
-            digest.update(block)
-    if digest.hexdigest() != SHA256:
-        (folder / "model.safetensors").unlink()
-        cli.die(f"{MODEL}: the downloaded weights do not match the pinned hash; deleted them.")
-    return folder
+    """Fetch the model files (only `search setup` does this, once), each checked."""
+    return cli.fetch_pinned(MODEL, REVISION, FILES)
 
 
 def reorder(ids: list[int], scores: list[float], exact: set[int],

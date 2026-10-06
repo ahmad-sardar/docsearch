@@ -69,13 +69,18 @@ DATA = Path(os.environ.get("DOCSEARCH_DATA", ROOT / "data"))
 HOME = DATA / "index"
 MODELS = DATA / "models"
 # A model trained for question -> passage retrieval (asymmetric search), not only for
-# sentence similarity. Override with the DOCSEARCH_MODEL environment variable.
-MODEL_NAME = os.environ.get("DOCSEARCH_MODEL", "sentence-transformers/multi-qa-MiniLM-L6-cos-v1")
-# The exact model files (a commit of the model repository), so a changed upload is never used
-# silently. Set DOCSEARCH_MODEL_REVISION when you change the model.
-MODEL_REVISION = os.environ.get("DOCSEARCH_MODEL_REVISION") or (
-    "b207367332321f8e44f96e224ef15bc607f4dbf0"
-    if MODEL_NAME == "sentence-transformers/multi-qa-MiniLM-L6-cos-v1" else None)
+# sentence similarity. Exactly these files of one commit, each checked against its SHA-256
+# (published by Hugging Face for that commit). The weights are safetensors: plain numbers.
+# The repository also has pickle files (pytorch_model.bin), which can run code when
+# loaded; they are never downloaded.
+MODEL_NAME = "sentence-transformers/multi-qa-MiniLM-L6-cos-v1"
+MODEL_REVISION = "b207367332321f8e44f96e224ef15bc607f4dbf0"
+MODEL_FILES = {
+    "config.json": "953f9c0d463486b10a6871cc2fd59f223b2c70184f49815e7efbcab5d8908b41",
+    "sentence_bert_config.json": "ec8e29d6dcb61b611b7d3fdd2982c4524e6ad985959fa7194eacfb655a8d0d51",
+    "tokenizer.json": "7fa9272f7ef1ebd1666bb3bfd9d4707660ff0076ca9d1671cd9a9c6e18e03331",
+    "model.safetensors": "7bec4fd9eba43073d5c5dcf1b79b0a3397608fa063e6f626d6f8fd70a81f2d8c",
+}
 CONFIG = ROOT / "packages.toml"                 # your docs (not in git)
 EXAMPLE = ROOT / "packages.example.toml"        # the starting list for a new copy (in git)
 MAX_DOWNLOAD = 50 * 2**20       # bytes per download; docs pages are far smaller
@@ -969,42 +974,51 @@ def load(sid: str) -> tuple[dict, list[Entry]]:
 _model = None
 
 
+def pinned_dir(repo: str, revision: str) -> Path:
+    return MODELS / "hub" / f"models--{repo.replace('/', '--')}" / "snapshots" / revision
+
+
+def fetch_pinned(repo: str, revision: str, files: dict[str, str]) -> Path:
+    """Download exactly `files` of a model repository at one commit (only `search setup`,
+    `add` and `embed` do this, once) and check each file's SHA-256. A file that does not
+    match is deleted and nothing is used."""
+    import hashlib
+    os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+    os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"           # never send your HF token
+    from huggingface_hub import hf_hub_download
+    folder = pinned_dir(repo, revision)
+    for name, want in files.items():
+        if not name.endswith((".json", ".safetensors")):         # never pickle, never code
+            die(f"{repo}: refusing to download {name}: only .json and .safetensors files")
+        f = Path(hf_hub_download(repo, name, revision=revision, cache_dir=str(MODELS / "hub")))
+        digest = hashlib.sha256()
+        with open(f, "rb") as fh:
+            for block in iter(lambda: fh.read(1 << 20), b""):
+                digest.update(block)
+        if digest.hexdigest() != want:
+            f.unlink()
+            (folder / name).unlink(missing_ok=True)
+            die(f"{repo}: {name} does not match its pinned SHA-256; deleted it. Nothing was used.")
+    return folder
+
+
 def model_cached() -> bool:
-    """Is the model already on disk (in the Hugging Face cache)?"""
-    repo = MODELS / "hub" / ("models--" + MODEL_NAME.replace("/", "--"))
-    if MODEL_REVISION:
-        return (repo / "snapshots" / MODEL_REVISION / "modules.json").exists()
-    return (repo / "refs" / "main").exists()
+    """Is the meaning model on disk?"""
+    return all((pinned_dir(MODEL_NAME, MODEL_REVISION) / f).exists() for f in MODEL_FILES)
 
 
 def get_model(download: bool = False):
-    """Load the model with no network access. Only `search add` and `search embed` may
-    download it, once. Searching never contacts Hugging Face."""
+    """Load the meaning model, with no network access. Only `search setup`, `add` and
+    `embed` may download it, once. Searching never contacts Hugging Face."""
     global _model
     if _model is None:
-        cached = model_cached()
-        if not cached and not download:
-            die("the meaning model is not downloaded yet. Run: search embed <source>")
-        # These must be set before huggingface_hub is imported: it reads them once.
-        os.environ["HF_HOME"] = str(MODELS)                   # the model stays in the venv
-        os.environ["HF_HUB_CACHE"] = str(MODELS / "hub")
-        os.environ.pop("SENTENCE_TRANSFORMERS_HOME", None)
-        os.environ["HF_HUB_OFFLINE"] = os.environ["TRANSFORMERS_OFFLINE"] = "1" if cached else "0"
-        os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
-        os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"     # never send your HF token
-        if cached:                                            # quiet: no download bars to show
-            os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
-            os.environ["TRANSFORMERS_VERBOSITY"] = "error"
-            os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
-        snap = MODELS / "hub" / ("models--" + MODEL_NAME.replace("/", "--")) / "snapshots" / (MODEL_REVISION or "")
-        if not cached:
-            say(f"Downloading model {MODEL_NAME} (once, about 90 MB)...")
-            from huggingface_hub import snapshot_download
-            snap = Path(snapshot_download(MODEL_NAME, revision=MODEL_REVISION, cache_dir=str(MODELS / "hub")))
-        if not MODEL_REVISION:
-            snap = sorted(snap.parent.glob("*"))[-1]
+        if not model_cached():
+            if not download:
+                die("the meaning model is not on this Mac yet. Run: search setup")
+            say(f"Downloading the meaning model {MODEL_NAME} (once, about 90 MB)...")
+            fetch_pinned(MODEL_NAME, MODEL_REVISION, MODEL_FILES)
         from docsearch.embedding import SentenceEncoder      # MLX on the Apple GPU, no PyTorch
-        _model = SentenceEncoder(snap)
+        _model = SentenceEncoder(pinned_dir(MODEL_NAME, MODEL_REVISION))
     return _model
 
 

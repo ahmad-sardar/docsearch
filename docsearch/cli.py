@@ -168,9 +168,33 @@ def http_client():
     return _CLIENT
 
 
+class Transient(urllib.error.URLError):
+    """A failure worth trying again: timeout, dropped connection, 429 or 5xx."""
+
+    def __init__(self, reason: str, wait: float | None = None) -> None:
+        super().__init__(reason)
+        self.wait = wait
+
+
+RETRY_STATUS = {429, 500, 502, 503, 504}
+RETRY_WAITS = (1, 3, 9)          # seconds before each new try (or what Retry-After asks, at most 30)
+
+
 def http_get(url: str, timeout: float = 20) -> tuple[bytes, str]:
     """Return (body, final URL after redirects). HTTPS only, certificate checked, at most
-    MAX_DOWNLOAD bytes, at most 5 redirects and only to other HTTPS addresses."""
+    MAX_DOWNLOAD bytes, at most 5 redirects and only to other HTTPS addresses. Transient
+    failures are tried again (RETRY_WAITS); a missing or forbidden page (404, 403) is not."""
+    for wait in (*RETRY_WAITS, None):
+        try:
+            return http_get_once(url, timeout)
+        except Transient as e:
+            if wait is None:
+                raise
+            time.sleep(min(30.0, e.wait if e.wait is not None else wait))
+    raise AssertionError("unreachable")
+
+
+def http_get_once(url: str, timeout: float = 20) -> tuple[bytes, str]:
     import httpx
     for _ in range(6):
         if not safe_url(url):
@@ -183,6 +207,9 @@ def http_get(url: str, timeout: float = 20) -> tuple[bytes, str]:
                         raise urllib.error.URLError(f"refused redirect from HTTPS to {nxt!r}")
                     url = nxt
                     continue
+                if r.status_code in RETRY_STATUS:
+                    after = r.headers.get("retry-after", "")
+                    raise Transient(f"{url}: HTTP {r.status_code}", float(after) if after.isdigit() else None)
                 if r.status_code >= 400:
                     raise urllib.error.HTTPError(url, r.status_code, r.reason_phrase, r.headers, None)
                 body = bytearray()
@@ -191,7 +218,9 @@ def http_get(url: str, timeout: float = 20) -> tuple[bytes, str]:
                     if len(body) > MAX_DOWNLOAD:
                         raise urllib.error.URLError(f"{url} is larger than {MAX_DOWNLOAD // 2**20} MB")
                 return bytes(body), str(r.url)
-        except httpx.HTTPError as e:                 # network trouble, in urllib's terms
+        except httpx.TransportError as e:            # timeout, connection dropped or refused
+            raise Transient(f"{url}: {e or type(e).__name__}") from e
+        except httpx.HTTPError as e:                 # other network trouble, in urllib's terms
             raise urllib.error.URLError(str(e) or type(e).__name__) from e
     raise urllib.error.URLError(f"{url}: too many redirects")
 
@@ -1592,6 +1621,9 @@ def cmd_add(args) -> None:
         name, want = spec_.split("==", 1) if "==" in spec_ else (spec_, "")
         name, _, override = name.partition("=")
         sid = source_id(f"{name}=={want}" if want else name)
+        if not getattr(args, "staged", False) and (HOME / sid / "meta.json").exists():
+            refresh(spec, sid, args)                     # never risks the copy you have
+            continue
         meta = {"name": name, "spec": spec, "created": time.strftime("%Y-%m-%d %H:%M"), "model": None}
         plan = None if (forced_pypi or override) else sources.resolve(name, want)
         if plan and not want and re.fullmatch(r"[\d.]+", sources.KNOWN[name].get("version", "")):
@@ -1696,6 +1728,10 @@ def cmd_add(args) -> None:
         say(f"  saved {len(entries)} entries in {time.time() - t0:.0f} s")
         if not args.no_embed:
             embed_source(sid)
+        failed = int(meta.get("failed_pages") or 0)
+        if failed and failed > 0.05 * (failed + stored_pages(sid)) and not getattr(args, "staged", False):
+            say(f"  Note: {failed} pages could not be downloaded (the site may be busy or blocking); "
+                f"saved the rest. To try again later: search upgrade {name} --force")
         if getattr(args, "record", True):
             remember(spec)
 
@@ -1840,7 +1876,8 @@ def cmd_sync(args) -> None:
         if meta.get("spec") == spec and embed and not args.force:   # only the vectors are missing
             embed_source(sid)
             continue
-        cmd_add(argparse.Namespace(sources=[spec], workers=args.workers, max_pages=None, no_embed=not embed, yes=False))
+        cmd_add(argparse.Namespace(sources=[spec], workers=args.workers, max_pages=None, no_embed=not embed,
+                                   yes=False, accept_partial=args.accept_partial))
     extra = sorted(d.name for d in HOME.iterdir() if (d / "meta.json").exists() and d.name not in keep) \
         if HOME.exists() else []
     if extra and args.prune:
@@ -1858,6 +1895,8 @@ def cmd_list(_args) -> None:
         if f.exists():
             m = json.loads(f.read_text(encoding="utf-8"))
             vec = "vectors ready" if (d / "emb.npy").exists() else "no vectors"
+            if m.get("failed_pages"):
+                vec += f", {m['failed_pages']} pages missing"
             ver = m.get("version") or "-"
             print(f"{d.name:<14} {ver:<10} {m.get('count', 0):>7} entries   {m.get('kind', ''):<7} "
                   f"{vec:<14} {m.get('root', '')}   (indexed {m.get('created', '?')})")
@@ -1913,6 +1952,45 @@ def indexed() -> list[str]:
     return sorted(d.name for d in HOME.iterdir() if (d / "meta.json").exists()) if HOME.exists() else []
 
 
+def stored_pages(sid: str) -> int:
+    d = HOME / sid / "pages"
+    return sum(1 for f in d.rglob("*.gz") if "_images" not in f.parts) if d.exists() else 0
+
+
+def incomplete(new: Path, old: dict | None) -> str | None:
+    """Why a fresh download should not replace the copy you have, if it should not: more
+    than 5% of its pages failed, or (same docs, `old`) it has under 70% of their entries."""
+    meta = json.loads((new / "meta.json").read_text(encoding="utf-8"))
+    failed = int(meta.get("failed_pages") or 0)
+    pages = sum(1 for f in (new / "pages").rglob("*.gz") if "_images" not in f.parts) if (new / "pages").exists() else 0
+    if failed > 0.05 * (failed + pages):
+        return f"{failed} of {failed + pages} pages failed"
+    if old and meta.get("count", 0) < 0.7 * old.get("count", 0):
+        return f"{meta.get('count', 0)} entries; the copy you have has {old['count']}"
+    return None
+
+
+def refresh(spec: str, sid: str, args) -> bool:
+    """Download docs you already have again (sync, add) without risking them: built in
+    data/staging, swapped in only when complete enough; otherwise your copy stays."""
+    old = json.loads((HOME / sid / "meta.json").read_text(encoding="utf-8"))
+    say(f"  {sid}: downloading again; the copy you have stays in use until the new one is complete")
+    d = build_staged(spec, args)
+    if d is None:
+        say(f"  {sid}: the download failed; your copy is kept.")
+        return False
+    why = incomplete(d, old)
+    if why and not getattr(args, "accept_partial", False):
+        shutil.rmtree(STAGING, ignore_errors=True)
+        say(f"  {sid}: the new download looks incomplete ({why}); your copy is kept. "
+            f"Try again later, or take it anyway with --accept-partial.")
+        return False
+    install_staged(d, [])
+    if getattr(args, "record", True):
+        remember(spec)
+    return True
+
+
 def build_staged(spec: str, args) -> Path | None:
     """Download and index `spec` into data/staging, leaving the index in use untouched.
     Returns the finished folder, or None if that failed."""
@@ -1922,7 +2000,7 @@ def build_staged(spec: str, args) -> Path | None:
     real, HOME = HOME, STAGING
     try:
         cmd_add(argparse.Namespace(sources=[spec], workers=args.workers, max_pages=None,
-                                   no_embed=False, yes=args.yes, record=False))
+                                   no_embed=False, yes=getattr(args, "yes", False), record=False, staged=True))
     finally:
         HOME = real
     d = STAGING / source_id(spec)
@@ -1959,7 +2037,7 @@ def cmd_setup(args) -> None:
     else:
         say(f"Downloading the AI model {rerank.MODEL} (once, about 330 MB)...")
         rerank.download()
-    cmd_sync(argparse.Namespace(force=False, prune=False, workers=args.workers))
+    cmd_sync(argparse.Namespace(force=False, prune=False, workers=args.workers, accept_partial=False))
 
 
 def cmd_upgrade(args) -> None:
@@ -2004,6 +2082,13 @@ def cmd_upgrade(args) -> None:
         d = build_staged(build, args)
         if d is None:
             say(f"  {name}: the new docs could not be downloaded; the old ones are kept.")
+            continue
+        same = d.name in have
+        why = incomplete(d, json.loads((HOME / d.name / "meta.json").read_text()) if same else None)
+        if why and not args.accept_partial:
+            shutil.rmtree(STAGING, ignore_errors=True)
+            say(f"  {name}: the new download looks incomplete ({why}); the old docs are kept. "
+                f"Try again later, or take it anyway with --accept-partial.")
             continue
         install_staged(d, [s for s in have if s != d.name])
         config_set(name, want or "latest")
@@ -2202,11 +2287,15 @@ def main(argv: list[str] | None = None) -> None:
     a.add_argument("--max-pages", type=int, help="stop after this many doc pages")
     a.add_argument("--no-embed", action="store_true", help="skip vectors (spell search only)")
     a.add_argument("--yes", action="store_true", help="accept docs whose title does not match the name")
+    a.add_argument("--accept-partial", action="store_true",
+                   help="replace docs you have even if the new download looks incomplete")
     a.set_defaults(func=cmd_add)
     y = sub.add_parser("sync", help=f"index what {CONFIG} lists (creates the file the first time)")
     y.add_argument("--force", action="store_true", help="download again even if up to date")
     y.add_argument("--prune", action="store_true", help="remove indexed sources the file does not list")
     y.add_argument("--workers", type=int, default=16, help="parallel downloads (default 16)")
+    y.add_argument("--accept-partial", action="store_true",
+                   help="replace docs you have even if the new download looks incomplete")
     y.set_defaults(func=cmd_sync)
     sub.add_parser("list", help="show indexed sources").set_defaults(func=cmd_list)
     sub.add_parser("known", help="languages and toolkits that can be added by name").set_defaults(func=cmd_known)
@@ -2230,6 +2319,8 @@ def main(argv: list[str] | None = None) -> None:
         u.add_argument("--force", action="store_true", help="download again even if up to date")
         u.add_argument("--yes", action="store_true", help="accept docs whose title does not match the name")
         u.add_argument("--workers", type=int, default=16, help="parallel downloads (default 16)")
+        u.add_argument("--accept-partial", action="store_true",
+                       help="replace docs you have even if the new download looks incomplete")
         u.set_defaults(func=cmd_upgrade)
     sub.add_parser("ai", help="search with AI: search ai IDEA (a model on this Mac reorders the top results)")
     argv = sys.argv[1:] if argv is None else argv

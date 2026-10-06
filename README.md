@@ -172,6 +172,26 @@ to the Python docs instead of an old PyPI backport. Already added the wrong docs
 **Docs…** in the page: it lists every indexed source with its address, and **Remove**
 deletes one (also from `packages.toml`). In the terminal: `search remove NAME`.
 
+## When a download fails
+
+Docs sites go down, rate-limit, or time out. docsearch never lets that cost you the docs
+you have:
+
+1. **Retries.** A page that times out, drops the connection, or gets "too many requests"
+   (429) or a server error (5xx) is tried again up to 3 times, after 1, 3 and 9 seconds (or
+   as long as the site asks). A missing or forbidden page (404, 403) is not.
+2. **Your copy stays until the new one is complete.** Downloading docs you already have
+   (`search sync`, `add`, `upgrade`, `downgrade`) builds the new copy in `data/staging`;
+   the one in use is replaced only at the end. If the site is down, nothing changes.
+3. **No half copies.** The new copy replaces yours only if at most 5% of its pages failed
+   and (for the same docs) it has at least 70% of your copy's entries. Otherwise yours is
+   kept and you are told why; `--accept-partial` takes it anyway.
+4. **Gaps are visible.** `search list` shows "N pages missing" for docs saved with gaps
+   (the first download of a site saves what it got, and says so);
+   `search upgrade NAME --force` tries again.
+
+`data/` is not in git: Time Machine (or any backup of your home folder) keeps it.
+
 ## How the docs are shown
 
 - **The real documentation HTML**, not a conversion: while indexing, every docs page is

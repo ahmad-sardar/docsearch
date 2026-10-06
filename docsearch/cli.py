@@ -1232,6 +1232,7 @@ class Index:
         self.entries: list[Entry] = []
         self.cut: set[int] = set()           # entries whose text is shortened in memory
         self.tails: list = []                # per source: (first entry, offsets, the rest on disk)
+        self.pool = cf.ThreadPoolExecutor(max_workers=1)    # the spelling ranker, see search()
         vecs, posts, lens = [], [], []
         self.labels: list[str] = []          # "numpy 2.5": the name and the docs version
         for spec in specs:
@@ -1299,11 +1300,16 @@ class Index:
 
     # Spelling: two rankers over titles ------------------------------------------
     def rank_edit(self, q: str) -> list[int]:
+        """Titles close to the query in spelling (WRatio). Scored on all cores: rapidfuzz
+        spreads cdist's rows over threads (outside the GIL), so the titles are the rows and
+        the query the one column; same scores as one title at a time. Ties: earlier first."""
+        import numpy as np
         from rapidfuzz import fuzz, process
         from rapidfuzz.utils import default_process
-        res = process.extract(default_process(q), self.titles_proc, scorer=fuzz.WRatio,
-                              processor=None, limit=CANDIDATES, score_cutoff=45)
-        return [i for _, _, i in res]
+        s = process.cdist(self.titles_proc, [default_process(q)], scorer=fuzz.WRatio, processor=None,
+                          score_cutoff=45, dtype=np.float64, workers=-1)[:, 0]
+        hit = np.flatnonzero(s >= 45)
+        return hit[np.lexsort((hit, -s[hit]))][:CANDIDATES].tolist()
 
     def rank_abbrev(self, q: str) -> list[int]:
         qs = re.sub(r"\s+", "", q.lower())
@@ -1369,14 +1375,17 @@ class Index:
         q = q.strip()
         if not q:
             return []
+        # The spelling ranker runs on the other cores (in C++, outside the GIL) while the
+        # others run here; together they take about as long as it does alone.
+        edit = self.pool.submit(self.rank_edit, q) if self.mode in ("spell", "hybrid") else None
         exact, prefix = self.rank_name(q)
         # An exact API name is the strongest evidence (nn.Linear -> torch.nn.Linear); a name
         # that only starts with the query (torch.nn.Linear.forward) counts much less.
         lists = [("name", exact, 3.0), ("prefix", prefix, 1.0)]
-        if self.mode in ("spell", "hybrid"):
+        if edit is not None:
             # The two title rankers share one vote; the full-text word ranker has one vote.
-            lists += [("edit", self.rank_edit(q), 0.5), ("abbrev", self.rank_abbrev(q), 0.5),
-                      ("words", self.rank_words(q), 1.0)]
+            abbrev, words = self.rank_abbrev(q), self.rank_words(q)
+            lists += [("edit", edit.result(), 0.5), ("abbrev", abbrev, 0.5), ("words", words, 1.0)]
         if self.mode in ("meaning", "hybrid"):
             lists.append(("meaning", self.rank_meaning(q), 1.0))
         # A page about one API object (numpy.sum's page) repeats that object: keep the object.

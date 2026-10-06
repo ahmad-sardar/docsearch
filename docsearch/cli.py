@@ -168,27 +168,92 @@ def http_client():
     return _CLIENT
 
 
-class Transient(urllib.error.URLError):
-    """A failure worth trying again: timeout, dropped connection, 429 or 5xx."""
+class Failed(urllib.error.URLError):
+    """A download that failed, with what kind of failure it is (see WHY)."""
 
-    def __init__(self, reason: str, wait: float | None = None) -> None:
-        super().__init__(reason)
-        self.wait = wait
+    def __init__(self, kind: str, url: str, detail: str = "", wait: float | None = None) -> None:
+        super().__init__(f"{url}: {WHY[kind].format(detail=detail)}")
+        self.kind, self.url, self.detail, self.wait = kind, url, detail, wait
 
 
+# What each kind of failure means, and whether waiting can fix it.
+WHY = {
+    "dns": "the name does not exist (DNS lookup failed): check the address and your internet connection",
+    "offline": "no route to the site: is this Mac online?",
+    "refused": "the server refused the connection",
+    "certificate": "its HTTPS certificate is not valid ({detail}); docsearch only downloads from sites "
+                   "whose identity can be checked",
+    "timeout": "no answer in time, even after retrying",
+    "dropped": "the connection dropped, even after retrying",
+    "bot-check": "the site shows a bot check ({detail}) that only a person in a browser can pass; "
+                 "docsearch does not try to get around it",
+    "login": "the page needs a login (HTTP 401)",
+    "forbidden": "the site refuses this download (HTTP 403)",
+    "not-found": "no page at this address (HTTP 404): wrong, or moved",
+    "gone": "the page is gone (HTTP {detail})",
+    "rate-limited": "the site asked to slow down (HTTP 429), even after waiting",
+    "server-error": "the site had a server error (HTTP {detail}), even after retrying",
+    "too-large": "the file is larger than the limit ({detail})",
+    "not-https": "not an https:// address ({detail}); docsearch only downloads over HTTPS",
+    "redirect": "{detail}",
+    "robots": "the site's robots.txt asks programs not to download these pages",
+    "empty": "the page has no text of its own: it is built by JavaScript in the browser (a web app), "
+             "which docsearch does not run",
+    "other": "{detail}",
+}
+TRANSIENT = {"timeout", "dropped", "rate-limited", "server-error"}
 RETRY_STATUS = {429, 500, 502, 503, 504}
 RETRY_WAITS = (1, 3, 9)          # seconds before each new try (or what Retry-After asks, at most 30)
+DEAD_HOSTS: dict[str, Failed] = {}   # hosts that failed for good this run: fail at once
+
+
+def connect_failure(url: str, e: Exception) -> Failed:
+    """Name the cause of a failed connection from the system's message."""
+    import httpx
+    msg = str(e)
+    if isinstance(e, httpx.TimeoutException):
+        return Failed("timeout", url)
+    if "CERTIFICATE_VERIFY_FAILED" in msg or "SSL" in msg:
+        detail = msg.split("certificate verify failed:")[-1].split("(_ssl")[0].strip() or "TLS error"
+        return Failed("certificate", url, detail)
+    if "nodename nor servname" in msg or "Name or service not known" in msg or "getaddrinfo" in msg:
+        return Failed("dns", url)
+    if "Connection refused" in msg:
+        return Failed("refused", url)
+    if "unreachable" in msg or "No route" in msg:
+        return Failed("offline", url)
+    return Failed("dropped", url, msg)
+
+
+def bot_check(r, head: bytes) -> str | None:
+    """Who is showing a bot check instead of the page (Cloudflare, Akamai...), if anyone."""
+    server = r.headers.get("server", "").lower()
+    if r.headers.get("cf-mitigated") == "challenge" or (
+            "cloudflare" in server and (b"challenge-platform" in head or b"Just a moment" in head)):
+        return "Cloudflare"
+    if "akamai" in server or b"_abck" in head:
+        return "Akamai"
+    if b"captcha" in head.lower() and r.status_code in (403, 429, 503):
+        return "a captcha"
+    return None
 
 
 def http_get(url: str, timeout: float = 20) -> tuple[bytes, str]:
     """Return (body, final URL after redirects). HTTPS only, certificate checked, at most
-    MAX_DOWNLOAD bytes, at most 5 redirects and only to other HTTPS addresses. Transient
-    failures are tried again (RETRY_WAITS); a missing or forbidden page (404, 403) is not."""
+    MAX_DOWNLOAD bytes, at most 5 redirects and only to other HTTPS addresses. Failures are
+    Failed, with their kind; the transient ones are tried again (RETRY_WAITS), and a host
+    that failed for good (no such name, bad certificate, bot check) is not tried again."""
+    host = urllib.parse.urlparse(url).netloc
+    if host in DEAD_HOSTS:
+        old = DEAD_HOSTS[host]
+        raise Failed(old.kind, url, old.detail)
     for wait in (*RETRY_WAITS, None):
         try:
             return http_get_once(url, timeout)
-        except Transient as e:
-            if wait is None:
+        except Failed as e:
+            if e.kind in ("dns", "certificate", "bot-check", "offline"):
+                DEAD_HOSTS[host] = e
+            if e.kind not in TRANSIENT or wait is None:
                 raise
             time.sleep(min(30.0, e.wait if e.wait is not None else wait))
     raise AssertionError("unreachable")
@@ -198,31 +263,64 @@ def http_get_once(url: str, timeout: float = 20) -> tuple[bytes, str]:
     import httpx
     for _ in range(6):
         if not safe_url(url):
-            raise urllib.error.URLError(f"refused {url!r}: only https:// addresses are fetched")
+            raise Failed("not-https", url, url.split(":", 1)[0] + ":")
         try:
             with http_client().stream("GET", url, timeout=timeout) as r:
                 if r.is_redirect:
                     nxt = urllib.parse.urljoin(url, r.headers.get("location", ""))
                     if url.startswith("https:") and not nxt.startswith("https:"):
-                        raise urllib.error.URLError(f"refused redirect from HTTPS to {nxt!r}")
+                        raise Failed("redirect", url, f"it redirects from HTTPS to {nxt!r}, which is refused")
                     url = nxt
                     continue
-                if r.status_code in RETRY_STATUS:
-                    after = r.headers.get("retry-after", "")
-                    raise Transient(f"{url}: HTTP {r.status_code}", float(after) if after.isdigit() else None)
                 if r.status_code >= 400:
-                    raise urllib.error.HTTPError(url, r.status_code, r.reason_phrase, r.headers, None)
+                    head = b""
+                    for chunk in r.iter_bytes():
+                        head += chunk
+                        if len(head) > 65536:
+                            break
+                    who = bot_check(r, head)
+                    if who:
+                        raise Failed("bot-check", url, who)
+                    code = r.status_code
+                    if code in RETRY_STATUS:
+                        after = r.headers.get("retry-after", "")
+                        raise Failed("rate-limited" if code == 429 else "server-error", url, str(code),
+                                     float(after) if after.isdigit() else None)
+                    kind = {401: "login", 403: "forbidden", 404: "not-found", 410: "gone"}.get(code, "gone")
+                    raise Failed(kind, url, str(code))
                 body = bytearray()
                 for chunk in r.iter_bytes():
                     body += chunk
                     if len(body) > MAX_DOWNLOAD:
-                        raise urllib.error.URLError(f"{url} is larger than {MAX_DOWNLOAD // 2**20} MB")
+                        raise Failed("too-large", url, f"{MAX_DOWNLOAD // 2**20} MB")
                 return bytes(body), str(r.url)
-        except httpx.TransportError as e:            # timeout, connection dropped or refused
-            raise Transient(f"{url}: {e or type(e).__name__}") from e
-        except httpx.HTTPError as e:                 # other network trouble, in urllib's terms
-            raise urllib.error.URLError(str(e) or type(e).__name__) from e
-    raise urllib.error.URLError(f"{url}: too many redirects")
+        except httpx.TransportError as e:            # no connection, or it dropped
+            raise connect_failure(url, e) from e
+        except httpx.HTTPError as e:                 # other network trouble
+            raise Failed("other", url, str(e) or type(e).__name__) from e
+    raise Failed("redirect", url, "too many redirects")
+
+
+class Failures:
+    """The pages of one download that failed, by cause (for the summary and meta.json)."""
+
+    def __init__(self) -> None:
+        self.by_kind: dict[str, list[str]] = {}
+
+    def add(self, url: str, e: BaseException) -> None:
+        kind = e.kind if isinstance(e, Failed) else "other"
+        self.by_kind.setdefault(kind, []).append(url if isinstance(e, Failed) else f"{url} ({e})")
+
+    def __len__(self) -> int:
+        return sum(len(v) for v in self.by_kind.values())
+
+    def report(self) -> None:
+        for kind, urls in sorted(self.by_kind.items(), key=lambda kv: -len(kv[1])):
+            why = WHY[kind].format(detail="").replace(" ()", "")
+            say(f"    {len(urls)} × {why}  (e.g. {urls[0]})")
+
+    def as_meta(self) -> dict:
+        return {k: {"count": len(v), "example": v[0]} for k, v in self.by_kind.items()}
 
 
 CONTROL = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
@@ -479,7 +577,7 @@ def build_sphinx(name: str, root: str, inv: bytes, workers: int, max_pages: int 
             return page, None, e
 
     entries: list[Entry] = []
-    failed = 0
+    fails = Failures()
     t0 = time.time()
     own = store is None
     if own:                                              # offline copies, for the browser
@@ -493,9 +591,9 @@ def build_sphinx(name: str, root: str, inv: bytes, workers: int, max_pages: int 
             cf.ProcessPoolExecutor(max_workers=os.cpu_count() or 4) as cpu:
         for i, (page, got, err) in enumerate(net.map(fetch, page_list), 1):
             if i % 250 == 0 or i == len(page_list):
-                say(f"  pages {i}/{len(page_list)}  ({time.time() - t0:.0f} s, {failed} failed)")
+                say(f"  pages {i}/{len(page_list)}  ({time.time() - t0:.0f} s, {len(fails)} failed)")
             if got is None:
-                failed += 1
+                fails.add(urllib.parse.urljoin(root, page), err)
                 continue
             jobs.append(cpu.submit(sphinx_page, name, root, page, got[0], got[1], pages[page],
                                    store.dir, store.root))
@@ -505,7 +603,10 @@ def build_sphinx(name: str, root: str, inv: bytes, workers: int, max_pages: int 
             store.add_images(used)
     if own:
         store.finish(workers)
-    return entries, {"project": project, "version": version, "failed_pages": failed, "pages": True}
+    if fails:
+        fails.report()
+    return entries, {"project": project, "version": version, "failed_pages": len(fails),
+                     "failures": fails.as_meta(), "pages": True}
 
 
 def sphinx_page(name: str, root: str, page: str, html: bytes, real_url: str,
@@ -556,15 +657,16 @@ def sphinx_page(name: str, root: str, page: str, html: bytes, real_url: str,
     return entries, images
 
 
-def download_images(images: dict[str, str], folder: Path, workers: int) -> None:
+def download_images(images: dict[str, str], folder: Path, workers: int, read=None) -> None:
     """Store the images the pages show, so the pages need no internet. The type is read
-    from the image's own bytes; anything that is not PNG/JPEG/GIF/WebP/SVG is dropped."""
+    from the image's own bytes; anything that is not PNG/JPEG/GIF/WebP/SVG is dropped.
+    `read(url)`: where the bytes come from (default: download; a local import reads files)."""
     folder.mkdir(parents=True, exist_ok=True)
 
     def one(item: tuple[str, str]):
         url, name = item
         try:
-            data = get_page(url)                     # follows PyTorch-style redirect stubs
+            data = read(url) if read else get_page(url)    # follows PyTorch-style redirect stubs
         except Exception:  # noqa: BLE001 - a missing image shows its description instead
             return name, None
         ctype = offline.image_type(data) if len(data) <= offline.MAX_IMAGE else None
@@ -613,8 +715,8 @@ GUESSED: set[str] = set()            # docs addresses we made up rather than PyP
 def pypi_candidates(pkg: str) -> list[str]:
     try:
         meta = json.loads(http_get(f"https://pypi.org/pypi/{pkg}/json")[0])
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
+    except Failed as e:
+        if e.kind == "not-found":
             die(f"'{pkg}' is not a package on PyPI.")
         raise
     info = meta.get("info", {})
@@ -1602,6 +1704,10 @@ def build_known(name: str, sid: str, plan: dict, workers: int, max_pages: int | 
             die(f"unknown kind of docs: {kind}")
         entries += found
         say(f"  {kind}: {len(found)} entries")
+        meta["failed_pages"] = meta.get("failed_pages", 0) + extra.get("failed_pages", 0)
+        for k, v in (extra.get("failures") or {}).items():           # the causes, over all parts
+            have = meta.setdefault("failures", {}).setdefault(k, {"count": 0, "example": v["example"]})
+            have["count"] += v["count"]
         got, have = extra.get("version") or "", meta["version"] or ""
         if got and (not re.fullmatch(r"\d+(\.\d+)*", have) or got.startswith(have + ".")):
             meta["version"] = got                             # the real number for "stable", "3"
@@ -1629,7 +1735,11 @@ def cmd_add(args) -> None:
         if plan and not want and re.fullmatch(r"[\d.]+", sources.KNOWN[name].get("version", "")):
             plan = sources.resolve(name, published_version(plan) or "")    # the newest release
         try:
-            if plan is not None:                         # a language or toolkit we know
+            if override and LOCAL_PATH.match(override):  # docs you downloaded yourself
+                from docsearch import importers
+                entries, extra = importers.build_local(name, sid, Path(override), args.workers)
+                meta.update(extra)
+            elif plan is not None:                       # a language or toolkit we know
                 say(f"  {plan.get('about', name)}")
                 entries, extra = build_known(name, sid, plan, args.workers, args.max_pages)
                 meta.update(extra)
@@ -1672,6 +1782,9 @@ def cmd_add(args) -> None:
                     found = None
                 elif not found:
                     say(f"  Could not find Sphinx or MkDocs docs for '{name}'.")
+                    for host, why in DEAD_HOSTS.items():
+                        say(f"  {host}: {WHY[why.kind].format(detail=why.detail)}")
+                        say(f"  {NEXT.get(why.kind, '')}".rstrip())
                     say(f"  If you know the docs URL, run: search add {name}=https://.../")
                     known = ", ".join(sorted(sources.KNOWN))
                     say(f"  Languages and toolkits that need no PyPI package: {known}")
@@ -1709,19 +1822,31 @@ def cmd_add(args) -> None:
                         entries, extra = build_mkdocs(name, root, data)
                     meta.update(kind=kind, root=root, **extra)
         except urllib.error.URLError as e:
-            say(f"  Network error: {getattr(e, 'reason', e)}")
-            if "CERTIFICATE_VERIFY_FAILED" in str(e):
-                say("  Python cannot verify HTTPS certificates. Fix: run")
-                say("    cd ~/tools && uv add truststore")
+            kind = e.kind if isinstance(e, Failed) else "other"
+            say(f"  Could not download: {getattr(e, 'reason', e)}")
+            if kind == "certificate" and "local issuer" in str(e):    # this Mac's Python, not the site
+                say("  Python on this Mac cannot check certificates. Fix: cd ~/tools && uv add truststore")
+            else:
+                say(f"  {NEXT.get(kind, NEXT['other'])}")
+            say(f"  {LOCAL_TIP.format(name=name)}")
             continue
+        if not entries and meta.get("failures") and str(meta.get("root", "")).startswith("http"):
+            entries, extra = try_alternatives(name, sid, meta, args)
+            meta.update(extra)
         if not entries:
             say(f"  No entries for '{spec}'. Nothing saved.")
+            causes = sorted((meta.get("failures") or {}).items(), key=lambda kv: -kv[1]["count"])
+            if causes:
+                kind, c = causes[0]
+                say(f"  Why: {WHY[kind].format(detail='').replace(' ()', '')} ({c['count']} pages, e.g. {c['example']})")
+                say(f"  {NEXT.get(kind, NEXT['other'])}")
+            say(f"  {LOCAL_TIP.format(name=name)}")
             continue
         if sid != source_id(name):                  # a second version: its entries say which
             for e in entries:
                 e.source = sid
         meta["count"] = len(entries)
-        if str(meta.get("root", "")).startswith("http"):
+        if str(meta.get("root", "")).startswith("http") and meta.get("kind") != "local":
             from docsearch import order
             meta["nav"] = order.fetch_nav(meta)        # the docs' sidebar: their reading order
         save(sid, entries, meta)
@@ -1734,6 +1859,74 @@ def cmd_add(args) -> None:
                 f"saved the rest. To try again later: search upgrade {name} --force")
         if getattr(args, "record", True):
             remember(spec)
+
+
+LOCAL_PATH = re.compile(r"^(/|~|\.{1,2}/)")       # NAME=/path, ~/path, ./path: a local copy
+NEXT = {
+    "dns": "Check the address; if it is right, check this Mac's internet connection.",
+    "offline": "Connect to the internet and run the same command again.",
+    "refused": "The site is not answering. Try again later.",
+    "timeout": "The site is slow or overloaded. Try again later, or more gently: --workers 2",
+    "dropped": "The site is slow or overloaded. Try again later, or more gently: --workers 2",
+    "rate-limited": "The site limits how fast it may be read. Try again later, more gently: --workers 2",
+    "server-error": "The site has a problem of its own. Try again later.",
+    "certificate": "The site's certificate is broken; docsearch will not download from it.",
+    "bot-check": "The site does not allow programs to read it.",
+    "forbidden": "The site does not allow programs to read these pages.",
+    "login": "These docs need a login.",
+    "robots": "The site asks programs not to read these pages, and docsearch respects that.",
+    "not-found": "The address is wrong or the docs moved: find their current address and run "
+                 "search add NAME=https://.../",
+    "gone": "The docs are no longer there: find their current address.",
+    "too-large": "A page is larger than the 50 MB limit.",
+    "empty": "Such sites often publish their docs for programs too (llms.txt; tried above) or as a download.",
+    "other": "",
+}
+LOCAL_TIP = ("Another way, which always works: download the docs yourself (many projects offer an HTML "
+             ".zip: look for 'Download' or 'Offline'; or save the pages from Safari), then: "
+             "search add {name}=/path/to/folder-or.zip")
+
+
+def try_alternatives(name: str, sid: str, meta: dict, args) -> tuple[list[Entry], dict]:
+    """When the pages could not be read one way, the other official ways a site offers:
+    its llms.txt (a list of its pages for programs) and its sitemap."""
+    from docsearch import importers
+    root = meta["root"]
+    causes = meta.get("failures") or {}
+    if causes and all(k in ("dns", "offline", "certificate", "bot-check", "login") for k in causes):
+        return [], {}                                  # the same site: no other way in
+    origin = "{0.scheme}://{0.netloc}/".format(urllib.parse.urlparse(root))
+    tries = dict.fromkeys([(("llms.txt", "llms", urllib.parse.urljoin(root, "llms.txt"))),
+                           ("llms.txt", "llms", origin + "llms.txt"), ("sitemap", "sitemap", origin + "sitemap.xml")])
+    for label, key, url in tries:
+        try:
+            data, _ = http_get(url, timeout=15)
+        except urllib.error.URLError as e:
+            say(f"  Alternative: {url}: {getattr(e, 'reason', e)}")
+            continue
+        if key == "sitemap" and b"<urlset" not in data[:4096] and b"<sitemapindex" not in data[:4096]:
+            continue
+        say(f"  Alternative: the site's {label} at {url}")
+        plan = {"kind": "website", "root": root, "prefix": root, key: url}
+        if key == "llms":                        # its pages may live on a sister site of the same
+            org = organization(urllib.parse.urlparse(url).netloc)        # organization only
+            hosts = sorted({h for h in (urllib.parse.urlparse(u).netloc for u in
+                                        importers.MD_LINK.findall(data.decode("utf-8", "replace")))
+                            if h and organization(h) == org})
+            plan["prefix"] = [f"https://{h}/" for h in hosts] or [origin]
+            plan["root"] = plan["prefix"][0] if len(plan["prefix"]) == 1 else "https://"
+        store = importers.Store(sid, root)
+        store.reset()
+        entries, extra = importers.build_website(name, sid, plan, store, args.workers, args.max_pages)
+        store.finish(args.workers)
+        if entries:
+            return entries, {**extra, "kind": "website", "root": plan["root"], "pages": True, "via": url}
+    return [], {}
+
+
+def organization(host: str) -> str:
+    """platform.openai.com -> openai.com: who runs a site (the last two parts of its name)."""
+    return ".".join(host.lower().split(":")[0].split(".")[-2:])
 
 
 def page_title(url: str) -> str:
@@ -1825,10 +2018,13 @@ def read_config() -> list[tuple[str, bool]]:
         if not PKG_NAME.fullmatch(name):
             die(f"{CONFIG}: '{name}' is not a package name.")
         opts = val if isinstance(val, dict) else {"version": val}
-        unknown = set(opts) - {"version", "url", "embed"}
+        unknown = set(opts) - {"version", "url", "path", "embed"}
         if unknown:
             die(f"{CONFIG}: [{name}] has unknown keys: {', '.join(sorted(unknown))}")
         version, url = str(opts.get("version", "latest")), opts.get("url")
+        if opts.get("path"):                                 # docs you downloaded yourself
+            out.append((f"{name}={opts['path']}", bool(opts.get("embed", True))))
+            continue
         if url:
             if not isinstance(url, str) or not safe_url(url):
                 die(f"{CONFIG}: [{name}] url must be an https:// address.")
@@ -1867,7 +2063,7 @@ def cmd_sync(args) -> None:
         ready = meta.get("spec") == spec and (not embed or (HOME / sid / "emb.npy").exists())
         if ready and not args.force:
             say(f"{spec}: up to date ({meta.get('version') or 'no version'})")
-            if "nav" not in meta and str(meta.get("root", "")).startswith("http"):
+            if "nav" not in meta and str(meta.get("root", "")).startswith("http") and meta.get("kind") != "local":
                 from docsearch import order                # docs added before the order was kept
                 meta["nav"] = order.fetch_nav(meta)
                 write_atomic(meta_f, json.dumps(meta, indent=2).encode())
@@ -2173,7 +2369,7 @@ def remember(spec: str) -> None:
     old = config_values(name)
     if url:
         if old is None:
-            config_set(name, {"url": url})
+            config_set(name, {"path": url} if LOCAL_PATH.match(url) else {"url": url})
         return
     want = want or "latest"
     if old is None:

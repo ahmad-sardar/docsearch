@@ -350,7 +350,7 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
     rp = robots(store.root)
     allowed = lambda u: rp.can_fetch(cli.USER_AGENT, u)  # noqa: E731
     entries: list[Entry] = []
-    failed, t0, done = 0, time.time(), 0
+    fails, t0, done = cli.Failures(), time.time(), 0
 
     def fetch(u: str):
         try:
@@ -372,22 +372,29 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
     with cf.ThreadPoolExecutor(max_workers=workers) as net, \
             cf.ProcessPoolExecutor(max_workers=os.cpu_count() or 4) as cpu:
         while frontier and done < limit:
+            for u in frontier:
+                if not allowed(u):
+                    fails.add(u, cli.Failed("robots", u))
             batch = [u for u in frontier if allowed(u)][: limit - done]
             frontier = []
             jobs = []
             for u, got, err in net.map(fetch, batch):
                 done += 1
                 if got is None:
-                    failed += 1
+                    fails.add(u, err)
                     continue
                 if u.endswith(".md"):
-                    jobs.append(cpu.submit(markdown_page, sid, name, store.root, store.dir, u, got[0], spec))
+                    jobs.append((u, cpu.submit(markdown_page, sid, name, store.root, store.dir, u, got[0], spec)))
                 else:
-                    jobs.append(cpu.submit(website_page, sid, name, store.root, store.dir, u, got[0], got[1], spec))
+                    jobs.append((u, cpu.submit(website_page, sid, name, store.root, store.dir, u, got[0], got[1],
+                                               spec)))
                 if done % 250 == 0:
-                    say(f"  pages {done}  ({time.time() - t0:.0f} s, {failed} failed)")
-            for j in jobs:
+                    say(f"  pages {done}  ({time.time() - t0:.0f} s, {len(fails)} failed)")
+            for u, j in jobs:
                 found, imgs, links = j.result()
+                if found and sum(len(e.text.strip()) for e in found) < 40:   # an empty app shell
+                    fails.add(u, cli.Failed("empty", u))
+                    continue
                 entries += found
                 store.add_images(imgs)
                 if follow and depth_left > 0:
@@ -398,8 +405,92 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
                             seen.add(link)
                             frontier.append(link)
             depth_left -= 1
-    say(f"  {done} pages ({failed} failed) in {time.time() - t0:.0f} s")
-    return entries, {"failed_pages": failed}
+    say(f"  {done} pages ({len(fails)} failed) in {time.time() - t0:.0f} s")
+    if fails:
+        fails.report()
+    return entries, {"failed_pages": len(fails), "failures": fails.as_meta()}
+
+
+# --------------------------------------------------------------------------- local copies
+
+LOCAL_HOST = "local-docs.invalid"     # .invalid never exists (RFC 2606): nothing can be fetched
+LOCAL_LIMITS = {"files": 50_000, "bytes": 2 * 2**30}
+
+
+def unpack_zip(zip_path: Path, into: Path) -> Path:
+    """Unpack a downloaded docs .zip safely: no path may leave the folder, and the unpacked
+    size and number of files are limited (a "zip bomb" is refused)."""
+    import zipfile
+    with zipfile.ZipFile(zip_path) as z:
+        infos = [i for i in z.infolist() if not i.is_dir()]
+        if len(infos) > LOCAL_LIMITS["files"] or sum(i.file_size for i in infos) > LOCAL_LIMITS["bytes"]:
+            cli.die(f"{zip_path}: more than {LOCAL_LIMITS['files']} files or 2 GB unpacked; refused.")
+        base = into.resolve()
+        for i in infos:
+            target = (into / i.filename).resolve()
+            if base not in target.parents:
+                cli.die(f"{zip_path}: '{i.filename}' would be written outside the folder; refused.")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with z.open(i) as src, open(target, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+    tops = [p for p in into.iterdir() if not p.name.startswith((".", "__MACOSX"))]
+    return tops[0] if len(tops) == 1 and tops[0].is_dir() else into     # docs-1.2/... -> its folder
+
+
+def build_local(name: str, sid: str, src: Path, workers: int) -> tuple[list[Entry], dict]:
+    """Docs you downloaded yourself (a folder, or a .zip of HTML or Markdown pages): read
+    from disk, nothing fetched. The pages get the address https://SID.local-docs.invalid/
+    so links between them work in the search page."""
+    import tempfile
+    src = src.expanduser().resolve()
+    if not src.exists():
+        cli.die(f"{src}: no such file or folder.")
+    root = f"https://{sid}.{LOCAL_HOST}/"
+    if src.is_file() and src.suffix.lower() != ".zip":
+        cli.die(f"{src}: give a folder, or a .zip of the docs.")
+    tmp = Path(tempfile.mkdtemp(prefix="docsearch-")) if src.is_file() else None
+    try:
+        folder = unpack_zip(src, tmp) if tmp else src
+        files = sorted(f for f in folder.rglob("*") if f.is_file() and f.suffix.lower() in
+                       (".html", ".htm", ".md", ".markdown") and not any(p.startswith(".") for p in f.parts))
+        if len(files) > LOCAL_LIMITS["files"]:
+            cli.die(f"{folder}: more than {LOCAL_LIMITS['files']} pages.")
+        say(f"  {len(files)} pages in {src}")
+        store = Store(sid, root)
+        store.reset()
+        entries: list[Entry] = []
+        fails = cli.Failures()
+        with cf.ProcessPoolExecutor(max_workers=os.cpu_count() or 4) as cpu:
+            jobs = []
+            for f in files:
+                rel = f.relative_to(folder).as_posix()
+                url = root + rel
+                data = f.read_bytes()
+                if len(data) > cli.MAX_DOWNLOAD:
+                    fails.add(url, cli.Failed("too-large", url, f"{cli.MAX_DOWNLOAD // 2**20} MB"))
+                    continue
+                if f.suffix.lower() in (".md", ".markdown"):
+                    jobs.append(cpu.submit(markdown_page, sid, name, root, store.dir, url, data, {}))
+                else:
+                    jobs.append(cpu.submit(website_page, sid, name, root, store.dir, url, data, url, {}))
+            for j in jobs:
+                found, imgs, _ = j.result()
+                entries += found
+                store.add_images(imgs)
+
+        def read_image(url: str) -> bytes:              # images come from the folder, not the web
+            path = (folder / urllib.parse.unquote(url[len(root):].split("?")[0])).resolve()
+            if folder.resolve() not in path.parents:
+                raise ValueError("outside the folder")
+            return path.read_bytes()
+        cli.download_images(store.images, store.dir / "_images", workers, read=read_image)
+    finally:
+        if tmp is not None:
+            shutil.rmtree(tmp, ignore_errors=True)
+    if fails:
+        fails.report()
+    return entries, {"kind": "local", "root": root, "local": str(src), "pages": True,
+                     "failed_pages": len(fails), "failures": fails.as_meta()}
 
 
 # --------------------------------------------------------------------------- Rust (rustdoc)
@@ -474,7 +565,7 @@ def build_rustdoc(name: str, sid: str, spec: dict, store: Store, workers: int,
     urls = list(dict.fromkeys([crate_root + "index.html", *modules, *items]))[: max_pages or 10**6]
     say(f"  {name}: {len(items)} items in {len(modules)} modules (rustdoc {version})")
     entries: list[Entry] = []
-    failed, t0 = 0, time.time()
+    fails, t0 = cli.Failures(), time.time()
 
     def fetch(u: str):
         try:
@@ -487,13 +578,15 @@ def build_rustdoc(name: str, sid: str, spec: dict, store: Store, workers: int,
             cf.ProcessPoolExecutor(max_workers=os.cpu_count() or 4) as cpu:
         for i, (u, got, err) in enumerate(net.map(fetch, urls), 1):
             if got is None:
-                failed += 1
+                fails.add(u, err)
                 continue
             jobs.append(cpu.submit(rustdoc_page, sid, name, store.root, store.dir, crate_root, u, got[0], got[1]))
             if i % 250 == 0 or i == len(urls):
-                say(f"  pages {i}/{len(urls)}  ({time.time() - t0:.0f} s, {failed} failed)")
+                say(f"  pages {i}/{len(urls)}  ({time.time() - t0:.0f} s, {len(fails)} failed)")
         for j in jobs:
             found, imgs, _ = j.result()
             entries += found
             store.add_images(imgs)
-    return entries, {"version": version, "failed_pages": failed}
+    if fails:
+        fails.report()
+    return entries, {"version": version, "failed_pages": len(fails), "failures": fails.as_meta()}

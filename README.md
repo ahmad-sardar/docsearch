@@ -284,3 +284,8 @@ docsearch does not try to get around bot checks or logins.
 - [@ahmad-sardar](https://github.com/ahmad-sardar): author and maintainer
 - Claude (Anthropic's AI model, via Claude Code): co-author; its commits carry a
   `Co-Authored-By: Claude` line, which GitHub shows as a co-author
+
+## License
+
+MIT (see `LICENSE`): use it, change it, share it. `eval/so_questions.json` holds Stack
+Overflow question titles, which stay under CC BY-SA 4.0.

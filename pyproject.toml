@@ -1,8 +1,10 @@
 [project]
 name = "docsearch"
 version = "0.1.0"
-description = "Search Python package docs from the terminal and read them in Safari, 100% offline."
+description = "Search official documentation from the terminal and read it in Safari, 100% offline."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"   # tomllib (packages.toml) is in the standard library from 3.11
 dependencies = [
     "rapidfuzz>=3.0",

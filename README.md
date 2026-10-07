@@ -66,11 +66,11 @@ in powershell:
 git clone -b windows https://github.com/ahmad-sardar/docsearch $HOME\docsearch
 cd $HOME\docsearch
 uv sync
-.venv\Scripts\search setup       # downloads the models and the docs, once. takes a while.
-# the search command, in this window and new ones
-$s = "$HOME\docsearch\.venv\Scripts"; $env:Path += ";$s"
-[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$s", "User")
+.venv\Scripts\search setup       # puts search on your PATH, downloads the models and the docs. takes a while.
+$env:Path = "$HOME\docsearch\bin;$env:Path"      # search in this window too (new ones have it)
 ```
+
+want to pick your docs first? `search setup --no-docs`, then `search add numpy pandas`.
 
 no gpu needed. on a mac with apple silicon the models run on the gpu, everywhere else on
 the processor: same results (measured, see `eval/results-backends.md`), just slower.

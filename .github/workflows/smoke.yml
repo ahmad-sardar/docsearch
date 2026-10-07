@@ -31,26 +31,32 @@ jobs:
       - name: Hugging Face is unreachable
         shell: bash
         run: if curl -sS -m 15 -o /dev/null https://huggingface.co; then echo "still reachable"; exit 1; fi
-      # The README's install block, copied as a person would (it clones this branch from
-      # GitHub); only `search setup`, which downloads every docs site, becomes `search known`.
+      # The README's install block, run as a person would paste it (it clones this branch
+      # from GitHub). Only `search setup` gets --no-docs: the full one downloads every docs
+      # site. Then `search` must be docsearch's, not another program of that name.
       - name: README install block (windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $block = ((Get-Content README.md -Raw) -split '```powershell')[1]
-          $block = ($block -split '```')[0] -replace 'search setup', 'search known'
+          $block = ($block -split '```')[0] -replace 'search setup', 'search setup --no-docs'
           Invoke-Expression $block
+          $found = (Get-Command search).Source
+          if ($found -ne "$HOME\docsearch\bin\search.exe") { throw "search runs $found" }
           search known
           $user = [Environment]::GetEnvironmentVariable("Path", "User")
-          if ($user -notlike "*docsearch\.venv\Scripts*") { throw "search is not on the user PATH" }
+          if (-not $user.StartsWith("$HOME\docsearch\bin")) { throw "bin is not first on the user PATH: $user" }
+          Set-Location $env:TEMP
+          & "$HOME\docsearch\bin\search.exe" list
       - name: README install block (linux)
         if: runner.os != 'Windows'
         run: |
           awk '/^### linux/{f=1} f&&/^```bash/{g=1;next} g&&/^```/{exit} g' README.md \
-            | sed 's/search setup/search known/' > "$RUNNER_TEMP/install.sh"
+            | sed 's/search setup/search setup --no-docs/' > "$RUNNER_TEMP/install.sh"
           cat "$RUNNER_TEMP/install.sh"
           bash -e "$RUNNER_TEMP/install.sh"
-          bash -ic 'search known'
+          bash -ic 'type search; search known' | tee "$RUNNER_TEMP/out.txt"
+          grep -q "search is aliased to .*docsearch/.venv/bin/search" "$RUNNER_TEMP/out.txt"
       - name: index, search, remove
         run: |
           uv sync

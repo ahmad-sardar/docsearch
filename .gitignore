@@ -13,3 +13,6 @@ eval/cache/
 
 # macOS
 .DS_Store
+
+# The search command on Windows (search setup copies it here)
+bin/

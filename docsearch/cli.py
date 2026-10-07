@@ -2434,10 +2434,50 @@ def cmd_save(args) -> None:
     config_set(name, meta["urls"], table="saved")
 
 
+def windows_command() -> None:
+    """Windows: the search command for every new terminal. A copy of .venv's search.exe
+    goes in bin\\ (a folder of its own: putting .venv\\Scripts on the PATH would bring its
+    python.exe along), and bin\\ goes first on your user PATH. Says so if another program
+    called search would still come first (programs installed for all users come first)."""
+    import ctypes
+    import winreg
+    src, bin_dir = Path(sys.executable).with_name("search.exe"), ROOT / "bin"
+    if not src.exists():
+        return
+    bin_dir.mkdir(exist_ok=True)
+    dest = bin_dir / "search.exe"
+    if not dest.exists() or sha256_of(dest) != sha256_of(src):
+        try:
+            shutil.copy2(src, dest)
+        except PermissionError:                  # it is the one running this setup
+            pass
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ | winreg.KEY_WRITE) as key:
+        try:
+            user, kind = winreg.QueryValueEx(key, "Path")
+        except FileNotFoundError:
+            user, kind = "", winreg.REG_EXPAND_SZ
+        parts = [p for p in user.split(";") if p]
+        if not any(os.path.normcase(os.path.expandvars(p).rstrip("\\")) == os.path.normcase(str(bin_dir))
+                   for p in parts):
+            user = ";".join([str(bin_dir)] + parts)
+            winreg.SetValueEx(key, "Path", 0, kind, user)
+            ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x1A, 0, "Environment", 2, 5000, None)  # tell Windows
+            say(f"Added {bin_dir} to your PATH: the search command works in new terminals.")
+    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                        r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment") as key:
+        machine = winreg.QueryValueEx(key, "Path")[0]
+    first = shutil.which("search", path=os.path.expandvars(f"{machine};{user}"))
+    if first and os.path.normcase(str(Path(first).parent)) != os.path.normcase(str(bin_dir)):
+        say(f"Note: another program called search comes first on your PATH: {first}\n"
+            f"  Run docsearch as {dest}, or remove that folder from your PATH.")
+
+
 def cmd_setup(args) -> None:
     """A new copy of the project: your docs list, the two models (fixed commits on Hugging
     Face, checked), then the docs themselves. Online, once; searching never downloads."""
     from docsearch import rerank
+    if os.name == "nt":
+        windows_command()
     if not CONFIG.exists():
         shutil.copy(EXAMPLE, CONFIG)
         say(f"Created {CONFIG.name} from {EXAMPLE.name}: edit it any time to choose your docs.")
@@ -2450,6 +2490,9 @@ def cmd_setup(args) -> None:
     else:
         say(f"Downloading the AI model {rerank.MODEL} (once, about 330 MB)...")
         rerank.download()
+    if args.no_docs:
+        say("Done. Add docs with: search add NAME, or list them in packages.toml and run: search sync")
+        return
     cmd_sync(argparse.Namespace(force=False, prune=False, workers=args.workers, accept_partial=False))
 
 
@@ -2739,6 +2782,7 @@ def main(argv: list[str] | None = None) -> None:
     sv2.set_defaults(func=cmd_save)
     st = sub.add_parser("setup", help="a new copy: download the models and the docs (once)")
     st.add_argument("--workers", type=int, default=16, help="parallel downloads (default 16)")
+    st.add_argument("--no-docs", action="store_true", help="only the command and the models; add docs later")
     st.set_defaults(func=cmd_setup)
     for cmd, text in (("upgrade", "replace docs with the newest version (or NAME==VERSION); no NAME: all"),
                       ("downgrade", "replace docs with an older version: NAME==VERSION")):

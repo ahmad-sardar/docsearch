@@ -35,27 +35,20 @@ everything runs on your computer. once the docs are downloaded, nothing goes onl
 
 ## install
 
-copy the block for your system and paste it in a terminal. needs [git](https://git-scm.com)
-and [uv](https://docs.astral.sh/uv/) (no uv yet? windows: `winget install astral-sh.uv`,
-mac and linux: `curl -LsSf https://astral.sh/uv/install.sh | sh`, then open a new
-terminal). uv also gets python 3.11+ if you don't have it.
+paste one block in a terminal. it works out what your computer has: on a mac with apple
+silicon the models run on the gpu, everywhere else on the processor. needs
+[git](https://git-scm.com) and [uv](https://docs.astral.sh/uv/) (no uv yet? windows:
+`winget install astral-sh.uv`, mac and linux: `curl -LsSf https://astral.sh/uv/install.sh | sh`,
+then open a new terminal). uv also gets python 3.11+ if you don't have it.
 
-### mac
-
-```bash
-git clone https://github.com/ahmad-sardar/docsearch ~/tools && cd ~/tools
-uv sync
-.venv/bin/search setup        # downloads the models and the docs, once. takes a while.
-echo "alias search='$HOME/tools/.venv/bin/search'" >> ~/.zshrc && source ~/.zshrc
-```
-
-### linux and wsl
+### mac, linux and wsl
 
 ```bash
-git clone -b windows https://github.com/ahmad-sardar/docsearch ~/docsearch && cd ~/docsearch
+git clone https://github.com/ahmad-sardar/docsearch ~/docsearch && cd ~/docsearch
 uv sync
 .venv/bin/search setup        # downloads the models and the docs, once. takes a while.
-echo "alias search='$HOME/docsearch/.venv/bin/search'" >> ~/.bashrc && source ~/.bashrc
+rc=~/.$(basename "$SHELL")rc  # ~/.zshrc or ~/.bashrc
+echo "alias search='$HOME/docsearch/.venv/bin/search'" >> $rc && source $rc
 ```
 
 on wsl (linux inside windows) the results open in your windows browser. wsl and windows
@@ -66,7 +59,7 @@ are separate copies with their own docs and models, so install in the one you'll
 in powershell:
 
 ```powershell
-git clone -b windows https://github.com/ahmad-sardar/docsearch $HOME\docsearch
+git clone https://github.com/ahmad-sardar/docsearch $HOME\docsearch
 cd $HOME\docsearch
 uv sync
 .venv\Scripts\search setup       # puts search on your PATH, downloads the models and the docs. takes a while.

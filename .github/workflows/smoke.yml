@@ -1,12 +1,11 @@
-# On a fresh Windows and Linux machine, with Hugging Face blocked (as some networks do):
-# install as the README says, then index a small folder of docs and search it end to end
-# (tests/smoke.py). The models come from this project's GitHub release and run on the
-# processor (numpy), as they would for anyone without an Apple-silicon Mac. Every
-# supported Python.
+# On fresh Windows, Linux and Mac machines, with Hugging Face blocked (as some networks
+# do): run the README's install block as a person would paste it, then index a small
+# folder of docs and search it end to end (tests/smoke.py). The models come from this
+# project's GitHub release; they run on the processor (numpy) on Windows and Linux, and on
+# the GPU (MLX) on the Apple-silicon Mac. Every supported Python on Windows and Linux.
 name: smoke
 on:
   push:
-    branches: [windows]
   workflow_dispatch:
 jobs:
   smoke:
@@ -15,6 +14,9 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest]
         python: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          - os: macos-latest
+            python: "3.14"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -25,21 +27,24 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: Add-Content C:\Windows\System32\drivers\etc\hosts "`n0.0.0.0 huggingface.co"
-      - name: block Hugging Face (linux)
+      - name: block Hugging Face (linux, mac)
         if: runner.os != 'Windows'
-        run: echo "0.0.0.0 huggingface.co" | sudo tee -a /etc/hosts
+        run: |
+          echo "0.0.0.0 huggingface.co" | sudo tee -a /etc/hosts
+          if [ "$RUNNER_OS" = macOS ]; then sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder || true; fi
       - name: Hugging Face is unreachable
         shell: bash
         run: if curl -sS -m 15 -o /dev/null https://huggingface.co; then echo "still reachable"; exit 1; fi
-      # The README's install block, run as a person would paste it (it clones this branch
-      # from GitHub). Only `search setup` gets --no-docs: the full one downloads every docs
-      # site. Then `search` must be docsearch's, not another program of that name.
+      # The README's install block, run as pasted, except: it clones the branch under test,
+      # and `search setup` gets --no-docs (the full one downloads every docs site). Then
+      # `search` must be docsearch's, not another program of that name.
       - name: README install block (windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $block = ((Get-Content README.md -Raw) -split '```powershell')[1]
           $block = ($block -split '```')[0] -replace 'search setup', 'search setup --no-docs'
+          $block = $block -replace 'git clone ', "git clone -b $env:GITHUB_REF_NAME "
           Invoke-Expression $block
           $found = (Get-Command search).Source
           if ($found -ne "$HOME\docsearch\bin\search.exe") { throw "search runs $found" }
@@ -48,15 +53,17 @@ jobs:
           if (-not $user.StartsWith("$HOME\docsearch\bin")) { throw "bin is not first on the user PATH: $user" }
           Set-Location $env:TEMP
           & "$HOME\docsearch\bin\search.exe" list
-      - name: README install block (linux)
+      - name: README install block (linux, mac)
         if: runner.os != 'Windows'
         run: |
-          awk '/^### linux/{f=1} f&&/^```bash/{g=1;next} g&&/^```/{exit} g' README.md \
-            | sed 's/search setup/search setup --no-docs/' > "$RUNNER_TEMP/install.sh"
+          awk '/^### mac, linux/{f=1} f&&/^```bash/{g=1;next} g&&/^```/{exit} g' README.md \
+            | sed -e 's/search setup/search setup --no-docs/' -e "s|git clone |git clone -b $GITHUB_REF_NAME |" \
+            > "$RUNNER_TEMP/install.sh"
           cat "$RUNNER_TEMP/install.sh"
+          echo "SHELL=$SHELL"
           bash -e "$RUNNER_TEMP/install.sh"
-          bash -ic 'type search; search known' | tee "$RUNNER_TEMP/out.txt"
-          grep -q "search is aliased to .*docsearch/.venv/bin/search" "$RUNNER_TEMP/out.txt"
+          "$(basename "$SHELL")" -ic 'type search; search known' | tee "$RUNNER_TEMP/out.txt"
+          grep -Eq "search is (aliased to|an alias for) .*docsearch/.venv/bin/search" "$RUNNER_TEMP/out.txt"
       - name: index, search, remove
         run: |
           uv sync

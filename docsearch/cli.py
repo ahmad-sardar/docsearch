@@ -110,12 +110,115 @@ class Entry:
 
 
 def die(msg: str) -> None:
+    Progress.clear()
     print(f"search: {msg}", file=sys.stderr)
     sys.exit(1)
 
 
 def say(msg: str) -> None:
+    Progress.clear()                         # a message never lands inside a progress bar
     print(msg, file=sys.stderr, flush=True)
+    Progress.redraw()
+
+
+class Progress:
+    """A progress bar on the terminal: what, a bar, how many of how many, speed, time left.
+
+        with Progress("  pages", len(urls), "pages") as bar:
+            for ...: bar.update()
+
+    Redrawn at most 10 times a second, on one line. When the output is not a terminal (a
+    log file), a plain line every 10% instead (every 250 when the total is not known).
+    unit="B" counts bytes and shows MB."""
+    active: Progress | None = None
+
+    def __init__(self, what: str, total: int | None = None, unit: str = "", note=None,
+                 quiet: bool = False) -> None:
+        self.what, self.total, self.unit, self.note, self.quiet = what, total, unit, note, quiet
+        self.done, self.t0, self.drawn, self.width, self.step = 0, time.time(), 0.0, 0, -1
+        self.tty = sys.stderr.isatty()
+        if not quiet:
+            Progress.active = self
+
+    def __enter__(self) -> Progress:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def update(self, n: int = 1, total: int | None = None) -> None:
+        self.done += n
+        if total is not None:
+            self.total = total
+        if self.quiet:
+            return
+        if self.tty:
+            if time.time() - self.drawn >= 0.1:
+                self.draw()
+        else:
+            step = int(10 * self.done / self.total) if self.total else self.done // 250
+            if step > self.step:
+                self.step = step
+                print(self.text(), file=sys.stderr, flush=True)
+
+    def amount(self, n: float) -> str:
+        return f"{n / 2**20:,.0f}" if self.unit == "B" else f"{n:,.0f}"
+
+    def text(self) -> str:
+        took = max(time.time() - self.t0, 1e-9)
+        rate = self.done / took
+        unit = "MB" if self.unit == "B" else self.unit
+        speed = f"{self.amount(rate)} {unit}/s".replace(" /s", "/s")
+        parts = [self.what]
+        if self.total:
+            filled = min(20, int(20 * self.done / self.total))
+            parts += ["\u2588" * filled + "\u2591" * (20 - filled),
+                      f"{self.amount(self.done)}/{self.amount(self.total)} {unit}".rstrip(),
+                      f"{100 * self.done / self.total:3.0f}%", speed]
+            if 0 < self.done < self.total and took > 2:
+                parts.append(f"{clock((self.total - self.done) / rate)} left")
+        else:
+            parts += [f"{self.amount(self.done)} {unit}".rstrip(), speed, clock(took)]
+        if self.note:
+            parts.append(self.note())
+        return "  ".join(p for p in parts if p)
+
+    def draw(self) -> None:
+        self.drawn = time.time()
+        line = self.text()[: shutil.get_terminal_size((80, 20)).columns - 1]   # never wraps
+        sys.stderr.write("\r" + line + " " * max(0, self.width - len(line)))
+        sys.stderr.flush()
+        self.width = len(line)
+
+    def close(self) -> None:
+        if Progress.active is self:
+            Progress.active = None
+        if self.quiet:
+            return
+        if self.tty:
+            self.draw()
+            sys.stderr.write("\n")
+            sys.stderr.flush()
+        elif self.step < (10 if self.total else self.done // 250):
+            print(self.text(), file=sys.stderr, flush=True)
+
+    @staticmethod
+    def clear() -> None:
+        bar = Progress.active
+        if bar is not None and bar.tty and bar.width:
+            sys.stderr.write("\r" + " " * bar.width + "\r")
+            bar.width = 0
+
+    @staticmethod
+    def redraw() -> None:
+        if Progress.active is not None and Progress.active.tty:
+            Progress.active.draw()
+
+
+def clock(seconds: float) -> str:
+    """75 -> 1:15, 4000 -> 1:06:40."""
+    s = int(seconds)
+    return f"{s // 3600}:{s // 60 % 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60}:{s % 60:02d}"
 
 
 # --------------------------------------------------------------------------- network
@@ -587,7 +690,6 @@ def build_sphinx(name: str, root: str, inv: bytes, workers: int, max_pages: int 
 
     entries: list[Entry] = []
     fails = Failures()
-    t0 = time.time()
     own = store is None
     if own:                                              # offline copies, for the browser
         from docsearch.importers import Store
@@ -598,14 +700,14 @@ def build_sphinx(name: str, root: str, inv: bytes, workers: int, max_pages: int 
     jobs = []
     with cf.ThreadPoolExecutor(max_workers=workers) as net, \
             cf.ProcessPoolExecutor(max_workers=os.cpu_count() or 4) as cpu:
-        for i, (page, got, err) in enumerate(net.map(fetch, page_list), 1):
-            if i % 250 == 0 or i == len(page_list):
-                say(f"  pages {i}/{len(page_list)}  ({time.time() - t0:.0f} s, {len(fails)} failed)")
-            if got is None:
-                fails.add(urllib.parse.urljoin(root, page), err)
-                continue
-            jobs.append(cpu.submit(sphinx_page, name, root, page, got[0], got[1], pages[page],
-                                   store.dir, store.root))
+        with Progress("  pages", len(page_list), note=lambda: f"{len(fails)} failed" if fails else "") as bar:
+            for page, got, err in net.map(fetch, page_list):
+                bar.update()
+                if got is None:
+                    fails.add(urllib.parse.urljoin(root, page), err)
+                    continue
+                jobs.append(cpu.submit(sphinx_page, name, root, page, got[0], got[1], pages[page],
+                                       store.dir, store.root))
         for job in jobs:                                 # in page order: the same index each time
             found, used = job.result()
             entries += found
@@ -684,8 +786,10 @@ def download_images(images: dict[str, str], folder: Path, workers: int, read=Non
         return name, ctype
 
     types: dict[str, str] = {}
-    with cf.ThreadPoolExecutor(max_workers=workers) as ex:
+    with cf.ThreadPoolExecutor(max_workers=workers) as ex, \
+            Progress("  images", len(images), quiet=not images) as bar:
         for name, ctype in ex.map(one, images.items()):
+            bar.update()
             if ctype:
                 types[name] = ctype
     write_atomic(folder / "images.json", json.dumps(types).encode())
@@ -1164,13 +1268,16 @@ def download_checked(url: str, dest: Path, want: str) -> None:
                     kind = {401: "login", 403: "forbidden", 404: "not-found"}.get(r.status_code, "server-error")
                     raise Failed(kind, url, str(r.status_code))
                 digest, size = hashlib.sha256(), 0
-                with open(tmp, "wb") as fh:
+                length = int(r.headers.get("content-length", 0)) or None
+                big = length is None or length >= 2**20            # small files are instant: no bar
+                with open(tmp, "wb") as fh, Progress(f"  {dest.name}", length, "B", quiet=not big) as bar:
                     for chunk in r.iter_bytes(1 << 20):
                         size += len(chunk)
                         if size > MAX_MODEL_FILE:
                             raise Failed("too-large", url, f"{MAX_MODEL_FILE // 2**20} MB")
                         digest.update(chunk)
                         fh.write(chunk)
+                        bar.update(len(chunk))
         except httpx.TransportError as e:
             tmp.unlink(missing_ok=True)
             raise connect_failure(url, e) from e
@@ -1271,8 +1378,9 @@ def embed_source(sid: str) -> None:
     import numpy as np
     meta, entries = load(sid)
     texts = [f"{e.title}\n{plain(e.text)[:EMBED_CHARS]}" for e in entries]
-    say(f"  computing {len(texts)} vectors for '{sid}'")
-    vecs = get_model(download=True).encode(texts, batch=64)
+    model = get_model(download=True)
+    with Progress(f"  vectors for {sid}", len(texts)) as bar:
+        vecs = model.encode(texts, batch=64, progress=bar.update)
     tmp = HOME / sid / "emb.tmp.npy"
     np.save(tmp, vecs.astype(np.float32))
     os.replace(tmp, HOME / sid / "emb.npy")

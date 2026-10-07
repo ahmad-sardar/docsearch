@@ -72,8 +72,8 @@ class SentenceEncoder:
         import mlx.nn as nn
         return nn.gelu(x)                                   # exact (erf) GELU, as BERT uses
 
-    def encode(self, texts: list[str], batch: int = 64) -> np.ndarray:
-        """Unit-length vectors, one row per text."""
+    def encode(self, texts: list[str], batch: int = 64, progress=None) -> np.ndarray:
+        """Unit-length vectors, one row per text. progress(n) is called after each n texts."""
         mx = self.mx
         encs = self.tok.encode_batch(texts)
         order = np.argsort([len(e.ids) for e in encs])         # similar lengths batch together
@@ -87,6 +87,8 @@ class SentenceEncoder:
                 h = self.cpu.forward(ids, mask)
                 pooled = (h * mask[:, :, None]).sum(axis=1) / np.maximum(mask.sum(axis=1, keepdims=True), 1e-9)
                 out[idx] = pooled / np.maximum(np.linalg.norm(pooled, axis=1, keepdims=True), 1e-12)
+                if progress:
+                    progress(len(idx))
                 continue
             ids = mx.array([encs[i].ids + [0] * (L - len(encs[i].ids)) for i in idx])
             mask = mx.array([[1] * len(encs[i].ids) + [0] * (L - len(encs[i].ids)) for i in idx])
@@ -95,4 +97,6 @@ class SentenceEncoder:
             pooled = (h * m).sum(axis=1) / mx.maximum(m.sum(axis=1), 1e-9)
             pooled = pooled / mx.maximum(mx.linalg.norm(pooled, axis=1, keepdims=True), 1e-12)
             out[idx] = np.array(pooled.astype(mx.float32))
+            if progress:
+                progress(len(idx))
         return out

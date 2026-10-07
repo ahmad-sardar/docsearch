@@ -462,8 +462,9 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
     frontier = [u for u in dict.fromkeys(frontier) if not exclude.search(u)]
     seen = set(frontier)
     keep_segments = {seg.lower() for u in starts + prefixes for seg in urllib.parse.urlparse(u).path.split("/")}
+    bar = cli.Progress("  pages", min(len(seen), limit), note=lambda: f"{len(fails)} failed" if fails else "")
     with cf.ThreadPoolExecutor(max_workers=workers) as net, \
-            cf.ProcessPoolExecutor(max_workers=os.cpu_count() or 4) as cpu:
+            cf.ProcessPoolExecutor(max_workers=os.cpu_count() or 4) as cpu, bar:
         while frontier and done < limit:
             for u in frontier:
                 if not allowed(u):
@@ -473,6 +474,7 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
             jobs = []
             for u, got, err in net.map(fetch, batch):
                 done += 1
+                bar.update(total=min(len(seen), limit))      # more pages turn up as links are read
                 if got is None:
                     fails.add(u, err)
                     continue
@@ -481,8 +483,6 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
                 else:
                     jobs.append((u, cpu.submit(website_page, sid, name, store.root, store.dir, u, got[0], got[1],
                                                spec)))
-                if done % 250 == 0:
-                    say(f"  pages {done}  ({time.time() - t0:.0f} s, {len(fails)} failed)")
             for u, j in jobs:
                 found, imgs, links = j.result()
                 if found and sum(len(e.text.strip()) for e in found) < 40:   # an empty app shell
@@ -568,10 +568,12 @@ def build_local(name: str, sid: str, src: Path, workers: int) -> tuple[list[Entr
                     jobs.append(cpu.submit(markdown_page, sid, name, root, store.dir, url, data, {}))
                 else:
                     jobs.append(cpu.submit(website_page, sid, name, root, store.dir, url, data, url, {}))
-            for j in jobs:
-                found, imgs, _ = j.result()
-                entries += found
-                store.add_images(imgs)
+            with cli.Progress("  pages", len(jobs)) as bar:
+                for j in jobs:
+                    found, imgs, _ = j.result()
+                    bar.update()
+                    entries += found
+                    store.add_images(imgs)
 
         def read_image(url: str) -> bytes:              # images come from the folder, not the web
             path = (folder / urllib.parse.unquote(url[len(root):].split("?")[0])).resolve()
@@ -660,7 +662,7 @@ def build_rustdoc(name: str, sid: str, spec: dict, store: Store, workers: int,
     urls = list(dict.fromkeys([crate_root + "index.html", *modules, *items]))[: max_pages or 10**6]
     say(f"  {name}: {len(items)} items in {len(modules)} modules (rustdoc {version})")
     entries: list[Entry] = []
-    fails, t0 = cli.Failures(), time.time()
+    fails = cli.Failures()
 
     def fetch(u: str):
         try:
@@ -671,13 +673,14 @@ def build_rustdoc(name: str, sid: str, spec: dict, store: Store, workers: int,
     jobs = []
     with cf.ThreadPoolExecutor(max_workers=workers) as net, \
             cf.ProcessPoolExecutor(max_workers=os.cpu_count() or 4) as cpu:
-        for i, (u, got, err) in enumerate(net.map(fetch, urls), 1):
-            if got is None:
-                fails.add(u, err)
-                continue
-            jobs.append(cpu.submit(rustdoc_page, sid, name, store.root, store.dir, crate_root, u, got[0], got[1]))
-            if i % 250 == 0 or i == len(urls):
-                say(f"  pages {i}/{len(urls)}  ({time.time() - t0:.0f} s, {len(fails)} failed)")
+        with cli.Progress("  pages", len(urls), note=lambda: f"{len(fails)} failed" if fails else "") as bar:
+            for u, got, err in net.map(fetch, urls):
+                bar.update()
+                if got is None:
+                    fails.add(u, err)
+                    continue
+                jobs.append(cpu.submit(rustdoc_page, sid, name, store.root, store.dir, crate_root, u,
+                                       got[0], got[1]))
         for j in jobs:
             found, imgs, _ = j.result()
             entries += found

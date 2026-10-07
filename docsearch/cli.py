@@ -406,6 +406,16 @@ def http_get_once(url: str, timeout: float = 20) -> tuple[bytes, str]:
     raise Failed("redirect", url, "too many redirects")
 
 
+def page_result(job, url: str, fails):
+    """A page's result from a worker process; None, and a failed page in `fails`, if
+    reading it went wrong: one unreadable page never stops the whole download."""
+    try:
+        return job.result()
+    except Exception as e:  # noqa: BLE001 - recorded with the other failed pages
+        fails.add(url, Failed("other", url, f"could not read the page ({type(e).__name__}: {str(e)[:120]})"))
+        return None
+
+
 class Failures:
     """The pages of one download that failed, by cause (for the summary and meta.json)."""
 
@@ -545,14 +555,28 @@ def tidy_definitions(soup) -> None:
         dl.name = "div"
 
 
+# Tags that mean nothing in Markdown: a page nested too deep for the converter loses only
+# these wrappers (unclosed <span>s and <div>s nest some pages thousands of levels deep).
+WRAPPERS = ["span", "font", "div", "section", "article", "main", "center", "small", "big"]
+
+
 def html_to_md(html: str) -> str:
     from markdownify import markdownify
+    # markdownify calls itself once per level of nesting; Python's default limit (1000
+    # calls, ~330 levels) is too low for some pages. From Python 3.11 these calls do not
+    # use the C stack, so a higher limit is safe.
+    sys.setrecursionlimit(max(sys.getrecursionlimit(), 20_000))
     soup = make_soup(html.encode() if isinstance(html, str) else html)
     tidy_math(soup)
     tidy_definitions(soup)
-    html = str(soup.body or soup)
-    md = markdownify(html, heading_style="ATX", strip=["a", "img"],
-                     escape_underscores=False, escape_asterisks=False)
+    try:
+        md = markdownify(str(soup.body or soup), heading_style="ATX", strip=["a", "img"],
+                         escape_underscores=False, escape_asterisks=False)
+    except RecursionError:                       # deeper still: drop the wrappers, try again
+        for el in (soup.body or soup).find_all(WRAPPERS):
+            el.unwrap()
+        md = markdownify(str(soup.body or soup), heading_style="ATX", strip=["a", "img"],
+                         escape_underscores=False, escape_asterisks=False)
     md = re.sub(r"[ \t]+\n", "\n", md)
     return re.sub(r"\n{3,}", "\n\n", md).strip()
 
@@ -706,10 +730,14 @@ def build_sphinx(name: str, root: str, inv: bytes, workers: int, max_pages: int 
                 if got is None:
                     fails.add(urllib.parse.urljoin(root, page), err)
                     continue
-                jobs.append(cpu.submit(sphinx_page, name, root, page, got[0], got[1], pages[page],
-                                       store.dir, store.root))
-        for job in jobs:                                 # in page order: the same index each time
-            found, used = job.result()
+                jobs.append((urllib.parse.urljoin(root, page),
+                             cpu.submit(sphinx_page, name, root, page, got[0], got[1], pages[page],
+                                        store.dir, store.root)))
+        for url, job in jobs:                            # in page order: the same index each time
+            got = page_result(job, url, fails)
+            if got is None:
+                continue
+            found, used = got
             entries += found
             store.add_images(used)
     if own:

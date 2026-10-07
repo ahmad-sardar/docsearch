@@ -484,7 +484,10 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
                     jobs.append((u, cpu.submit(website_page, sid, name, store.root, store.dir, u, got[0], got[1],
                                                spec)))
             for u, j in jobs:
-                found, imgs, links = j.result()
+                got = cli.page_result(j, u, fails)
+                if got is None:
+                    continue
+                found, imgs, links = got
                 if found and sum(len(e.text.strip()) for e in found) < 40:   # an empty app shell
                     fails.add(u, cli.Failed("empty", u))
                     continue
@@ -565,13 +568,16 @@ def build_local(name: str, sid: str, src: Path, workers: int) -> tuple[list[Entr
                     fails.add(url, cli.Failed("too-large", url, f"{cli.MAX_DOWNLOAD // 2**20} MB"))
                     continue
                 if f.suffix.lower() in (".md", ".markdown"):
-                    jobs.append(cpu.submit(markdown_page, sid, name, root, store.dir, url, data, {}))
+                    jobs.append((url, cpu.submit(markdown_page, sid, name, root, store.dir, url, data, {})))
                 else:
-                    jobs.append(cpu.submit(website_page, sid, name, root, store.dir, url, data, url, {}))
+                    jobs.append((url, cpu.submit(website_page, sid, name, root, store.dir, url, data, url, {})))
             with cli.Progress("  pages", len(jobs)) as bar:
-                for j in jobs:
-                    found, imgs, _ = j.result()
+                for url, j in jobs:
+                    got = cli.page_result(j, url, fails)
                     bar.update()
+                    if got is None:
+                        continue
+                    found, imgs, _ = got
                     entries += found
                     store.add_images(imgs)
 
@@ -679,10 +685,13 @@ def build_rustdoc(name: str, sid: str, spec: dict, store: Store, workers: int,
                 if got is None:
                     fails.add(u, err)
                     continue
-                jobs.append(cpu.submit(rustdoc_page, sid, name, store.root, store.dir, crate_root, u,
-                                       got[0], got[1]))
-        for j in jobs:
-            found, imgs, _ = j.result()
+                jobs.append((u, cpu.submit(rustdoc_page, sid, name, store.root, store.dir, crate_root, u,
+                                           got[0], got[1])))
+        for u, j in jobs:
+            got = cli.page_result(j, u, fails)
+            if got is None:
+                continue
+            found, imgs, _ = got
             entries += found
             store.add_images(imgs)
     if fails:

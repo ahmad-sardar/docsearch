@@ -1,6 +1,7 @@
 """End-to-end check on a fresh machine (the Windows CI runs this): index a small folder of
 docs, search it through the server (by name, typo, meaning and with AI), read a stored
-page, then remove the docs while the server still runs.
+page, then remove the docs while the server still runs. One page is nested thousands of
+tags deep, as some sites are.
 
     uv run python tests/smoke.py
 
@@ -61,6 +62,9 @@ def main() -> None:
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(f"<html><head><title>{title}</title></head><body><main><h1>{title}</h1>"
                      f"<p>{text}</p></main></body></html>", encoding="utf-8")
+    deep = "<div><span>" * 3000 + "Nested pages: thousands of unclosed tags deep." + "</span></div>" * 3000
+    (docs / "deep.html").write_text(f"<html><head><title>Nested pages</title></head><body><main>"
+                                    f"<h1>Nested pages</h1>{deep}</main></body></html>", encoding="utf-8")
     print(f"data in {data}; models on the {'GPU (MLX)' if cli.use_mlx() else 'processor (numpy)'}")
     if rerank.model_dir() is None:
         rerank.download()
@@ -76,6 +80,7 @@ def main() -> None:
         check(top("remove repeated rows")[:1] == ["frames.drop_duplicates"], "search by meaning")
         r = get(port, "/api/search", q="how do i factor a matrix", src="mini", ai="1")
         check(r["ai"] == "ranked" and r["items"][0]["name"] == "arrays.svd", "search ai")
+        check(top("Nested pages")[:1] == ["Nested pages"], "a page nested 6,000 tags deep")
         for q in ("Console output", "Notes"):
             hit = get(port, "/api/search", q=q, src="mini")["items"][0]
             entry = get(port, f"/api/entry/{hit['id']}")

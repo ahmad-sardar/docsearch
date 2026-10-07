@@ -1,5 +1,5 @@
 // docsearch: search as you type, read the docs, never leave the page.
-// Everything comes from the docsearch server on this Mac; nothing here goes online.
+// Everything comes from the docsearch server on this computer; nothing here goes online.
 // All text from the server is inserted with textContent, except the docs HTML itself,
 // which the server allowlist-filtered; the Content-Security-Policy blocks any script in it.
 "use strict";

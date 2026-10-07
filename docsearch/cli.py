@@ -2823,7 +2823,7 @@ def quick_search(words: list[str], ai: bool = False) -> None:
     search ai IDEA  ->  the same, and the AI model reorders the top results."""
     from docsearch import rerank, web
     if ai and rerank.model_dir() is None:
-        say(f"The AI model ({rerank.MODEL}) is not in {MODELS}; showing the normal results.")
+        say("The AI model is not downloaded yet; showing the normal results. Get it with: search setup --no-docs")
         ai = False
     sources, q = split_sources(words)
     web.open_browser({"q": q, "src": ",".join(sources), "ai": "1" if ai else "0"})

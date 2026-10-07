@@ -124,7 +124,7 @@ async function search({ openFirst = true, append = false, ai = false } = {}) {
                  : `${data.total} entries · ${where}, in reading order`);
   if (data.error) status(data.error);
   if (data.ai === "not installed") {
-    toast("The AI model is not on this Mac (docsearch/data/models)");
+    toast("The AI model is not downloaded yet. In a terminal: search setup --no-docs");
     setAI(false);
   }
   if (!append && openFirst && state.items.length) select(0);

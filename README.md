@@ -35,8 +35,10 @@ everything runs on your computer. once the docs are downloaded, nothing goes onl
 
 ## install
 
-needs [uv](https://docs.astral.sh/uv/), git and python 3.11 or newer (uv gets one if you
-don't have it).
+copy the block for your system and paste it in a terminal. needs [git](https://git-scm.com)
+and [uv](https://docs.astral.sh/uv/) (no uv yet? windows: `winget install astral-sh.uv`,
+mac and linux: `curl -LsSf https://astral.sh/uv/install.sh | sh`, then open a new
+terminal). uv also gets python 3.11+ if you don't have it.
 
 ### mac
 
@@ -47,16 +49,27 @@ uv sync
 echo "alias search='$HOME/tools/.venv/bin/search'" >> ~/.zshrc && source ~/.zshrc
 ```
 
-### windows (and linux)
+### linux
+
+```bash
+git clone -b windows https://github.com/ahmad-sardar/docsearch ~/docsearch && cd ~/docsearch
+uv sync
+.venv/bin/search setup        # downloads the models and the docs, once. takes a while.
+echo "alias search='$HOME/docsearch/.venv/bin/search'" >> ~/.bashrc && source ~/.bashrc
+```
+
+### windows
 
 in powershell:
 
 ```powershell
-git clone https://github.com/ahmad-sardar/docsearch $HOME\tools
-cd $HOME\tools
-uv tool install --editable .     # puts the search command on your PATH
-uv tool update-shell             # then open a new terminal
-search setup                     # downloads the models and the docs, once. takes a while.
+git clone -b windows https://github.com/ahmad-sardar/docsearch $HOME\docsearch
+cd $HOME\docsearch
+uv sync
+.venv\Scripts\search setup       # downloads the models and the docs, once. takes a while.
+# the search command, in this window and new ones
+$s = "$HOME\docsearch\.venv\Scripts"; $env:Path += ";$s"
+[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$s", "User")
 ```
 
 no gpu needed. on a mac with apple silicon the models run on the gpu, everywhere else on

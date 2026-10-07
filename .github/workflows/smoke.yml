@@ -31,15 +31,26 @@ jobs:
       - name: Hugging Face is unreachable
         shell: bash
         run: if curl -sS -m 15 -o /dev/null https://huggingface.co; then echo "still reachable"; exit 1; fi
-      - name: install (README)
-        run: uv tool install --editable .
-      - name: the search command works (windows)
+      # The README's install block, copied as a person would (it clones this branch from
+      # GitHub); only `search setup`, which downloads every docs site, becomes `search known`.
+      - name: README install block (windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: '& "$(uv tool dir --bin)\search.exe" known'
-      - name: the search command works (linux)
+        run: |
+          $block = ((Get-Content README.md -Raw) -split '```powershell')[1]
+          $block = ($block -split '```')[0] -replace 'search setup', 'search known'
+          Invoke-Expression $block
+          search known
+          $user = [Environment]::GetEnvironmentVariable("Path", "User")
+          if ($user -notlike "*docsearch\.venv\Scripts*") { throw "search is not on the user PATH" }
+      - name: README install block (linux)
         if: runner.os != 'Windows'
-        run: '"$(uv tool dir --bin)/search" known'
+        run: |
+          awk '/^### linux/{f=1} f&&/^```bash/{g=1;next} g&&/^```/{exit} g' README.md \
+            | sed 's/search setup/search known/' > "$RUNNER_TEMP/install.sh"
+          cat "$RUNNER_TEMP/install.sh"
+          bash -e "$RUNNER_TEMP/install.sh"
+          bash -ic 'search known'
       - name: index, search, remove
         run: |
           uv sync

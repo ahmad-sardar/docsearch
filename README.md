@@ -35,7 +35,8 @@ everything runs on your computer. once the docs are downloaded, nothing goes onl
 
 ## install
 
-needs [uv](https://docs.astral.sh/uv/) and git.
+needs [uv](https://docs.astral.sh/uv/), git and python 3.11 or newer (uv gets one if you
+don't have it).
 
 ### mac
 
@@ -63,6 +64,11 @@ the processor: same results (measured, see `eval/results-backends.md`), just slo
 `search ai` takes ~6.5 s instead of ~3 s on a fast processor, more on a slow one, and
 computing the vectors in `search setup` and `search add` takes longer. plain search is
 still instant. needs ~3 GB of memory with ai. no man pages on windows.
+
+hugging face blocked on your network? `search setup` notices and gets the same model files
+from this repo's [release](https://github.com/ahmad-sardar/docsearch/releases/tag/models-v1)
+instead, checked against the same hashes. or copy `data/models` over from a computer that
+has it.
 
 your list of docs lives in `packages.toml`. edit it and run `search sync`.
 

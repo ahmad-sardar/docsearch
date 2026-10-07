@@ -1122,27 +1122,112 @@ def pinned_dir(repo: str, revision: str) -> Path:
     return MODELS / "hub" / f"models--{repo.replace('/', '--')}" / "snapshots" / revision
 
 
-def fetch_pinned(repo: str, revision: str, files: dict[str, str]) -> Path:
-    """Download exactly `files` of a model repository at one commit (only `search setup`,
-    `add` and `embed` do this, once) and check each file's SHA-256. A file that does not
-    match is deleted and nothing is used."""
+# The same model files, attached to a release of this project on GitHub: `search setup`
+# gets them there when Hugging Face cannot be reached (some networks block it). Each file
+# is checked against the same SHA-256 either way. A changed model needs a new release tag.
+MIRROR = "https://github.com/ahmad-sardar/docsearch/releases/download/models-v1/"
+MAX_MODEL_FILE = 2**30
+_HF_DOWN: str | None = None           # why Hugging Face failed (then the rest come from GitHub)
+
+
+def sha256_of(f: Path) -> str:
     import hashlib
+    digest = hashlib.sha256()
+    with open(f, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def mirror_url(repo: str, name: str) -> str:
+    """Where a model file is on the GitHub release: Qwen3-Reranker-0.6B-4bit.config.json."""
+    return MIRROR + f"{repo.split('/')[-1]}.{name}"
+
+
+def download_checked(url: str, dest: Path, want: str) -> None:
+    """Stream one file to `dest` (HTTPS only, each redirect checked), kept only if its
+    SHA-256 is `want`."""
+    import hashlib
+
+    import httpx
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".part")
+    for _ in range(6):
+        if not safe_url(url):
+            raise Failed("not-https", url, url.split(":", 1)[0] + ":")
+        try:
+            with http_client().stream("GET", url, timeout=60) as r:
+                if r.is_redirect:
+                    url = urllib.parse.urljoin(url, r.headers.get("location", ""))
+                    continue
+                if r.status_code >= 400:
+                    kind = {401: "login", 403: "forbidden", 404: "not-found"}.get(r.status_code, "server-error")
+                    raise Failed(kind, url, str(r.status_code))
+                digest, size = hashlib.sha256(), 0
+                with open(tmp, "wb") as fh:
+                    for chunk in r.iter_bytes(1 << 20):
+                        size += len(chunk)
+                        if size > MAX_MODEL_FILE:
+                            raise Failed("too-large", url, f"{MAX_MODEL_FILE // 2**20} MB")
+                        digest.update(chunk)
+                        fh.write(chunk)
+        except httpx.TransportError as e:
+            tmp.unlink(missing_ok=True)
+            raise connect_failure(url, e) from e
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+        if digest.hexdigest() != want:
+            tmp.unlink()
+            raise Failed("other", url, "the file does not match its pinned SHA-256; deleted it")
+        dest.unlink(missing_ok=True)
+        os.replace(tmp, dest)
+        return
+    raise Failed("redirect", url, "too many redirects")
+
+
+def fetch_pinned(repo: str, revision: str, files: dict[str, str]) -> Path:
+    """Get exactly `files` of a model repository at one commit (only `search setup`, `add`
+    and `embed` do this, once): from Hugging Face, else from this project's GitHub release.
+    Each file's SHA-256 is checked; a file that does not match is deleted, never used.
+    Files already here (copied by hand from another computer) are checked and kept."""
+    global _HF_DOWN
     os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
     os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"           # never send your HF token
-    from huggingface_hub import hf_hub_download
     folder = pinned_dir(repo, revision)
+    hf_checked = False
     for name, want in files.items():
         if not name.endswith((".json", ".safetensors")):         # never pickle, never code
             die(f"{repo}: refusing to download {name}: only .json and .safetensors files")
-        f = Path(hf_hub_download(repo, name, revision=revision, cache_dir=str(MODELS / "hub")))
-        digest = hashlib.sha256()
-        with open(f, "rb") as fh:
-            for block in iter(lambda: fh.read(1 << 20), b""):
-                digest.update(block)
-        if digest.hexdigest() != want:
-            f.unlink()
-            (folder / name).unlink(missing_ok=True)
-            die(f"{repo}: {name} does not match its pinned SHA-256; deleted it. Nothing was used.")
+        if (folder / name).exists() and sha256_of(folder / name) == want:
+            continue
+        if os.environ.get("DOCSEARCH_MODELS_FROM", "").lower() == "github":
+            _HF_DOWN = _HF_DOWN or "skipped (DOCSEARCH_MODELS_FROM=github)"
+        if _HF_DOWN is None and not hf_checked:                  # one quick look, not 5 slow retries
+            hf_checked = True
+            try:
+                http_get_once(os.environ.get("HF_ENDPOINT", "https://huggingface.co"), timeout=10)
+            except Failed as e:
+                _HF_DOWN = WHY[e.kind].format(detail=e.detail)
+                say(f"  Hugging Face: {_HF_DOWN}\n  getting the models from GitHub instead ({MIRROR})")
+        if _HF_DOWN is None:
+            try:
+                from huggingface_hub import hf_hub_download
+                f = Path(hf_hub_download(repo, name, revision=revision, cache_dir=str(MODELS / "hub")))
+                if sha256_of(f) == want:
+                    continue
+                f.unlink()
+                (folder / name).unlink(missing_ok=True)
+                _HF_DOWN = f"{name} did not match its pinned SHA-256; deleted it"
+            except Exception as e:  # noqa: BLE001 - blocked, offline, a proxy's page: try GitHub
+                _HF_DOWN = str(e).splitlines()[0][:200] if str(e) else type(e).__name__
+            say(f"  Hugging Face: {_HF_DOWN}\n  getting the models from GitHub instead ({MIRROR})")
+        try:
+            download_checked(mirror_url(repo, name), folder / name, want)
+        except Failed as e:
+            die(f"{repo}: could not get {name} from Hugging Face ({_HF_DOWN}) or GitHub "
+                f"({WHY[e.kind].format(detail=e.detail)}). Another way: copy data/models from a "
+                f"computer that has it into {MODELS}, then run search setup again.")
     return folder
 
 
@@ -2391,7 +2476,7 @@ def cmd_upgrade(args) -> None:
             say(f"{name}: not indexed. Add it with: search add {spec}")
             continue
         meta = json.loads((HOME / (base if base in have else have[0]) / "meta.json").read_text(encoding="utf-8"))
-        old = ", ".join(f"{s} ({json.loads((HOME / s / 'meta.json').read_text(encoding="utf-8")).get('version') or 'no version'})"
+        old = ", ".join(f"{s} ({json.loads((HOME / s / 'meta.json').read_text(encoding='utf-8')).get('version') or 'no version'})"
                         for s in have)
         if not want:
             now = current_version(meta) if base in have else ""     # a pinned version's site is not the newest

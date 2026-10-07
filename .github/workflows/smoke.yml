@@ -1,6 +1,8 @@
-# On a fresh Windows and Linux machine: install as the README says, then index a small
-# folder of docs and search it end to end (tests/smoke.py). The models run on the
-# processor there (numpy), as they would for anyone without an Apple-silicon Mac.
+# On a fresh Windows and Linux machine, with Hugging Face blocked (as some networks do):
+# install as the README says, then index a small folder of docs and search it end to end
+# (tests/smoke.py). The models come from this project's GitHub release and run on the
+# processor (numpy), as they would for anyone without an Apple-silicon Mac. Oldest and
+# newest supported Python.
 name: smoke
 on:
   push:
@@ -12,10 +14,23 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest]
+        python: ["3.11", "3.14"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: block Hugging Face (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-Content C:\Windows\System32\drivers\etc\hosts "`n0.0.0.0 huggingface.co"
+      - name: block Hugging Face (linux)
+        if: runner.os != 'Windows'
+        run: echo "0.0.0.0 huggingface.co" | sudo tee -a /etc/hosts
+      - name: Hugging Face is unreachable
+        shell: bash
+        run: if curl -sS -m 15 -o /dev/null https://huggingface.co; then echo "still reachable"; exit 1; fi
       - name: install (README)
         run: uv tool install --editable .
       - name: the search command works (windows)
@@ -28,4 +43,5 @@ jobs:
       - name: index, search, remove
         run: |
           uv sync
+          uv run python -c "import sys; print(sys.version)"
           uv run python tests/smoke.py

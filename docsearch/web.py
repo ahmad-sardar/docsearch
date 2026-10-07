@@ -488,16 +488,36 @@ def stop() -> bool:
     return True
 
 
+def wsl() -> bool:
+    """Linux inside Windows (WSL): no browser of its own; Windows' browser can reach this
+    server, since WSL passes 127.0.0.1 through to Windows."""
+    import platform
+    return sys.platform == "linux" and "microsoft" in platform.uname().release.lower()
+
+
 def open_browser(params: dict[str, str]) -> None:
-    """Open (or reuse) the docsearch page: in Safari on a Mac, else the default browser."""
+    """Open (or reuse) the docsearch page: in Safari on a Mac, Windows' default browser
+    from WSL, else the default browser. If none opens, the address is printed."""
     port = start()
-    query = urllib.parse.urlencode({k: v for k, v in params.items() if v})
+    query = urllib.parse.urlencode({k: v for k, v in params.items() if v})   # no quotes left in it
     url = f"http://127.0.0.1:{port}/" + (f"?{query}" if query else "")
     if sys.platform == "darwin" and Path("/Applications/Safari.app").exists():
         subprocess.run(["open", "-a", "Safari", url], check=False)
+        return
+    if wsl():
+        import shutil
+        opener = shutil.which("wslview")
+        cmd = [opener, url] if opener else ["powershell.exe", "-NoProfile", "-Command", f"Start-Process '{url}'"]
+        try:
+            if subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+                return
+        except OSError:
+            pass
     else:
         import webbrowser
-        webbrowser.open(url)
+        if webbrowser.open(url):
+            return
+    cli.say(f"Open this in your browser: {url}")
 
 
 if __name__ == "__main__":

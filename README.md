@@ -49,7 +49,7 @@ uv sync
 echo "alias search='$HOME/tools/.venv/bin/search'" >> ~/.zshrc && source ~/.zshrc
 ```
 
-### linux
+### linux and wsl
 
 ```bash
 git clone -b windows https://github.com/ahmad-sardar/docsearch ~/docsearch && cd ~/docsearch
@@ -57,6 +57,9 @@ uv sync
 .venv/bin/search setup        # downloads the models and the docs, once. takes a while.
 echo "alias search='$HOME/docsearch/.venv/bin/search'" >> ~/.bashrc && source ~/.bashrc
 ```
+
+on wsl (linux inside windows) the results open in your windows browser. wsl and windows
+are separate copies with their own docs and models, so install in the one you'll use.
 
 ### windows
 
@@ -70,7 +73,9 @@ uv sync
 $env:Path = "$HOME\docsearch\bin;$env:Path"      # search in this window too (new ones have it)
 ```
 
-want to pick your docs first? `search setup --no-docs`, then `search add numpy pandas`.
+want to pick your docs first (any system)? `search setup --no-docs` sets up the command and
+the models only, then `search add numpy pandas`. setup stopped halfway? run it again: what's
+already downloaded is checked and kept.
 
 no gpu needed. on a mac with apple silicon the models run on the gpu, everywhere else on
 the processor: same results (measured, see `eval/results-backends.md`), just slower.
@@ -92,6 +97,7 @@ search numpy svd              # just numpy
 search                        # open the page
 search list                   # what you have, and which version
 search stop                   # stop the background server
+search --help                 # every command (search add --help: its options)
 ```
 
 in the page:
@@ -105,6 +111,7 @@ in the page:
 | / | jump to the search box |
 | w | wrap long code lines |
 | c | copy the name |
+| ⌘↩ / ctrl+enter | rank this search with ai, once |
 
 before you type anything, the list shows the docs in reading order, like a table of
 contents.

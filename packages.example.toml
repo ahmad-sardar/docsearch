@@ -1,32 +1,18 @@
-# The docs a new copy of docsearch starts with. `search setup` copies this file to
-# packages.toml (your own list, not in git); edit that one, then run: search sync
+# Your docs list. `search setup` copies this file to packages.toml (your own, not in git)
+# and starts with nothing: add what you want, with `search add NAME` (it lands here), or
+# list it below and run: search sync
 #
-#   name = "latest"                             the current docs (PyPI finds the site)
-#   name = "1.26"                               the docs of one version
-#   name = { url = "https://.../" }             the docs at this address (HTTPS)
-#   name = { version = "2.1", embed = false }   no meaning search (no model, faster)
-#   name = ["latest", "1.26"]                   several versions, side by side
+#   numpy = "latest"                           the current docs (PyPI finds the site)
+#   numpy = "1.26"                             the docs of one version
+#   numpy = ["latest", "1.26"]                 several versions, side by side
+#   rust = "latest"                            a language or toolkit (see: search known)
+#   mydocs = { url = "https://docs.example.com/" }   any docs site
+#   mydocs = { path = "~/Downloads/docs.zip" }       docs you downloaded yourself
+#   pandas = { version = "2.1", embed = false }      no meaning search (faster to add)
 #
-# `search add NAME` and `search upgrade` / `downgrade` keep packages.toml up to date.
+# `search add`, `remove`, `upgrade` and `downgrade` keep this file up to date.
 
 [packages]
-numpy = "latest"
-pandas = "latest"
-torch = "latest"
-scikit-learn = "latest"
-scipy = "latest"
-
-# Languages and toolkits (not PyPI packages; see `search known`)
-python = "latest"
-rust = "latest"
-ocaml = "latest"
-mojo = "latest"
-max = "latest"
-cuda = "latest"
-cpp = "latest"
-c = "latest"
-go = "latest"
-javascript = "latest"
 
 [man]
-pages = []          # for example: ["git", "bash", "tmux"]
+pages = []          # man pages (mac and linux), for example: ["git", "bash", "tmux"]

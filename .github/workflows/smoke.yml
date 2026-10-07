@@ -35,16 +35,14 @@ jobs:
       - name: Hugging Face is unreachable
         shell: bash
         run: if curl -sS -m 15 -o /dev/null https://huggingface.co; then echo "still reachable"; exit 1; fi
-      # The README's install block, run as pasted, except: it clones the branch under test,
-      # and `search setup` gets --no-docs (the full one downloads every docs site). Then
-      # `search` must be docsearch's, not another program of that name.
+      # The README's install block, run as pasted, except that it clones the branch under
+      # test. Then `search` must be docsearch's, not another program of that name.
       - name: README install block (windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $block = ((Get-Content README.md -Raw) -split '```powershell')[1]
-          $block = ($block -split '```')[0] -replace 'search setup', 'search setup --no-docs'
-          $block = $block -replace 'git clone ', "git clone -b $env:GITHUB_REF_NAME "
+          $block = ($block -split '```')[0] -replace 'git clone ', "git clone -b $env:GITHUB_REF_NAME "
           Invoke-Expression $block
           $found = (Get-Command search).Source
           if ($found -ne "$HOME\docsearch\bin\search.exe") { throw "search runs $found" }
@@ -57,7 +55,7 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           awk '/^### mac, linux/{f=1} f&&/^```bash/{g=1;next} g&&/^```/{exit} g' README.md \
-            | sed -e 's/search setup/search setup --no-docs/' -e "s|git clone |git clone -b $GITHUB_REF_NAME |" \
+            | sed -e "s|git clone |git clone -b $GITHUB_REF_NAME |" \
             > "$RUNNER_TEMP/install.sh"
           cat "$RUNNER_TEMP/install.sh"
           echo "SHELL=$SHELL"

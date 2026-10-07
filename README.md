@@ -27,9 +27,10 @@ that's it.
 
 ## what's in it
 
-python packages (numpy, pandas, torch, scikit-learn, scipy, anything on pypi), plus
-python, rust, c, c++, go, javascript, ocaml, cuda, mojo, max and git. add whatever else
-you want.
+nothing until you add it. you pick the docs: any python package on pypi (numpy, pandas,
+torch...), languages and toolkits by name (python, rust, c, c++, go, javascript, ocaml,
+cuda, mojo, max, git: see `search known`), any docs site by its address, a docs folder or
+zip you downloaded, and articles you like.
 
 everything runs on your computer. once the docs are downloaded, nothing goes online.
 
@@ -46,7 +47,7 @@ then open a new terminal). uv also gets python 3.11+ if you don't have it.
 ```bash
 git clone https://github.com/ahmad-sardar/docsearch ~/docsearch && cd ~/docsearch
 uv sync
-.venv/bin/search setup        # downloads the models and the docs, once. takes a while.
+.venv/bin/search setup        # downloads the models, once
 rc=~/.$(basename "$SHELL")rc  # ~/.zshrc or ~/.bashrc
 echo "alias search='$HOME/docsearch/.venv/bin/search'" >> $rc && source $rc
 ```
@@ -62,18 +63,22 @@ in powershell:
 git clone https://github.com/ahmad-sardar/docsearch $HOME\docsearch
 cd $HOME\docsearch
 uv sync
-.venv\Scripts\search setup       # puts search on your PATH, downloads the models and the docs. takes a while.
+.venv\Scripts\search setup       # puts search on your PATH, downloads the models, once
 $env:Path = "$HOME\docsearch\bin;$env:Path"      # search in this window too (new ones have it)
 ```
 
-want to pick your docs first (any system)? `search setup --no-docs` sets up the command and
-the models only, then `search add numpy pandas`. setup stopped halfway? run it again: what's
-already downloaded is checked and kept.
+then add the docs you want (see [adding docs](#adding-docs)):
+
+```bash
+search add numpy pandas rust
+```
+
+setup stopped halfway? run it again: what's already downloaded is checked and kept.
 
 no gpu needed. on a mac with apple silicon the models run on the gpu, everywhere else on
 the processor: same results (measured, see `eval/results-backends.md`), just slower.
 `search ai` takes ~6.5 s instead of ~3 s on a fast processor, more on a slow one, and
-computing the vectors in `search setup` and `search add` takes longer. plain search is
+computing the vectors in `search add` takes longer. plain search is
 still instant. needs ~3 GB of memory with ai. no man pages on windows.
 
 hugging face blocked on your network? `search setup` notices and gets the same model files
@@ -81,7 +86,9 @@ from this repo's [release](https://github.com/ahmad-sardar/docsearch/releases/ta
 instead, checked against the same hashes. or copy `data/models` over from a computer that
 has it.
 
-your list of docs lives in `packages.toml`. edit it and run `search sync`.
+everything you add is listed in `packages.toml` (yours, not in git). edit it and run
+`search sync`, or copy it to another computer and run `search setup` there to get the same
+docs.
 
 ## use
 
@@ -124,7 +131,7 @@ contents.
 search add polars                        # a pypi package
 search add rust go                       # languages, see: search known
 search add mydocs=https://docs.example.com/
-search add mydocs=~/Downloads/docs.zip   # docs you downloaded yourself
+search add mydocs=~/Downloads/docs.zip   # docs you downloaded yourself (or C:\path on windows)
 search remove polars
 ```
 

@@ -2265,10 +2265,9 @@ CONFIG_TEMPLATE = """\
 #   name = ["latest", "1.26"]                   several versions, side by side
 
 [packages]
-numpy = "latest"
 
 [man]
-pages = []               # man pages on this Mac: "git" (all git manual pages), "bash", "tmux"...
+pages = []               # man pages (mac and linux): "git" (all git manual pages), "bash", "tmux"...
 """
 
 PKG_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
@@ -2581,8 +2580,9 @@ def windows_command() -> None:
 
 
 def cmd_setup(args) -> None:
-    """A new copy of the project: your docs list, the two models (fixed commits on Hugging
-    Face, checked), then the docs themselves. Online, once; searching never downloads."""
+    """A new copy of the project: the search command (Windows), the two models (fixed
+    commits, checked), then the docs your packages.toml lists: none in a new copy, you add
+    what you want. Online, once; searching never downloads."""
     from docsearch import rerank
     if os.name == "nt":
         windows_command()
@@ -2598,8 +2598,10 @@ def cmd_setup(args) -> None:
     else:
         say(f"Downloading the AI model {rerank.MODEL} (once, about 330 MB)...")
         rerank.download()
-    if args.no_docs:
-        say("Done. Add docs with: search add NAME, or list them in packages.toml and run: search sync")
+    import tomllib
+    if not read_config() and not tomllib.loads(CONFIG.read_text(encoding="utf-8")).get("saved"):
+        say("Ready. Now add the docs you want, e.g.: search add numpy pandas rust\n"
+            "  (search known: languages and toolkits by name; any PyPI package or docs site works)")
         return
     cmd_sync(argparse.Namespace(force=False, prune=False, workers=args.workers, accept_partial=False))
 
@@ -2823,7 +2825,7 @@ def quick_search(words: list[str], ai: bool = False) -> None:
     search ai IDEA  ->  the same, and the AI model reorders the top results."""
     from docsearch import rerank, web
     if ai and rerank.model_dir() is None:
-        say("The AI model is not downloaded yet; showing the normal results. Get it with: search setup --no-docs")
+        say("The AI model is not downloaded yet; showing the normal results. Get it with: search setup")
         ai = False
     sources, q = split_sources(words)
     web.open_browser({"q": q, "src": ",".join(sources), "ai": "1" if ai else "0"})
@@ -2888,9 +2890,9 @@ def main(argv: list[str] | None = None) -> None:
     sv2.add_argument("--series", action="store_true", help="also the parts that follow (its Next links)")
     sv2.add_argument("--workers", type=int, default=8, help="parallel image downloads (default 8)")
     sv2.set_defaults(func=cmd_save)
-    st = sub.add_parser("setup", help="a new copy: download the models and the docs (once)")
+    st = sub.add_parser("setup", help="a new copy: the search command and the models (once), "
+                                      "then the docs packages.toml lists")
     st.add_argument("--workers", type=int, default=16, help="parallel downloads (default 16)")
-    st.add_argument("--no-docs", action="store_true", help="only the command and the models; add docs later")
     st.set_defaults(func=cmd_setup)
     for cmd, text in (("upgrade", "replace docs with the newest version (or NAME==VERSION); no NAME: all"),
                       ("downgrade", "replace docs with an older version: NAME==VERSION")):

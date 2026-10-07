@@ -1,8 +1,8 @@
 # On a fresh Windows and Linux machine, with Hugging Face blocked (as some networks do):
 # install as the README says, then index a small folder of docs and search it end to end
 # (tests/smoke.py). The models come from this project's GitHub release and run on the
-# processor (numpy), as they would for anyone without an Apple-silicon Mac. Oldest and
-# newest supported Python.
+# processor (numpy), as they would for anyone without an Apple-silicon Mac. Every
+# supported Python.
 name: smoke
 on:
   push:
@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest]
-        python: ["3.11", "3.14"]
+        python: ["3.11", "3.12", "3.13", "3.14"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

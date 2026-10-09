@@ -67,3 +67,4 @@ jobs:
           uv sync
           uv run python -c "import sys; print(sys.version)"
           uv run python tests/smoke.py
+          uv run python tests/crawl.py

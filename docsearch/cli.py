@@ -129,13 +129,16 @@ class Progress:
 
     Redrawn at most 10 times a second, on one line. When the output is not a terminal (a
     log file), a plain line every 10% instead (every 250 when the total is not known).
-    unit="B" counts bytes and shows MB."""
+    unit="B" counts bytes and shows MB. A total can be a guess ("~41,000"), or only what is
+    known so far (a website whose pages turn up as they are read: no percent, no time left).
+    `start`: done before (a download that continues), not counted in the speed."""
     active: Progress | None = None
 
     def __init__(self, what: str, total: int | None = None, unit: str = "", note=None,
-                 quiet: bool = False) -> None:
+                 quiet: bool = False, start: int = 0) -> None:
         self.what, self.total, self.unit, self.note, self.quiet = what, total, unit, note, quiet
-        self.done, self.t0, self.drawn, self.width, self.step = 0, time.time(), 0.0, 0, -1
+        self.done, self.t0, self.drawn, self.width, self.step = start, time.time(), 0.0, 0, -1
+        self.start, self.guess, self.so_far = start, False, False
         self.tty = sys.stderr.isatty()
         if not quiet:
             Progress.active = self
@@ -166,16 +169,19 @@ class Progress:
 
     def text(self) -> str:
         took = max(time.time() - self.t0, 1e-9)
-        rate = self.done / took
+        rate = (self.done - self.start) / took
         unit = "MB" if self.unit == "B" else self.unit
         speed = f"{self.amount(rate)} {unit}/s".replace(" /s", "/s")
         parts = [self.what]
         if self.total:
             filled = min(20, int(20 * self.done / self.total))
+            total = ("~" if self.guess else "") + self.amount(self.total)
             parts += ["\u2588" * filled + "\u2591" * (20 - filled),
-                      f"{self.amount(self.done)}/{self.amount(self.total)} {unit}".rstrip(),
-                      f"{100 * self.done / self.total:3.0f}%", speed]
-            if 0 < self.done < self.total and took > 2:
+                      f"{self.amount(self.done)}/{total} {unit}".rstrip() + (" found so far" if self.so_far else "")]
+            if not self.so_far:
+                parts.append(f"{100 * min(self.done, self.total) / self.total:3.0f}%")
+            parts.append(speed)
+            if not self.so_far and 0 < self.done < self.total and took > 2 and rate > 0:
                 parts.append(f"{clock((self.total - self.done) / rate)} left")
         else:
             parts += [f"{self.amount(self.done)} {unit}".rstrip(), speed, clock(took)]
@@ -310,6 +316,65 @@ RETRY_STATUS = {429, 500, 502, 503, 504}
 RETRY_WAITS = (1, 3, 9)          # seconds before each new try (or what Retry-After asks, at most 30)
 DEAD_HOSTS: dict[str, Failed] = {}   # hosts that failed for good this run: fail at once
 
+# Reading a site politely: never faster than its robots.txt asks (Crawl-delay), and slower
+# for a while each time it answers "too many requests" (429) or "overloaded" (503): half as
+# many requests a second, then a tenth of a request a second more after each normal answer
+# (pkg.go.dev answers 429 after ~55 quick requests: a few seconds of this and it reads on).
+PACE: dict[str, dict] = {}       # host -> next: when it may be asked again, gap, floor, slowed
+_PACE_LOCK = __import__("threading").Lock()
+MAX_GAP = 10.0                   # seconds between requests at the slowest (unless Retry-After says)
+MAX_WAIT = 60.0                  # the longest Retry-After kept
+STOPPING = False                 # a download is stopping (ctrl+c): no more waiting or retrying
+
+
+def set_crawl_delay(host: str, seconds: float) -> None:
+    with _PACE_LOCK:
+        p = PACE.setdefault(host, {"next": 0.0, "gap": 0.0, "floor": 0.0, "slowed": -MAX_GAP})
+        p["floor"] = seconds
+        p["gap"] = max(p["gap"], seconds)
+
+
+def wait_turn(host: str) -> None:
+    """Wait until this host may be asked again: one request per `gap` seconds, over all threads."""
+    with _PACE_LOCK:
+        p = PACE.get(host)
+        if p is None:
+            return
+        now = time.monotonic()
+        at = max(now, p["next"])
+        p["next"] = at + p["gap"]
+    while time.monotonic() < at:                   # (a download that stops asks nothing more)
+        if STOPPING:
+            raise Failed("dropped", f"https://{host}/", "stopped")
+        time.sleep(min(0.2, at - time.monotonic()))
+
+
+def turn_in(host: str) -> float:
+    """Seconds until `host` may be asked again (0: now)."""
+    with _PACE_LOCK:
+        p = PACE.get(host)
+        return max(0.0, p["next"] - time.monotonic()) if p else 0.0
+
+
+def paced(host: str, busy: bool, retry_after: float | None = None) -> None:
+    """After an answer from `host`: slow down if it said it is busy, else speed up a little."""
+    with _PACE_LOCK:
+        p = PACE.get(host)
+        if p is None and not busy:
+            return
+        p = p or PACE.setdefault(host, {"next": 0.0, "gap": 0.0, "floor": 0.0, "slowed": -MAX_GAP})
+        now = time.monotonic()
+        if not busy:
+            if p["gap"] > p["floor"]:
+                gap = 1 / (1 / p["gap"] + 0.1)
+                p["gap"] = max(p["floor"], gap if gap >= 0.05 else 0.0)
+            return
+        if now - p["slowed"] > max(1.0, p["gap"]):   # once for all the requests already under way
+            p["gap"] = max(p["floor"], min(MAX_GAP, max(0.5, p["gap"] * 2)))   # never under the crawl delay
+            p["slowed"] = now
+        if retry_after:                            # "come back in N seconds": everyone waits
+            p["next"] = max(p["next"], now + min(retry_after, MAX_WAIT))
+
 
 def connect_failure(url: str, e: Exception) -> Failed:
     """Name the cause of a failed connection from the system's message."""
@@ -335,7 +400,9 @@ def bot_check(r, head: bytes) -> str | None:
     if r.headers.get("cf-mitigated") == "challenge" or (
             "cloudflare" in server and (b"challenge-platform" in head or b"Just a moment" in head)):
         return "Cloudflare"
-    if "akamai" in server or b"_abck" in head:
+    # (Akamai also serves ordinary answers: "too many requests" (429, learn.microsoft.com) or
+    # "no such page" (404). Only its refusal is a bot check.)
+    if b"_abck" in head or ("akamai" in server and r.status_code == 403):
         return "Akamai"
     if b"captcha" in head.lower() and r.status_code in (403, 429, 503):
         return "a captcha"
@@ -357,7 +424,7 @@ def http_get(url: str, timeout: float = 20) -> tuple[bytes, str]:
         except Failed as e:
             if e.kind in ("dns", "certificate", "bot-check", "offline"):
                 DEAD_HOSTS[host] = e
-            if e.kind not in TRANSIENT or wait is None:
+            if e.kind not in TRANSIENT or wait is None or STOPPING:
                 raise
             time.sleep(min(30.0, e.wait if e.wait is not None else wait))
     raise AssertionError("unreachable")
@@ -368,8 +435,12 @@ def http_get_once(url: str, timeout: float = 20) -> tuple[bytes, str]:
     for _ in range(6):
         if not safe_url(url):
             raise Failed("not-https", url, url.split(":", 1)[0] + ":")
+        host = urllib.parse.urlparse(url).netloc
+        wait_turn(host)
         try:
             with http_client().stream("GET", url, timeout=timeout) as r:
+                after = r.headers.get("retry-after", "")
+                paced(host, r.status_code in (429, 503), float(after) if after.isdigit() else None)
                 if r.is_redirect:
                     nxt = urllib.parse.urljoin(url, r.headers.get("location", ""))
                     if url.startswith("https:") and not nxt.startswith("https:"):
@@ -388,7 +459,6 @@ def http_get_once(url: str, timeout: float = 20) -> tuple[bytes, str]:
                         raise Failed("bot-check", url, who)
                     code = r.status_code
                     if code in RETRY_STATUS:
-                        after = r.headers.get("retry-after", "")
                         raise Failed("rate-limited" if code == 429 else "server-error", url, str(code),
                                      float(after) if after.isdigit() else None)
                     kind = {401: "login", 403: "forbidden", 404: "not-found", 410: "gone"}.get(code, "gone")
@@ -575,8 +645,11 @@ def html_to_md(html: str) -> str:
     except RecursionError:                       # deeper still: drop the wrappers, try again
         for el in (soup.body or soup).find_all(WRAPPERS):
             el.unwrap()
-        md = markdownify(str(soup.body or soup), heading_style="ATX", strip=["a", "img"],
-                         escape_underscores=False, escape_asterisks=False)
+        try:
+            md = markdownify(str(soup.body or soup), heading_style="ATX", strip=["a", "img"],
+                             escape_underscores=False, escape_asterisks=False)
+        except RecursionError:                   # nested lists, quotes or tables: keep its text
+            md = (soup.body or soup).get_text("\n")
     md = re.sub(r"[ \t]+\n", "\n", md)
     return re.sub(r"\n{3,}", "\n\n", md).strip()
 
@@ -1655,8 +1728,11 @@ class Index:
                 self.entries.append(e)
             if mode != "spell":
                 f = HOME / sid / "emb.npy"
-                if not f.exists():
-                    die(f"'{sid}' has no vectors. Run: search embed {sid}")
+                if not f.exists():          # embed = false, or its vectors were not made (stopped):
+                    say(f"  '{sid}' has no vectors: search by meaning leaves it out "    # the others
+                        f"(to include it: search embed {sid})")                        # keep theirs
+                    vecs.append(len(ents))
+                    continue
                 if meta.get("model") != MODEL_NAME:
                     die(f"'{sid}' was embedded with {meta.get('model')}, not {MODEL_NAME}. "
                         f"Run: search embed {sid}")
@@ -1708,11 +1784,22 @@ class Index:
             prev = key
         from docsearch.spelling import Speller             # misspelled words (see search)
         self.speller: Speller | None = Speller({t: len(v[0]) for t, v in self.post.items()})
+        self.no_vectors = None              # entries of sources without vectors (None: there are none)
         if mode != "spell":
+            dim = next((v.shape[1] for v in vecs if not isinstance(v, int)), None)
+            if dim is None:
+                die("no source has vectors. Run: search embed NAME")
+            if any(isinstance(v, int) for v in vecs):
+                self.no_vectors = np.concatenate([np.full(v if isinstance(v, int) else len(v), isinstance(v, int))
+                                                  for v in vecs])
+                vecs = [np.zeros((v, dim), np.float32) if isinstance(v, int) else v for v in vecs]
+            self.has_vectors = None if self.no_vectors is None else ~self.no_vectors   # (numpy)
             if use_mlx():
                 import mlx.core as mx
                 # on the GPU at half precision: half the memory, and the similarity is computed there
                 self.emb = mx.array(np.concatenate(vecs)).astype(mx.float16)
+                if self.no_vectors is not None:
+                    self.no_vectors = mx.array(self.no_vectors)
             else:
                 self.emb = np.concatenate(vecs).astype(np.float32)
             self.model = get_model()
@@ -1777,16 +1864,21 @@ class Index:
         import numpy as np
         if not use_mlx():
             sims = self.emb @ self.model.encode([q])[0]     # cosine similarity (unit vectors)
+            if self.no_vectors is not None:
+                sims[self.no_vectors] = -2.0                # below any similarity: never by meaning
             k = min(CANDIDATES, len(sims))
             top = np.argpartition(-sims, k - 1)[:k]
-            return [int(i) for i in top[np.lexsort((top, -sims[top]))]]
+            return [int(i) for i in top[np.lexsort((top, -sims[top]))]
+                    if self.has_vectors is None or self.has_vectors[i]]
         import mlx.core as mx
         qv = mx.array(self.model.encode([q])[0]).astype(mx.float16)
         sims = self.emb @ qv                       # cosine similarity (vectors are unit length)
+        if self.no_vectors is not None:
+            sims = mx.where(self.no_vectors, mx.array(-2.0, dtype=sims.dtype), sims)
         k = min(CANDIDATES, sims.shape[0])
         top = np.array(mx.argpartition(-sims, k - 1)[:k])
         s = np.array(sims[mx.array(top)].astype(mx.float32))
-        return [int(i) for i in top[np.argsort(-s)]]
+        return [int(i) for i in top[np.argsort(-s)] if self.has_vectors is None or self.has_vectors[i]]
 
     @staticmethod
     def name_key(q: str) -> str | None:
@@ -1952,13 +2044,18 @@ def confirm(question: str, assume_yes: bool) -> bool:
     return input(f"  {question} [y/N] ").strip().lower() in ("y", "yes")
 
 
-def build_known(name: str, sid: str, plan: dict, workers: int, max_pages: int | None) -> tuple[list[Entry], dict]:
-    """Docs from the known list (sources.py): one or more parts, one offline store."""
+def build_known(name: str, sid: str, plan: dict, workers: int, max_pages: int | None,
+                resumable: bool = False) -> tuple[list[Entry], dict]:
+    """Docs from the known list (sources.py), or a website given by its address: one or more
+    parts, one offline store. `resumable`: docs that are one website can stop half way and
+    continue later (importers.build_website)."""
     from docsearch import importers
     parts = plan.get("parts") or [plan]
     root = plan.get("root") or parts[0].get("url")
     store = importers.Store(sid, root)
-    store.reset()
+    resume = resumable and len(parts) == 1 and parts[0]["kind"] == "website"
+    if not (resume and importers.continues(sid, parts[0])):
+        store.reset()                                # (continuing: keep the pages read before)
     entries: list[Entry] = []
     meta = {"kind": "known", "root": root, "about": plan.get("about", ""), "version": plan.get("version", ""),
             "pages": True}
@@ -1968,7 +2065,7 @@ def build_known(name: str, sid: str, plan: dict, workers: int, max_pages: int | 
             inv, _ = http_get(part["url"] + "objects.inv")
             found, extra = build_sphinx(name, part["url"], inv, workers, max_pages, store=store)
         elif kind == "website":
-            found, extra = importers.build_website(name, sid, part, store, workers, max_pages)
+            found, extra = importers.build_website(name, sid, part, store, workers, max_pages, resume)
         elif kind == "rustdoc":
             found, extra = importers.build_rustdoc(name, sid, part, store, workers, max_pages)
         else:
@@ -1976,6 +2073,8 @@ def build_known(name: str, sid: str, plan: dict, workers: int, max_pages: int | 
         entries += found
         say(f"  {kind}: {len(found)} entries")
         meta["failed_pages"] = meta.get("failed_pages", 0) + extra.get("failed_pages", 0)
+        if extra.get("partial"):                                      # stopped half way
+            meta["partial"] = extra["partial"]
         for k, v in (extra.get("failures") or {}).items():           # the causes, over all parts
             have = meta.setdefault("failures", {}).setdefault(k, {"count": 0, "example": v["example"]})
             have["count"] += v["count"]
@@ -1984,7 +2083,9 @@ def build_known(name: str, sid: str, plan: dict, workers: int, max_pages: int | 
             meta["version"] = got                             # the real number for "stable", "3"
     if not meta["version"]:
         meta["version"] = published_version(plan)
-    store.finish(workers)
+    meta["root"] = store.root                        # where the docs live now, if they moved
+    if not meta.get("partial"):                      # (a stopped download: its images at the end)
+        store.finish(workers)
     return entries, meta
 
 
@@ -1998,12 +2099,21 @@ def cmd_add(args) -> None:
         name, want = spec_.split("==", 1) if "==" in spec_ else (spec_, "")
         name, _, override = name.partition("=")
         sid = source_id(f"{name}=={want}" if want else name)
-        if not getattr(args, "staged", False) and (HOME / sid / "meta.json").exists():
+        if override and not LOCAL_PATH.match(override) and not urllib.parse.urlparse(override).path:
+            override += "/"                              # https://git-scm.com -> https://git-scm.com/
+        from docsearch import importers
+        staged = getattr(args, "staged", False)
+        stopped = None if staged else importers.unfinished(sid)     # a download that stopped half way
+        if stopped is not None and override and override != stopped["plan"].get("root"):
+            stopped = None                               # other docs under this name: start anew
+        if stopped is not None and not override and not want:   # search add aks: as it was added
+            m = HOME / sid / "meta.json"
+            spec = (json.loads(m.read_text(encoding="utf-8")).get("spec") if m.exists() else None) or (
+                name if stopped["plan"].get("about") else f"{name}={stopped['plan']['root']}")
+        if not staged and stopped is None and (HOME / sid / "meta.json").exists():
             refresh(spec, sid, args)                     # never risks the copy you have
             continue
         meta = {"name": name, "spec": spec, "created": time.strftime("%Y-%m-%d %H:%M"), "model": None}
-        if override and not LOCAL_PATH.match(override) and not urllib.parse.urlparse(override).path:
-            override += "/"                              # https://git-scm.com -> https://git-scm.com/
         known_as = known_site(override) if override and not LOCAL_PATH.match(override) else None
         if known_as:                                     # an address of docs we know: their profile
             say(f"  {override} is the {known_as} docs: reading them as such (search known)")
@@ -2012,13 +2122,15 @@ def cmd_add(args) -> None:
         if plan and not want and re.fullmatch(r"[\d.]+", sources.KNOWN[name].get("version", "")):
             plan = sources.resolve(name, published_version(plan) or "")    # the newest release
         try:
-            if override and LOCAL_PATH.match(override):  # docs you downloaded yourself
-                from docsearch import importers
+            if stopped is not None:                      # go on where it stopped
+                entries, extra = build_known(name, sid, stopped["plan"], args.workers, args.max_pages, True)
+                meta.update(extra)
+            elif override and LOCAL_PATH.match(override):  # docs you downloaded yourself
                 entries, extra = importers.build_local(name, sid, Path(override), args.workers)
                 meta.update(extra)
             elif plan is not None:                       # a language or toolkit we know
                 say(f"  {plan.get('about', name)}")
-                entries, extra = build_known(name, sid, plan, args.workers, args.max_pages)
+                entries, extra = build_known(name, sid, plan, args.workers, args.max_pages, not staged)
                 meta.update(extra)
             elif spec == "git-man":                      # the git manual pages on this Mac
                 entries = build_git(args.workers)
@@ -2054,7 +2166,7 @@ def cmd_add(args) -> None:
                                    f"(pages under that address)?", args.yes):
                         continue
                     plan = {"kind": "website", "root": override, "start": override, "prefix": override}
-                    entries, extra = build_known(name, sid, plan, args.workers, args.max_pages)
+                    entries, extra = build_known(name, sid, plan, args.workers, args.max_pages, not staged)
                     meta.update(extra)
                     found = None
                 elif not found:
@@ -2107,6 +2219,9 @@ def cmd_add(args) -> None:
                 say(f"  {NEXT.get(kind, NEXT['other'])}")
             say(f"  {LOCAL_TIP.format(name=name)}")
             continue
+        if not entries and meta.get("partial"):
+            say(f"  stopped before a page was read. To start again: search add {spec}")
+            continue
         if not entries and meta.get("failures") and str(meta.get("root", "")).startswith("http"):
             entries, extra = try_alternatives(name, sid, meta, args)
             meta.update(extra)
@@ -2130,7 +2245,7 @@ def cmd_add(args) -> None:
         say(f"  saved {len(entries)} entries in {time.time() - t0:.0f} s")
         if not args.no_embed:
             embed_source(sid)
-        failed = int(meta.get("failed_pages") or 0)
+        failed = missed_pages(meta)
         if failed and failed > 0.05 * (failed + stored_pages(sid)) and not getattr(args, "staged", False):
             say(f"  Note: {failed} pages could not be downloaded (the site may be busy or blocking); "
                 f"saved the rest. To try again later: search upgrade {name} --force")
@@ -2359,7 +2474,8 @@ def cmd_sync(args) -> None:
         meta_f = HOME / sid / "meta.json"
         meta = json.loads(meta_f.read_text(encoding="utf-8")) if meta_f.exists() else {}
         meta.setdefault("spec", meta.get("name"))           # indexes made before sync existed
-        ready = meta.get("spec") == spec and (not embed or (HOME / sid / "emb.npy").exists())
+        same = meta.get("spec") == spec and not meta.get("partial")     # partial: continue it
+        ready = same and (not embed or (HOME / sid / "emb.npy").exists())
         if ready and not args.force:
             say(f"{spec}: up to date ({meta.get('version') or 'no version'})")
             if "nav" not in meta and str(meta.get("root", "")).startswith("http") and meta.get("kind") != "local":
@@ -2368,11 +2484,12 @@ def cmd_sync(args) -> None:
                 write_atomic(meta_f, json.dumps(meta, indent=2).encode())
                 (HOME / sid / "order.npy").unlink(missing_ok=True)
             continue
-        if meta.get("spec") == spec and embed and not args.force:   # only the vectors are missing
+        if same and embed and not args.force:            # only the vectors are missing
             embed_source(sid)
             continue
         cmd_add(argparse.Namespace(sources=[spec], workers=args.workers, max_pages=None, no_embed=not embed,
-                                   yes=False, accept_partial=args.accept_partial))
+                                   yes="=" in spec.split("==")[0],      # an address you listed: no question
+                                   accept_partial=args.accept_partial))
     import tomllib                                       # saved pages ([saved] in packages.toml)
     for name, urls in (tomllib.loads(CONFIG.read_text(encoding="utf-8")).get("saved") or {}).items():
         sid = source_id(name)
@@ -2392,6 +2509,12 @@ def cmd_sync(args) -> None:
         say(f"Indexed but not in {CONFIG.name}: {', '.join(extra)}  (search sync --prune removes them)")
 
 
+def partial_text(p: dict) -> str:
+    """How far a download that stopped half way got: "9,812 of about 41,000 pages"."""
+    text = f"{p['pages']:,} of about {p['about']:,} pages" if p.get("about") else f"{p['pages']:,} pages so far"
+    return text + (f", {p['again']:,} to try again" if p.get("again") else "")
+
+
 def cmd_list(_args) -> None:
     if not HOME.exists() or not any(HOME.iterdir()):
         print("Nothing indexed yet. Start with: search add git")
@@ -2403,6 +2526,8 @@ def cmd_list(_args) -> None:
             vec = "vectors ready" if (d / "emb.npy").exists() else "no vectors"
             if m.get("failed_pages"):
                 vec += f", {m['failed_pages']} pages missing"
+            if m.get("partial"):
+                vec += f", partial: {partial_text(m['partial'])} (search add {m.get('name', d.name)} continues)"
             ver = m.get("version") or "-"
             print(f"{d.name:<14} {ver:<10} {m.get('count', 0):>7} entries   {m.get('kind', ''):<7} "
                   f"{vec:<14} {m.get('root', '')}   (indexed {m.get('created', '?')})")
@@ -2463,11 +2588,24 @@ def stored_pages(sid: str) -> int:
     return sum(1 for f in d.rglob("*.gz") if "_images" not in f.parts) if d.exists() else 0
 
 
+NOT_THERE = {"not-found", "gone", "robots", "empty"}   # pages no later try can read (empty: a web app)
+
+
+def missed_pages(meta: dict) -> int:
+    """Pages a download missed that another try may get (the site was busy, blocking, or
+    the network failed); not links to pages that do not exist, or that robots.txt keeps out:
+    many sites link to missing pages (Kubernetes: hundreds)."""
+    if "failures" not in meta:
+        return int(meta.get("failed_pages") or 0)
+    return sum(c["count"] for k, c in meta["failures"].items() if k.partition(":")[0] not in NOT_THERE)
+
+
 def incomplete(new: Path, old: dict | None) -> str | None:
     """Why a fresh download should not replace the copy you have, if it should not: more
-    than 5% of its pages failed, or (same docs, `old`) it has under 70% of their entries."""
+    than 5% of its pages failed (and might not another time: missed_pages), or (same docs,
+    `old`) it has under 70% of their entries."""
     meta = json.loads((new / "meta.json").read_text(encoding="utf-8"))
-    failed = int(meta.get("failed_pages") or 0)
+    failed = missed_pages(meta)
     pages = sum(1 for f in (new / "pages").rglob("*.gz") if "_images" not in f.parts) if (new / "pages").exists() else 0
     if failed > 0.05 * (failed + pages):
         return f"{failed} of {failed + pages} pages failed"
@@ -2480,6 +2618,8 @@ def refresh(spec: str, sid: str, args) -> bool:
     """Download docs you already have again (sync, add) without risking them: built in
     data/staging, swapped in only when complete enough; otherwise your copy stays."""
     old = json.loads((HOME / sid / "meta.json").read_text(encoding="utf-8"))
+    if spec == old.get("name") and "=" in str(old.get("spec", "")):
+        spec = old["spec"]                           # search add aks: the address it was added from
     say(f"  {sid}: downloading again; the copy you have stays in use until the new one is complete")
     d = build_staged(spec, args)
     if d is None:
@@ -2505,8 +2645,9 @@ def build_staged(spec: str, args) -> Path | None:
         shutil.rmtree(STAGING)
     real, HOME = HOME, STAGING
     try:
+        # yes: docs you have, so you said yes to them ("read it as a website?") when you added them
         cmd_add(argparse.Namespace(sources=[spec], workers=args.workers, max_pages=None,
-                                   no_embed=False, yes=getattr(args, "yes", False), record=False, staged=True))
+                                   no_embed=False, yes=True, record=False, staged=True))
     finally:
         HOME = real
     d = STAGING / source_id(spec)
@@ -2657,6 +2798,10 @@ def cmd_upgrade(args) -> None:
             say(f"{name}: not indexed. Add it with: search add {spec}")
             continue
         meta = json.loads((HOME / (base if base in have else have[0]) / "meta.json").read_text(encoding="utf-8"))
+        if meta.get("partial"):
+            say(f"{name}: its download stopped half way ({partial_text(meta['partial'])}). "
+                f"To continue it: search add {name}")
+            continue
         old = ", ".join(f"{s} ({json.loads((HOME / s / 'meta.json').read_text(encoding='utf-8')).get('version') or 'no version'})"
                         for s in have)
         if not want:
@@ -2887,7 +3032,7 @@ def main(argv: list[str] | None = None) -> None:
     a = sub.add_parser("add", help="download and index sources")
     a.add_argument("sources", nargs="+", help="numpy, pkg=URL, git, bash, man:PAGE")
     a.add_argument("--workers", type=int, default=16, help="parallel downloads (default 16)")
-    a.add_argument("--max-pages", type=int, help="stop after this many doc pages")
+    a.add_argument("--max-pages", type=int, help=argparse.SUPPRESS)    # tests: stop after N pages, as ctrl+c
     a.add_argument("--no-embed", action="store_true", help="skip vectors (spell search only)")
     a.add_argument("--yes", action="store_true", help="accept docs whose title does not match the name")
     a.add_argument("--accept-partial", action="store_true",
@@ -2950,7 +3095,11 @@ def main(argv: list[str] | None = None) -> None:
         quick_search(list(argv))
         return
     args = p.parse_args(argv)
-    args.func(args)
+    try:
+        args.func(args)
+    except KeyboardInterrupt:
+        say("\n  stopped.")
+        sys.exit(130)
     if args.cmd in ("add", "sync", "remove", "embed", "upgrade", "downgrade", "setup", "save"):
         index_changed()
 

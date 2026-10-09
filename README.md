@@ -135,6 +135,24 @@ search add mydocs=~/Downloads/docs.zip   # docs you downloaded yourself (or C:\p
 search remove polars
 ```
 
+a docs site gives you every page under the address you add. big sites (azure, aws, google
+cloud, oracle) have tens of thousands, so add the part you want, one product or book:
+
+```bash
+search add aks=https://learn.microsoft.com/en-us/azure/aks/
+```
+
+- before it starts, it says how many pages there are, when the site's sitemap tells; then
+  the bar shows how many are read, of how many, and the time left. without a sitemap it
+  shows how many are found so far, a number that grows as pages turn up.
+- ctrl+c stops it and keeps what's read: searchable now, marked partial in `search list`.
+  `search add aks` continues where it stopped.
+- some sites ask programs to wait between pages, and docsearch waits. aws asks for 5
+  seconds, so 700 pages take about an hour.
+- some sites ask programs not to read some pages at all (oracle: its old releases, 10g
+  and 11g), and docsearch doesn't. download those docs yourself and add the folder or zip:
+  `search add oracle11=~/Downloads/oracle11g.zip`
+
 ## versions
 
 ```bash

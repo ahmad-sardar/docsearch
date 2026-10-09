@@ -70,7 +70,8 @@ class Library:
             if cli.HOME.exists() else []
         if not sids:
             raise SystemExit("search: nothing is indexed yet. Run: search sync")
-        vectors = all((cli.HOME / s / "emb.npy").exists() for s in sids) and cli.model_cached()
+        vectors = any((cli.HOME / s / "emb.npy").exists() for s in sids) and cli.model_cached()   # (a source
+        # without vectors, embed = false or not made yet, is left out of search by meaning only)
         self.index = cli.Index(sids, "hybrid" if vectors else "spell")
         self.lock = threading.Lock()                 # one search at a time (the model)
         self.meta = {s: json.loads((cli.HOME / s / "meta.json").read_text(encoding="utf-8"))

@@ -81,7 +81,8 @@ def store_page(sid: str, root: str, pages_dir: Path, url: str, main, real_url: s
 # --------------------------------------------------------------------------- finding pages
 
 def robots(root: str):
-    """The site's robots.txt rules (a missing file allows everything)."""
+    """The site's robots.txt rules (a missing file allows everything), and the pause it asks
+    for between pages (Crawl-delay; AWS: 5 s), which every download from it then keeps."""
     rp = urllib.robotparser.RobotFileParser()
     u = urllib.parse.urlparse(root)
     try:
@@ -89,6 +90,11 @@ def robots(root: str):
         rp.parse(body.decode("utf-8", "replace").splitlines())
     except Exception:  # noqa: BLE001 - no robots.txt: everything allowed
         rp.parse([])
+    delay = rp.crawl_delay(cli.USER_AGENT)
+    if delay:
+        cli.set_crawl_delay(u.netloc, float(delay))
+        say(f"  {u.netloc} asks programs to wait {float(delay):g} s between pages (robots.txt): "
+            f"about {3600 / float(delay):,.0f} pages an hour")
     return rp
 
 
@@ -122,6 +128,14 @@ def from_llms(url: str, prefixes: list[str], limit: int) -> list[str]:
     return pages[:limit]
 
 
+def sitemap_locs(body: bytes) -> tuple[list[str], list[str]]:
+    """(the sitemaps it lists, the pages it lists) of one sitemap file (maybe gzipped)."""
+    if body[:2] == b"\x1f\x8b":
+        body = gzip.decompress(body)[:cli.MAX_DOWNLOAD]
+    locs = [m.decode("utf-8", "replace").strip() for m in re.findall(rb"<loc>\s*([^<\s]+)\s*</loc>", body)]
+    return [u for u in locs if u.endswith((".xml", ".xml.gz"))], [u for u in locs if not u.endswith((".xml", ".xml.gz"))]
+
+
 def from_sitemap(url: str, prefixes: list[str], limit: int) -> list[str]:
     """Pages in a sitemap (or sitemap index), inside the prefixes."""
     out, todo, seen = [], [url], set()
@@ -131,26 +145,85 @@ def from_sitemap(url: str, prefixes: list[str], limit: int) -> list[str]:
             continue
         seen.add(sm)
         try:
-            body = cli.http_get(sm)[0]
+            maps, pages = sitemap_locs(cli.http_get(sm)[0])
         except Exception:  # noqa: BLE001
             continue
-        if body[:2] == b"\x1f\x8b":
-            body = gzip.decompress(body)[:cli.MAX_DOWNLOAD]
-        for loc in re.findall(rb"<loc>\s*([^<\s]+)\s*</loc>", body):
-            u = loc.decode("utf-8", "replace").strip()
-            if u.endswith((".xml", ".xml.gz")):
-                todo.append(u)
-            elif cli.safe_url(u) and any(u.startswith(p) for p in prefixes) and u not in out:
-                out.append(u)
+        todo += maps
+        out += [u for u in pages if cli.safe_url(u) and any(u.startswith(p) for p in prefixes) and u not in out]
     return out[:limit]
 
 
+def count_pages(rp, root: str, wanted, seconds: float = 15, most: int = 100) -> int | None:
+    """How many pages a download will read, before it starts: the pages its sitemap lists
+    that `wanted(url)` keeps; the sitemap of the docs' own folder (AWS: one per guide), else
+    those robots.txt names. None if there is none, or it lists over `most` sitemaps or takes
+    more than `seconds` to read (learn.microsoft.com lists 5,412: not worth asking for; the
+    count then grows as pages turn up)."""
+    origin = "{0.scheme}://{0.netloc}/".format(urllib.parse.urlparse(root))
+    deadline = time.monotonic() + seconds
+
+    def get(u: str) -> bytes:
+        try:
+            return cli.http_get_once(u, timeout=max(1.0, min(10.0, deadline - time.monotonic())))[0]
+        except Exception:  # noqa: BLE001 - no such sitemap
+            return b""
+    for first in ([root + "sitemap.xml"] if root.endswith("/") and root != origin else [],
+                  rp.site_maps() or [origin + "sitemap.xml"]):
+        found, todo, seen = set(), list(first), set()
+        with cf.ThreadPoolExecutor(max_workers=8) as ex:
+            while todo and time.monotonic() < deadline:
+                batch = [u for u in dict.fromkeys(todo) if u not in seen][:8]
+                hosts = {urllib.parse.urlparse(u).netloc for u in batch}
+                if any(cli.PACE.get(h, {}).get("gap", 0) > 0 for h in hosts):
+                    batch = batch[:1]                    # a paced site: one at a time, each in time
+                if time.monotonic() + max((cli.turn_in(urllib.parse.urlparse(u).netloc) for u in batch),
+                                          default=0) >= deadline:
+                    break                                # its turn comes too late
+                todo = [u for u in todo if u not in batch and u not in seen]
+                seen.update(batch)
+                for body in ex.map(get, batch):
+                    maps, pages = sitemap_locs(body)
+                    todo += maps
+                    found.update(normal(u) for u in pages if wanted(normal(u)))
+                if len(seen) + len(todo) > most:
+                    return None                          # too many to read for a count
+        if todo:
+            return None                                  # not read in time: no guess
+        if found:
+            return len(found)
+    return None
+
+
 STRIP = re.compile(r"@go[\d.]+(?=$|/)")            # pkg.go.dev/fmt@go1.27.1: the same page
+# A whole section again on one page, for printing: Hugo/Docsy's /_print/ folders (on
+# Kubernetes, 166 such pages were 71% of all entries, each a copy, one of them 23 MB), and
+# pages a link calls a print copy (mdBook's print.html: "Print this book"). Not every
+# print.html: Kotlin's is the documentation of its print() function.
+ALL_IN_ONE = re.compile(r"/_print/")
+PRINT_LINK = re.compile(r"\bprint (this|entire|whole) (book|section|chapter|page|guide)\b|\bprintable (version|page)\b", re.I)
 
 
 def normal(url: str) -> str:
     """One address per page: no #fragment, no ?query, no version tag."""
     return STRIP.sub("", urllib.parse.urldefrag(url)[0].split("?")[0])
+
+
+def moved(url: str, real: str, base: str) -> str | None:
+    """Where the docs under `base` went, if `url` (under it) redirected to `real` and kept its
+    place: cloud.google.com/kubernetes-engine/docs/ -> docs.cloud.google.com/kubernetes-engine/docs/
+    (a new host), .../oracle-database/23/sqlrf/ -> .../oracle-database/26/sqlrf/ (a new
+    release). None if it did not move, or went to another organization's site."""
+    if not url.startswith(base) or real.startswith(base):
+        return None
+    rest = url[len(base):]
+    if not real.endswith(rest) or cli.organization(urllib.parse.urlparse(real).netloc) != \
+            cli.organization(urllib.parse.urlparse(base).netloc):
+        return None
+    new = real[:len(real) - len(rest)]
+    if base.endswith("/") and not new.endswith("/"):         # .../sqlrf/index.html -> .../sqlrf/
+        head, _, last = new.rpartition("/")
+        new = head + "/" if "." in last else new + "/"
+    return new if cli.safe_url(new) else None
 
 
 # --------------------------------------------------------------------------- cutting pages
@@ -159,7 +232,10 @@ DROP = (".theme-doc-toc-mobile, .theme-doc-toc-desktop, .theme-doc-version-badge
         ".theme-doc-breadcrumbs, .pagination-nav, .theme-edit-this-page, .theme-last-updated, "
         ".editsection, .mw-editsection, #toc, .toc, .t-navbar, .t-template-editlink, .noprint, "
         ".breadcrumbs, .headerlink, button, .copy-button, .baseline-indicator, .on-github, "
-        "#sidebar, .sidebar, .nav-chapters, .mobile-nav-chapters, #menu-bar")
+        "#sidebar, .sidebar, .nav-chapters, .mobile-nav-chapters, #menu-bar, "
+        # what the page itself says is not its content: hidden (but not a tab you can switch
+        # to), and Google's "nocontent" (breadcrumbs, bookmark and feedback buttons)
+        "[hidden]:not([role=tabpanel]), .nocontent, #site-user-feedback-footer, .awsdocs-page-banner")
 MEMBER_SECTIONS = {"methods", "fields", "functions", "properties", "aliases", "comptime members",
                    "static methods", "instance methods", "static properties", "instance properties",
                    "constructors", "operators", "member functions", "associated functions"}
@@ -168,6 +244,8 @@ OCAMLDOC_ID = re.compile(r"^(VAL|TYPE|EXCEPTION|MODULE|MODTYPE|CLASS|CLASSTYPE|M
 OCAMLDOC_KIND = {"VAL": "val", "TYPE": "type", "EXCEPTION": "exception", "MODULE": "module",
                  "MODTYPE": "module type", "CLASS": "class", "CLASSTYPE": "class type", "METHOD": "method"}
 IDENT = re.compile(r"[A-Za-z_$][\w$]*")
+NAV_RELS = {"contents", "toc", "index", "start", "first", "prev", "previous", "next", "last", "up",
+            "chapter", "section", "subsection", "appendix", "glossary"}
 
 
 def heading_text(h) -> str:
@@ -220,20 +298,35 @@ def website_page(sid: str, name: str, root: str, pages_dir: Path, url: str, html
                  real_url: str, spec: dict) -> tuple[list[Entry], dict[str, str], list[str]]:
     """Cut one HTML page into entries, store it, and return the links it has (worker)."""
     soup = cli.make_soup(html)
-    links = [normal(urllib.parse.urljoin(real_url, a["href"])) for a in soup.find_all("a", href=True)]
+    hrefs = [a["href"] for a in soup.find_all(["a", "area"], href=True) if not PRINT_LINK.search(
+        " ".join((a.get_text(" ", strip=True), a.get("title") or "", a.get("aria-label") or "")))]
+    # books whose table of contents is not a link: <link rel="contents" href="toc.htm"> and
+    # rel="next" (Oracle, DocBook), or the frames of a frameset (old Javadoc; not an <iframe>:
+    # mdBook's is its sidebar again)
+    hrefs += [ln["href"] for ln in soup.find_all("link", href=True) if NAV_RELS & {r.lower() for r in ln.get("rel") or []}]
+    hrefs += [f["src"] for f in soup.find_all("frame", src=True)]
+    links = [normal(urllib.parse.urljoin(real_url, h)) for h in hrefs]
     cli.clean_soup(soup)                       # (after the links: chapter lists live in <nav>)
     for el in soup.select(DROP + (", " + spec["drop"] if spec.get("drop") else "")):
         el.decompose()
     # a saved article: its text without the site around it (a general method, see article.py)
     main = article.extract(soup) if spec.get("article") else None
-    selectors = ([spec["main"]] if spec.get("main") else []) + [
-        "#mw-content-text", "article.bd-article", 'div[role="main"]', "main", "article", "#content", ".content", "div.body"]
-    for sel in selectors if main is None else []:
-        main = soup.select_one(sel)
-        if main is not None:
+    if main is None and spec.get("main"):
+        main = soup.select_one(spec["main"])
+    # the usual names of a page's main part: what the page calls its main part, as it is (a
+    # chapter page may hold only its heading); a vaguer name only on an element with a tenth of
+    # the page's text, not a small box that happens to share it (AWS: a feedback box "content")
+    body = soup.body or soup
+    least = len(body.get_text(" ", strip=True)) / 10
+    for sel, vague in [("#mw-content-text", False), ("article.bd-article", False), ('div[role="main"]', False),
+                       ("#main-col-body", False), ("main", False), ("article", True), ("#content", True),
+                       (".content", True), ("div.body", True)] if main is None else []:
+        main = max(soup.select(sel), key=lambda el: len(el.get_text(" ", strip=True)), default=None)
+        if main is not None and (not vague or len(main.get_text(" ", strip=True)) >= least):
             break
+        main = None
     if main is None:
-        main = soup.body or soup
+        main = body
     h1 = main.find("h1") or soup.find("h1")
     title = heading_text(h1) if h1 else (soup.title.get_text(strip=True) if soup.title else url)
     entries: list[Entry] = []
@@ -431,78 +524,296 @@ def markdown_page(sid: str, name: str, root: str, pages_dir: Path, url: str, md_
 
 # --------------------------------------------------------------------------- the website importer
 
+ROUND = 200                 # pages read, cut into entries and saved before the next ones
+AGAIN = cli.TRANSIENT | {"offline", "dns"}       # failures a later try may not have
+TRIES = 3                   # a page failing so goes back in the queue, up to this many tries in all
+GONE = 10                   # a round whose pages all failed so (at least this many): the site is gone
+
+
+def crawl_dir(sid: str) -> Path:
+    """Where a website download keeps what it has read (entries.jsonl) and what is left
+    (state.json), round by round, until it is finished."""
+    return cli.HOME / sid / "crawl"
+
+
+def unfinished(sid: str) -> dict | None:
+    """A website download of `sid` that stopped before the end (ctrl+c, a lost connection):
+    its state, to continue it. None if there is none."""
+    try:
+        return json.loads((crawl_dir(sid) / "state.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def continues(sid: str, spec: dict) -> bool:
+    """Is there a stopped download of these very docs (the same plan) to continue?"""
+    state = unfinished(sid)
+    return state is not None and state.get("plan") == json.loads(json.dumps(spec))
+
+
+def ignore_ctrl_c() -> None:
+    """Worker processes leave ctrl+c to the main one, which stops the download."""
+    import signal
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+
+def pages(n: int) -> str:
+    return f"{n:,} page" + ("" if n == 1 else "s")
+
+
+def duration(seconds: float) -> str:
+    return (f"{seconds / 60:.0f} min" if seconds < 5400 else f"{seconds / 3600:.0f} hours" if seconds < 172800
+            else f"{seconds / 86400:.1f} days")
+
+
 def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
-                  max_pages: int | None) -> tuple[list[Entry], dict]:
-    """Index a documentation website: its llms.txt, its sitemap, or its links."""
-    limit = max_pages or spec.get("max_pages", 3000)
-    prefixes = spec.get("prefix") or []
-    prefixes = [prefixes] if isinstance(prefixes, str) else prefixes
+                  max_pages: int | None, resume: bool = False) -> tuple[list[Entry], dict]:
+    """Index a documentation website: its llms.txt, its sitemap, or its links: every page
+    under its address (a known site may set its own `max_pages`). Read ROUND pages at a time.
+
+    With `resume`, each round is saved in crawl/ as it ends, so the download can stop and
+    continue later: ctrl+c (after the pages under way; twice: at once), a lost connection,
+    or `max_pages` (the pages to read this time) stop it with what it has read, marked
+    "partial"; called again with the same spec, it continues where it stopped."""
+    import signal
+    cap = spec.get("max_pages") or 10**9
     starts = spec.get("start") or []
     starts = [starts] if isinstance(starts, str) else starts
-    rp = robots(store.root)
+    exclude = re.compile(spec.get("exclude", r"$^"))
+    depth = spec.get("depth", 10**6)
+    follow = not spec.get("sitemap")                       # a sitemap lists every page already
+    folder = crawl_dir(sid)
+    state = unfinished(sid) if resume and continues(sid, spec) else None
+    fails, t0 = cli.Failures(), time.time()
+    if state is None:                                      # a new download
+        shutil.rmtree(folder, ignore_errors=True)
+        prefixes = spec.get("prefix") or []
+        prefixes = [prefixes] if isinstance(prefixes, str) else list(prefixes)
+        rp = robots(store.root)
+        keep = {seg.lower() for u in starts + prefixes for seg in urllib.parse.urlparse(u).path.split("/")}
+        listed = []
+        if spec.get("llms"):
+            listed += from_llms(spec["llms"], prefixes, cap)
+            say(f"  {len(listed)} pages listed in {spec['llms']}")
+        if spec.get("sitemap"):
+            listed += from_sitemap(spec["sitemap"], prefixes, cap)
+        todo = [[u, 0] for u in dict.fromkeys(starts + listed) if not exclude.search(u)
+                and (u in starts or not ALL_IN_ONE.search(u))]
+        state = {"plan": spec, "todo": todo, "seen": [u for u, _ in todo], "read": [], "failures": {},
+                 "retry": [], "images": {}, "prefixes": prefixes, "root": store.root, "keep": sorted(keep),
+                 "bytes": 0, "listed": bool(listed), "about": len(todo) if listed else None}
+        if not listed and resume:                          # how many pages, before the first one
+            state["about"] = count_pages(rp, store.root, lambda u: any(u.startswith(p) for p in prefixes)
+                                         and not exclude.search(u) and not ALL_IN_ONE.search(u)
+                                         and not other_variant(u, keep))
+        if state["about"] and not listed:
+            delay = cli.PACE.get(urllib.parse.urlparse(store.root).netloc, {}).get("floor")
+            say(f"  about {state['about']:,} pages under {store.root} (its sitemap)"
+                + (f": about {duration(state['about'] * delay)} at {delay:g} s a page" if delay else ""))
+        elif resume and not listed:
+            say("  the number of pages shows as they turn up (no sitemap to count them first)")
+        if resume and (state["about"] or 10**9) > 1000:
+            say(f"  ctrl+c stops and keeps what is read; search add {name} continues")
+    else:                                                  # one that stopped: go on
+        store.root, prefixes, keep = state["root"], state["prefixes"], set(state["keep"])
+        store.images = state["images"]
+        fails.by_kind = state["failures"]
+        rp = robots(store.root)
+        say(f"  continuing: {pages(len(state['read']))} read before"
+            + (f", about {state['about']:,} in all" if state["about"] else ""))
     allowed = lambda u: rp.can_fetch(cli.USER_AGENT, u)  # noqa: E731
-    entries: list[Entry] = []
-    fails, t0, done = cli.Failures(), time.time(), 0
+    todo, seen, read = state["retry"] + state["todo"], set(state["seen"]), set(state["read"])
+    retry: list = []                            # pages that failed for a reason that may pass
+    tries: dict = state.setdefault("tries", {})      # how often each such page failed
+    entries_file = folder / "entries.jsonl"
+    folder.mkdir(parents=True, exist_ok=True)
+    if entries_file.exists():                              # cut what a stop left half written
+        with open(entries_file, "rb+") as f:
+            f.truncate(state.get("entries_bytes", 0))
+    got_bytes = [state["bytes"]]
 
     def fetch(u: str):
         try:
-            return u, cli.get_page_at(u), None
+            page = cli.get_page_at(u)
+            got_bytes[0] += len(page[0])
+            return u, page, None
         except Exception as e:  # noqa: BLE001
             return u, None, e
 
-    frontier = list(starts)
-    if spec.get("llms"):
-        frontier += from_llms(spec["llms"], prefixes, limit)
-        say(f"  {len(frontier)} pages listed in {spec['llms']}")
-    if spec.get("sitemap"):
-        frontier += from_sitemap(spec["sitemap"], prefixes, limit)
-    follow = not spec.get("sitemap")                       # a sitemap lists every page already
-    depth_left = spec.get("depth", 10**6)
-    exclude = re.compile(spec.get("exclude", r"$^"))
-    frontier = [u for u in dict.fromkeys(frontier) if not exclude.search(u)]
-    seen = set(frontier)
-    keep_segments = {seg.lower() for u in starts + prefixes for seg in urllib.parse.urlparse(u).path.split("/")}
-    bar = cli.Progress("  pages", min(len(seen), limit), note=lambda: f"{len(fails)} failed" if fails else "")
-    with cf.ThreadPoolExecutor(max_workers=workers) as net, \
-            cf.ProcessPoolExecutor(max_workers=os.cpu_count() or 4) as cpu, bar:
-        while frontier and done < limit:
-            for u in frontier:
-                if not allowed(u):
+    def done() -> int:          # pages read, failed, or the same page again (a page read but not
+        return (len(read) + sum(len(v) for v in fails.by_kind.values())      # usable is read and
+                + state.get("dups", 0) - state.get("broken", 0))              # failed: counted once)
+
+    def total() -> int:
+        return max(state["about"] or 0, done() + len(todo) + len(retry))
+
+    stop: dict = {"why": None}
+
+    def ctrl_c(_sig, _frame) -> None:
+        if stop["why"] == "ctrl+c":
+            raise KeyboardInterrupt                        # the second time: at once
+        stop["why"], cli.STOPPING = "ctrl+c", True
+        say("  stopping after the pages under way (ctrl+c again: at once)")
+    def arrived(futures):
+        """Each result in order, waited for in short slices: ctrl+c is seen at once (on Windows
+        a long wait cannot be interrupted before Python 3.14); none once the download stops.
+        Each is let go once handed over (as Executor.map does): its page is not kept till the end."""
+        futures = futures[::-1]
+        while futures:
+            fut = futures.pop()
+            while not stop["why"]:
+                try:
+                    yield fut.result(timeout=0.2)
+                    break
+                except cf.TimeoutError:
+                    pass
+            if stop["why"]:
+                return
+
+    old_handler = None
+    if resume and __import__("threading").current_thread() is __import__("threading").main_thread():
+        old_handler = signal.signal(signal.SIGINT, ctrl_c)
+    host = urllib.parse.urlparse(store.root).netloc
+    bar = cli.Progress("  pages", total(), start=done(),
+                       note=lambda: f"{got_bytes[0] / 2**20:,.{0 if got_bytes[0] >= 10 * 2**20 else 1}f} MB"
+                       + (f"  {len(fails)} failed" if fails else ""))
+    bar.guess, bar.so_far = bool(state["about"]) and not state["listed"], not state["about"]
+    net = cf.ThreadPoolExecutor(max_workers=workers)
+    cpu = cf.ProcessPoolExecutor(max_workers=os.cpu_count() or 4, initializer=ignore_ctrl_c)
+    this_time = 0
+    try:
+        while (todo or retry) and done() < cap and not stop["why"]:
+            if not todo:                                 # the end: the pages to try again, once more
+                todo, retry = retry, []
+            if max_pages and this_time >= max_pages:
+                stop["why"] = "max-pages"
+                break
+            chunk, k = [], 0                               # the next round
+            size = min(ROUND, cap - done(), max_pages - this_time if max_pages else ROUND)
+            while k < len(todo) and len(chunk) < size:
+                u, d = todo[k]
+                k += 1
+                if allowed(u):
+                    chunk.append((u, d))
+                else:
                     fails.add(u, cli.Failed("robots", u))
-            batch = [u for u in frontier if allowed(u)][: limit - done]
-            frontier = []
-            jobs = []
-            for u, got, err in net.map(fetch, batch):
-                done += 1
-                bar.update(total=min(len(seen), limit))      # more pages turn up as links are read
+            depth_of = dict(chunk)
+            jobs, again, new_read, failed, dups, taken, broken = [], [], set(), [], 0, set(), 0
+            for u, got, err in arrived([net.submit(fetch, u) for u, _ in chunk]):
+                if stop["why"]:
+                    break                                    # the rest of the round: next time
+                taken.add(u)
+                bar.update()
                 if got is None:
-                    fails.add(u, err)
+                    failed.append((u, err))
                     continue
+                real = normal(got[1])
+                same = re.sub(r"/index\.html?$", "/", real)      # docs/ and docs/index.html: one page
+                if u in starts and real != normal(u) and not any(real.startswith(p) for p in prefixes):
+                    new = [m for m in (moved(u, real, p) for p in prefixes) if m]
+                    if new:                                  # the docs moved: read them there
+                        say(f"  {u} has moved to {real}: reading the docs there")
+                        prefixes += new
+                        keep |= {seg.lower() for m in new for seg in urllib.parse.urlparse(m).path.split("/")}
+                        store.root = moved(u, real, store.root) or store.root
+                        if urllib.parse.urlparse(store.root).netloc != host:
+                            host = urllib.parse.urlparse(store.root).netloc
+                            rp = robots(store.root)          # the new site's rules (and crawl delay)
+                    else:
+                        say(f"  {u} redirects to {real}, outside {', '.join(prefixes)}: only that page "
+                            f"is read. If the docs moved there: search add {name}={real}")
+                if same in read or same in new_read:
+                    dups += 1
+                    continue                                 # a page already read, by another address
+                new_read.add(same)
+                if real != u and real.startswith(store.root) and any(real.startswith(p) for p in prefixes):
+                    depth_of[real] = depth_of[u]
+                    u = real                                 # its own address: one entry per page
                 if u.endswith(".md"):
                     jobs.append((u, cpu.submit(markdown_page, sid, name, store.root, store.dir, u, got[0], spec)))
                 else:
                     jobs.append((u, cpu.submit(website_page, sid, name, store.root, store.dir, u, got[0], got[1],
                                                spec)))
-            for u, j in jobs:
+            found_entries, images, links = [], {}, []
+            for u, j in jobs:                                # (the pages read are cut, even when stopping)
+                while not j.done():
+                    cf.wait([j], timeout=0.2)                # (short waits, as in arrived)
                 got = cli.page_result(j, u, fails)
                 if got is None:
+                    broken += 1
                     continue
-                found, imgs, links = got
+                found, imgs, page_links = got
                 if found and sum(len(e.text.strip()) for e in found) < 40:   # an empty app shell
                     fails.add(u, cli.Failed("empty", u))
+                    broken += 1
                     continue
-                entries += found
-                store.add_images(imgs)
-                if follow and depth_left > 0:
-                    for link in links:
-                        if (link not in seen and cli.safe_url(link) and not exclude.search(link)
-                                and not link.endswith(".txt")        # llms.txt indexes, sources
-                                and not other_variant(link, keep_segments)    # translations, old versions
-                                and any(link.startswith(p) for p in prefixes)):
-                            seen.add(link)
-                            frontier.append(link)
-            depth_left -= 1
-    say(f"  {done} pages ({len(fails)} failed) in {time.time() - t0:.0f} s")
+                found_entries += found
+                images.update(imgs)
+                if follow and depth_of.get(u, 0) < depth:
+                    links += [(link, depth_of.get(u, 0) + 1) for link in page_links]
+            kinds = [err.kind if isinstance(err, cli.Failed) else "other" for _, err in failed]
+            for (u, err), kind in zip(failed, kinds):        # what failed, and why
+                if kind in AGAIN and tries.get(u, 0) < TRIES - 1:
+                    tries[u] = tries.get(u, 0) + 1
+                    again.append([u, depth_of[u]])           # it may pass: later (TRIES in all)
+                else:
+                    fails.add(u, err)
+            if resume and any(k_ in ("offline", "dns") for k_ in kinds):
+                stop["why"] = "offline"                      # the connection is gone: stop, keep it
+            elif resume and len(failed) >= GONE and len(failed) == len(taken) and all(k_ in AGAIN for k_ in kinds):
+                stop["why"] = "unreachable"                  # a whole round, and none answered
+            fresh = []
+            for link, d in links:
+                if (link not in seen and cli.safe_url(link) and not exclude.search(link)
+                        and not link.endswith(".txt")        # llms.txt indexes, sources
+                        and not ALL_IN_ONE.search(link)      # print copies of whole sections
+                        and not other_variant(link, keep)    # translations, old versions
+                        and any(link.startswith(p) for p in prefixes)):
+                    seen.add(link)
+                    fresh.append([link, d])
+            with open(entries_file, "a", encoding="utf-8") as f:     # the round, saved
+                f.writelines(json.dumps(cli.asdict(e)) + "\n" for e in found_entries)
+            read |= new_read
+            state["dups"] = state.get("dups", 0) + dups
+            state["broken"] = state.get("broken", 0) + broken
+            store.add_images(images)
+            retry += again
+            todo = [[u, d] for u, d in chunk if u not in taken] + todo[k:] + fresh
+            this_time += len(taken)
+            if resume:
+                state.update(todo=todo, seen=sorted(seen), read=sorted(read), retry=retry, images=store.images,
+                             failures=fails.by_kind, tries=tries,
+                             prefixes=prefixes,
+                             root=store.root, keep=sorted(keep), bytes=got_bytes[0],
+                             entries_bytes=entries_file.stat().st_size)
+                cli.write_atomic(folder / "state.json", json.dumps(state).encode())
+            bar.update(done() - bar.done, total=total())
+        if not todo and not retry:
+            bar.total, bar.guess, bar.so_far = bar.done, False, False      # all read: 100%
+    except KeyboardInterrupt:
+        stop["why"] = stop["why"] or "ctrl+c"
+        raise
+    finally:
+        stopped = bool(stop["why"])
+        net.shutdown(wait=not stopped, cancel_futures=stopped)
+        cpu.shutdown(wait=not stopped, cancel_futures=stopped)
+        bar.close()
+        if old_handler is not None:
+            signal.signal(signal.SIGINT, old_handler)
+        cli.STOPPING = False
+    entries = [Entry(**json.loads(ln)) for ln in
+               entries_file.read_text(encoding="utf-8").splitlines() if ln.strip()] if entries_file.exists() else []
+    if stop["why"] and resume:
+        why = (f"the site stopped answering ({cli.describe(kinds[-1])}); stopped" if stop["why"] == "unreachable"
+               else "the connection is gone; stopped" if stop["why"] == "offline" else "stopped")
+        about = total() if state["about"] else None           # a guess from the sitemap, or none
+        say(f"  {why}: {pages(len(read))} read" + (f" of about {about:,}" if about else
+                                                    f"; {len(todo) + len(retry):,} more found so far")
+            + f". They are kept and searchable; to continue: search add {name}")
+        return entries, {"failed_pages": len(fails), "failures": fails.as_meta(),
+                         "partial": {"pages": len(read), "about": about, "again": len(retry)}}
+    shutil.rmtree(folder, ignore_errors=True)                # finished: nothing to continue
+    say(f"  {done()} pages ({len(fails)} failed) in {time.time() - t0:.0f} s")
     if fails:
         fails.report()
     return entries, {"failed_pages": len(fails), "failures": fails.as_meta()}

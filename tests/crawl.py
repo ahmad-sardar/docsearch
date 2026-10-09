@@ -24,6 +24,10 @@ was seen on a real one): no models, no internet, a few seconds.
 - a 429 never makes the wait between pages shorter than robots.txt asks
 - ctrl+c (a real signal) while a slow page is awaited: seen at once (on Windows before Python
   3.14 a long wait cannot be interrupted, so the download waits in short slices)
+- every kind of download stops and goes on the same way, to the same entries as one that
+  never stopped: Sphinx docs (search add), local folders, docs in several parts (the parts
+  read are not read again), and the images (those stored are not fetched again)
+- ctrl+c pressed in a terminal (to every process of the download): no worker prints a traceback
 """
 from __future__ import annotations
 
@@ -32,10 +36,13 @@ import http.server
 import io
 import os
 import signal
+import subprocess
 import sys
 import tempfile
 import threading
 import time
+import zlib
+from pathlib import Path
 
 os.environ["DOCSEARCH_ALLOW_HTTP"] = "1"          # the local site has no certificate
 if "DOCSEARCH_DATA" not in os.environ:
@@ -76,12 +83,31 @@ SITE["/down/"] = (200, page("Down", "".join(f'<a href="p{n}.html">{n}</a> ' for 
 SITE["/flaky/"] = (200, page("Flaky", "".join(f'<a href="p{n}.html">{n}</a> ' for n in range(6))))
 SITE["/count/"] = (200, page("Count", '<a href="/flaky/p0.html">0</a> <a href="shell.html">app</a>'))
 SITE["/count/shell.html"] = (200, b"<html><body><div id=app></div></body></html>")     # a JavaScript app
+INVENTORY = "".join(f"mini.f{n} py:function 1 p{n}.html#mini.f{n} -\n" for n in range(6)).encode()
+SITE["/sphinx/objects.inv"] = (200, b"# Sphinx inventory version 2\n# Project: Mini\n# Version: 1.0\n"
+                               b"# The remainder of this file is compressed using zlib.\n" + zlib.compress(INVENTORY))
+for _n in range(6):
+    SITE[f"/sphinx/p{_n}.html"] = (200, f"<html><body><div role='main'><h1>Part {_n}</h1><dl class='py function'>"
+                                        f"<dt id='mini.f{_n}'>mini.f{_n}(x)</dt><dd><p>Does thing {_n} to x.</p></dd>"
+                                        f"</dl></div></body></html>".encode())
+PNG = b"\x89PNG\r\n\x1a\n" + b"\0" * 64                      # enough of a PNG for its type
+SITE["/pics/"] = (200, page("Pictures", "".join(f'<a href="p{n}.html">{n}</a> ' for n in range(3))))
+for _n in range(3):
+    SITE[f"/pics/p{_n}.html"] = (200, page(f"Picture page {_n}", "".join(
+        f'<img src="/pics/i{_n}-{k}.png" alt="{k}">' for k in range(10))))
+    for _k in range(10):
+        SITE[f"/pics/i{_n}-{_k}.png"] = (200, PNG)
+SITE["/far/"] = (200, page("Far", "".join(f'<a href="p{n}.html">{n}</a> ' for n in range(40))))
+for _n in range(40):
+    SITE[f"/far/p{_n}.html"] = (200, page(f"Far {_n}", ""))
 LOG: list[tuple[float, str]] = []
 BUSY = {"/v26/docs/b.html": 2}                    # answers "too many requests" this many times
 DROP: set[str] = set()                            # no answer at all (the connection drops)
 SITE["/slow/"] = (200, page("Slow", '<a href="late.html">late</a> <a href="p0.html">0</a>'))
 SITE["/slow/late.html"] = SITE["/slow/p0.html"] = (200, page("Late", ""))
 LATE = {"/slow/late.html": 8.0}                   # answers after this many seconds
+LATE.update({f"/far/p{n}.html": 0.5 for n in range(40)})
+LATE.update({f"/pics/i{n}-{k}.png": 0.2 for n in range(3) for k in range(10)})
 
 
 class Site(http.server.BaseHTTPRequestHandler):
@@ -239,9 +265,104 @@ def main() -> None:
     took = time.monotonic() - sent["at"]
     check(bool(meta.get("partial")) and took < 2.0,
           f"ctrl+c while a slow page is awaited: stopped {took:.1f} s later, not when the page came")
+    every_kind(site)
     server.shutdown()
     print("all good")
 
 
+def entries_of(sid: str) -> list:
+    return [(e.title, e.kind, e.location, e.text) for e in cli.load(sid)[1]]
+
+
+def every_kind(site: str) -> None:
+    """Every kind of download stops and goes on to the same entries as one that never stopped."""
+    cli.CONFIG = cli.DATA / "packages.toml"
+    quiet = contextlib.redirect_stderr(io.StringIO())
+
+    # Sphinx docs through search add: stopped after 2 of 6 pages, then the same command goes on
+    with quiet:
+        cli.main(["add", f"whole={site}/sphinx/", "--yes", "--no-embed"])
+        cli.main(["add", f"sx={site}/sphinx/", "--yes", "--no-embed", "--max-pages", "2"])
+    check(cli.load("sx")[0].get("partial", {}).get("pages") == 2, "Sphinx docs: stopped after 2 of 6 pages, kept")
+    LOG.clear()
+    with quiet:
+        cli.main(["add", "sx", "--no-embed"])
+    asked = [path for _, path in LOG if path.startswith("/sphinx/p")]
+    check(not cli.load("sx")[0].get("partial") and len(asked) == 4
+          and [e[1:] for e in entries_of("sx")] == [e[1:] for e in entries_of("whole")],
+          "Sphinx docs: search add NAME went on with the 4 pages left, to the same entries")
+
+    # a local folder: the same
+    folder = cli.DATA / "folder-docs"
+    folder.mkdir(exist_ok=True)
+    for n in range(5):
+        (folder / f"p{n}.html").write_text(page(f"Local {n}", "").decode(), encoding="utf-8")
+    with quiet:
+        cli.main(["add", f"lwhole={folder}", "--no-embed"])
+        cli.main(["add", f"loc={folder}", "--no-embed", "--max-pages", "2"])
+    check(cli.load("loc")[0].get("partial", {}).get("pages") == 2, "a local folder: stopped after 2 of 5 pages, kept")
+    with quiet:
+        cli.main(["add", "loc", "--no-embed"])
+    norm = lambda rows, sid: [(t, k, loc.replace(f"//{sid}.", "//X."), x) for t, k, loc, x in rows]   # noqa: E731
+    check(not cli.load("loc")[0].get("partial") and norm(entries_of("loc"), "loc") == norm(entries_of("lwhole"), "lwhole"),
+          "a local folder: search add NAME went on, to the same entries")
+
+    # docs in two parts, stopped in the second: the first is not read again
+    two = {"about": "two parts", "root": f"{site}/", "parts": [
+        {"kind": "website", "root": f"{site}/flaky/", "start": f"{site}/flaky/", "prefix": f"{site}/flaky/"},
+        {"kind": "website", "root": f"{site}/down/", "start": f"{site}/down/", "prefix": f"{site}/down/"}]}
+    with quiet:
+        whole, _ = cli.build_known("two-whole", "two-whole", two, 8, None)
+        _, meta = cli.build_known("two", "two", two, 8, 9, resumable=True)
+    check(meta.get("partial", {}).get("part") == 2, "two parts: stopped in the second, kept")
+    LOG.clear()
+    with quiet:
+        again, meta = cli.build_known("two", "two", two, 8, None, resumable=True)
+    check(not meta.get("partial") and not any(path.startswith("/flaky/") for _, path in LOG)
+          and sorted((e.title, e.location) for e in again) == sorted((e.title, e.location) for e in whole),
+          "two parts: went on in the second; the first was not read again; the same entries")
+
+    # the images: stopped while they were stored; then only those missing are fetched
+    pics = {"kind": "website", "root": f"{site}/pics/", "start": f"{site}/pics/", "prefix": f"{site}/pics/"}
+
+    def stop_at_images() -> None:
+        while not any(path.startswith("/pics/i") for _, path in LOG):
+            time.sleep(0.02)
+        signal.getsignal(signal.SIGINT)(signal.SIGINT, None)      # ctrl+c, as the images come in
+    LOG.clear()
+    threading.Thread(target=stop_at_images, daemon=True).start()
+    with quiet:
+        _, meta = cli.build_known("pics", "pics", pics, 2, None, resumable=True)
+    first = sum(path.startswith("/pics/i") for _, path in LOG)
+    check(meta.get("partial", {}).get("step") == "images", f"images: stopped while they were stored ({first} of 30 asked)")
+    LOG.clear()
+    with quiet:
+        _, meta = cli.build_known("pics", "pics", pics, 2, None, resumable=True)
+    stored = cli.json.loads((cli.HOME / "pics" / "pages" / "_images" / "images.json").read_text())
+    check(not meta.get("partial") and len(stored) == 30 and not any(path.endswith(".html") for _, path in LOG)
+          and sum(path.startswith("/pics/i") for _, path in LOG) < 30,
+          "images: went on, fetching only the images not stored; no page read again")
+
+    if os.name == "nt":                           # (no process groups to signal on Windows)
+        return
+    child = subprocess.Popen([sys.executable, __file__, "--child", f"{site}/far/"], stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True, start_new_session=True,
+                             env={**os.environ, "DOCSEARCH_DATA": tempfile.mkdtemp(prefix="docsearch-child-")})
+    time.sleep(4)
+    os.killpg(child.pid, signal.SIGINT)              # as a terminal does: to every process
+    out, _ = child.communicate(timeout=120)
+    check("stopped:" in out and "Traceback" not in out and child.returncode == 0,
+          "ctrl+c to every process of a download: it stops and keeps what it read; no traceback")
+
+
+def child(url: str) -> None:
+    """A download for the process-group test: a slow site, read until ctrl+c comes."""
+    cli.build_known("far", "far", {"kind": "website", "root": url, "start": url, "prefix": url}, 4, None,
+                    resumable=True)
+
+
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:2] == ["--child"]:
+        child(sys.argv[2])
+    else:
+        main()

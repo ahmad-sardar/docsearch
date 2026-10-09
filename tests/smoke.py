@@ -5,7 +5,9 @@ tags deep, as some sites are.
 
     uv run python tests/smoke.py
 
-Then a small local website whose download stops half way and continues.
+Then a small local website whose download stops half way and continues; whose vectors
+stop and are made by the same command alone; and whose new copy (search upgrade) stops,
+keeping the copy you have, and goes on the next time.
 
 Everything goes to a temporary folder (DOCSEARCH_DATA, and a packages.toml there). The
 models are downloaded into it the first time, unless DOCSEARCH_DATA already has them.
@@ -16,9 +18,11 @@ import http.server
 import json
 import os
 import re
+import signal
 import sys
 import tempfile
 import threading
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -59,6 +63,14 @@ def get(port: int, path: str, **params) -> dict:
         return json.loads(r.read())
 
 
+ASKED: list[str] = []                           # what the local website was asked for
+
+
+def pages_asked() -> int:
+    return sum(1 for path in ASKED if re.fullmatch(r"/docs/\d*", path))
+SLOW = {"seconds": 0.0}                         # how long each of its pages takes
+
+
 class Chain(http.server.BaseHTTPRequestHandler):
     """A website of 40 pages, each linking to the next."""
 
@@ -66,6 +78,8 @@ class Chain(http.server.BaseHTTPRequestHandler):
         pass
 
     def do_GET(self) -> None:
+        ASKED.append(self.path)
+        time.sleep(SLOW["seconds"])
         m = re.fullmatch(r"/docs/(\d*)", self.path)
         i = int(m.group(1) or 0) if m else -1
         body = (f"<html><body><main><h1>Chapter {i}</h1><p>{f'What chapter {i} explains. ' * 10}</p>"
@@ -91,8 +105,9 @@ def stop_and_continue() -> None:
     listed = io.StringIO()
     with contextlib.redirect_stdout(listed):
         cli.main(["list"])
-    check(meta()["count"] == 5 and meta().get("partial") and (cli.HOME / "book" / "emb.npy").exists()
-          and "partial: 5 pages so far" in listed.getvalue(), "stopped after 5 pages: kept, searchable, listed as partial")
+    check(meta()["count"] == 5 and meta().get("partial") and not (cli.HOME / "book" / "emb.npy").exists()
+          and "partial: 5 pages so far" in listed.getvalue(),
+          "stopped after 5 pages: kept, listed as partial; its vectors wait for the rest (no wait at a stop)")
     cli.main(["upgrade", "book"])
     check(meta()["count"] == 5, "search upgrade leaves a stopped download to search add")
     cli.main(["add", "book"])
@@ -102,6 +117,55 @@ def stop_and_continue() -> None:
     cli.main(["upgrade", "book"])
     check(meta()["count"] == 40, "then sync and upgrade as for any docs (and ask nothing again)")
     cli.main(["remove", "book"])
+    server.shutdown()
+
+
+def vectors_and_new_copies() -> None:
+    """The vectors stop (ctrl+c): searchable by words; the same command makes them alone.
+    A new copy (search upgrade) stops: yours is kept; the next upgrade goes on with it."""
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Chain)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/docs/"
+
+    def meta() -> dict:
+        return json.loads((cli.HOME / "vbook" / "meta.json").read_text(encoding="utf-8"))
+    real = cli.embed_source
+
+    def ctrl_c_in_vectors(_sid: str) -> None:
+        raise KeyboardInterrupt
+    cli.embed_source = ctrl_c_in_vectors
+    try:
+        cli.main(["add", f"vbook={url}", "--yes"])
+        check(False, "the vectors stopped")
+    except SystemExit:
+        pass
+    finally:
+        cli.embed_source = real
+    check(meta().get("partial") == {"step": "vectors"} and not (cli.HOME / "vbook" / "emb.npy").exists(),
+          "ctrl+c while the vectors are made: the docs kept, marked as missing them")
+    ASKED.clear()
+    cli.main(["add", "vbook"])
+    check(not meta().get("partial") and (cli.HOME / "vbook" / "emb.npy").exists() and not ASKED,
+          "search add NAME made the vectors, and downloaded nothing")
+
+    SLOW["seconds"] = 0.15
+    ASKED.clear()
+
+    def ctrl_c_in_new_copy() -> None:
+        while signal.getsignal(signal.SIGINT) is signal.default_int_handler or pages_asked() < 8:
+            time.sleep(0.05)
+        signal.getsignal(signal.SIGINT)(signal.SIGINT, None)
+    threading.Thread(target=ctrl_c_in_new_copy, daemon=True).start()
+    cli.main(["upgrade", "vbook"])
+    staged = cli.STAGING / "vbook"
+    check(meta()["count"] == 40 and not meta().get("partial") and (staged / "crawl" / "plan.json").exists(),
+          "ctrl+c in search upgrade: the copy you have stays; the new one is kept, stopped")
+    SLOW["seconds"] = 0.0
+    ASKED.clear()
+    cli.main(["upgrade", "vbook"])
+    check(meta()["count"] == 40 and not staged.exists() and 0 < pages_asked() < 40,
+          f"search upgrade went on with it ({pages_asked()} pages, not 40) and put it in place")
+    cli.main(["remove", "vbook"])
     server.shutdown()
 
 
@@ -152,6 +216,7 @@ def main() -> None:
     finally:
         web.stop()
     stop_and_continue()
+    vectors_and_new_copies()
     print("all good")
 
 

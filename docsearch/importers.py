@@ -50,8 +50,9 @@ class Store:
     def add_images(self, images: dict[str, str]) -> None:
         self.images.update(images)
 
-    def finish(self, workers: int) -> None:
-        cli.download_images(self.images, self.dir / "_images", workers)
+    def finish(self, workers: int, stop: dict | None = None) -> bool:
+        """Store the pages' images: False if it stopped first (the rest come next time)."""
+        return cli.download_images(self.images, self.dir / "_images", workers, stop=stop)
 
 
 def image_namer(sid: str, root: str, images: dict[str, str]):
@@ -531,30 +532,65 @@ GONE = 10                   # a round whose pages all failed so (at least this m
 
 
 def crawl_dir(sid: str) -> Path:
-    """Where a website download keeps what it has read (entries.jsonl) and what is left
-    (state.json), round by round, until it is finished."""
+    """Where a download keeps its place until the docs are complete: what was asked
+    (plan.json), and for each part of the docs (rust: the book, the reference, std) what it
+    has read and what is left (<part>/state.json, <part>/entries.jsonl)."""
     return cli.HOME / sid / "crawl"
 
 
 def unfinished(sid: str) -> dict | None:
-    """A website download of `sid` that stopped before the end (ctrl+c, a lost connection):
-    its state, to continue it. None if there is none."""
+    """A download of `sid` that stopped before the end (ctrl+c, a lost connection...):
+    {"plan": what was asked, "spec": its command's words, "how": which importer}, or None."""
     try:
-        return json.loads((crawl_dir(sid) / "state.json").read_text(encoding="utf-8"))
+        return json.loads((crawl_dir(sid) / "plan.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
 
 
-def continues(sid: str, spec: dict) -> bool:
+def continues(sid: str, plan: dict) -> bool:
     """Is there a stopped download of these very docs (the same plan) to continue?"""
     state = unfinished(sid)
-    return state is not None and state.get("plan") == json.loads(json.dumps(spec))
+    return state is not None and state.get("plan") == json.loads(json.dumps(plan))
 
 
-def ignore_ctrl_c() -> None:
-    """Worker processes leave ctrl+c to the main one, which stops the download."""
-    import signal
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
+def begin(sid: str, plan: dict, spec: str, how: str) -> bool:
+    """Keep the place of a download of `plan` from now on: True if it goes on with one that
+    stopped, False if it starts anew (and the place of any other is forgotten)."""
+    if continues(sid, plan):
+        return True
+    shutil.rmtree(crawl_dir(sid), ignore_errors=True)
+    crawl_dir(sid).mkdir(parents=True)
+    cli.write_atomic(crawl_dir(sid) / "plan.json", json.dumps({"plan": plan, "spec": spec, "how": how}).encode())
+    return False
+
+
+def part_dir(sid: str, k: int) -> Path:
+    return crawl_dir(sid) / str(k)
+
+
+def finished_part(folder: Path | None, store: Store) -> tuple[list[Entry], dict] | None:
+    """A part of the docs read to its end before the download stopped: its entries and what
+    its importer said (version, failures...), its images and address back in `store`; None
+    if it is not finished (or there is no place kept)."""
+    try:
+        state = json.loads((folder / "state.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    if not state.get("finished"):
+        return None
+    store.add_images(state.get("images") or {})
+    store.root = state.get("root") or store.root
+    rows = [json.loads(ln) for ln in (folder / "entries.jsonl").read_text(encoding="utf-8").splitlines() if ln.strip()]
+    return [Entry(**{k: v for k, v in r.items() if k != "page"}) for r in rows], state["extra"]
+
+
+def finish_part(folder: Path | None, extra: dict, images: dict, root: str | None = None) -> None:
+    """Mark a part read to its end: if the download stops in a later part, it is not read again."""
+    if folder is None:
+        return
+    state = json.loads((folder / "state.json").read_text(encoding="utf-8")) if (folder / "state.json").exists() else {}
+    state.update(finished=True, extra=extra, images=images, root=root)
+    cli.write_atomic(folder / "state.json", json.dumps(state).encode())
 
 
 def pages(n: int) -> str:
@@ -567,23 +603,30 @@ def duration(seconds: float) -> str:
 
 
 def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
-                  max_pages: int | None, resume: bool = False) -> tuple[list[Entry], dict]:
+                  max_pages: int | None, folder: Path | None = None) -> tuple[list[Entry], dict]:
     """Index a documentation website: its llms.txt, its sitemap, or its links: every page
     under its address (a known site may set its own `max_pages`). Read ROUND pages at a time.
 
-    With `resume`, each round is saved in crawl/ as it ends, so the download can stop and
-    continue later: ctrl+c (after the pages under way; twice: at once), a lost connection,
-    or `max_pages` (the pages to read this time) stop it with what it has read, marked
-    "partial"; called again with the same spec, it continues where it stopped."""
-    import signal
+    With `folder` (its place kept, see crawl_dir), each round is saved there as it ends, so
+    the download can stop and continue later: ctrl+c (after the pages under way; twice: at
+    once), a lost connection, or `max_pages` (the pages to read this time) stop it with what
+    it has read, marked "partial"; called again, it continues where it stopped."""
+    import tempfile
+    read_before = finished_part(folder, store)
+    if read_before is not None:
+        return read_before
+    resume = folder is not None
     cap = spec.get("max_pages") or 10**9
     starts = spec.get("start") or []
     starts = [starts] if isinstance(starts, str) else starts
     exclude = re.compile(spec.get("exclude", r"$^"))
     depth = spec.get("depth", 10**6)
     follow = not spec.get("sitemap")                       # a sitemap lists every page already
-    folder = crawl_dir(sid)
-    state = unfinished(sid) if resume and continues(sid, spec) else None
+    try:
+        state = json.loads((folder / "state.json").read_text(encoding="utf-8")) if resume else None
+    except (OSError, ValueError):
+        state = None
+    folder = folder if resume else Path(tempfile.mkdtemp(prefix="docsearch-crawl-"))
     fails, t0 = cli.Failures(), time.time()
     if state is None:                                      # a new download
         shutil.rmtree(folder, ignore_errors=True)
@@ -613,7 +656,7 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
         elif resume and not listed:
             say("  the number of pages shows as they turn up (no sitemap to count them first)")
         if resume and (state["about"] or 10**9) > 1000:
-            say(f"  ctrl+c stops and keeps what is read; search add {name} continues")
+            say(f"  ctrl+c stops and keeps what is read; {cli.continue_with(name)} continues")
     else:                                                  # one that stopped: go on
         store.root, prefixes, keep = state["root"], state["prefixes"], set(state["keep"])
         store.images = state["images"]
@@ -648,12 +691,6 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
         return max(state["about"] or 0, done() + len(todo) + len(retry))
 
     stop: dict = {"why": None}
-
-    def ctrl_c(_sig, _frame) -> None:
-        if stop["why"] == "ctrl+c":
-            raise KeyboardInterrupt                        # the second time: at once
-        stop["why"], cli.STOPPING = "ctrl+c", True
-        say("  stopping after the pages under way (ctrl+c again: at once)")
     def arrived(futures):
         """Each result in order, waited for in short slices: ctrl+c is seen at once (on Windows
         a long wait cannot be interrupted before Python 3.14); none once the download stops.
@@ -670,16 +707,15 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
             if stop["why"]:
                 return
 
-    old_handler = None
-    if resume and __import__("threading").current_thread() is __import__("threading").main_thread():
-        old_handler = signal.signal(signal.SIGINT, ctrl_c)
+    guard = cli.stoppable(stop, resume)                     # ctrl+c: stop after the pages under way
+    guard.__enter__()
     host = urllib.parse.urlparse(store.root).netloc
     bar = cli.Progress("  pages", total(), start=done(),
                        note=lambda: f"{got_bytes[0] / 2**20:,.{0 if got_bytes[0] >= 10 * 2**20 else 1}f} MB"
-                       + (f"  {len(fails)} failed" if fails else ""))
+                       + (f"  {fails.note()}" if fails else ""))
     bar.guess, bar.so_far = bool(state["about"]) and not state["listed"], not state["about"]
     net = cf.ThreadPoolExecutor(max_workers=workers)
-    cpu = cf.ProcessPoolExecutor(max_workers=os.cpu_count() or 4, initializer=ignore_ctrl_c)
+    cpu = cf.ProcessPoolExecutor(max_workers=os.cpu_count() or 4, initializer=cli.ignore_ctrl_c)
     this_time = 0
     try:
         while (todo or retry) and done() < cap and not stop["why"]:
@@ -699,6 +735,7 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
                     fails.add(u, cli.Failed("robots", u))
             depth_of = dict(chunk)
             jobs, again, new_read, failed, dups, taken, broken = [], [], set(), [], 0, set(), 0
+            cut_key: dict[str, str] = {}                     # page cut -> its address read
             for u, got, err in arrived([net.submit(fetch, u) for u, _ in chunk]):
                 if stop["why"]:
                     break                                    # the rest of the round: next time
@@ -729,15 +766,24 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
                 if real != u and real.startswith(store.root) and any(real.startswith(p) for p in prefixes):
                     depth_of[real] = depth_of[u]
                     u = real                                 # its own address: one entry per page
+                cut_key[u] = same
                 if u.endswith(".md"):
                     jobs.append((u, cpu.submit(markdown_page, sid, name, store.root, store.dir, u, got[0], spec)))
                 else:
                     jobs.append((u, cpu.submit(website_page, sid, name, store.root, store.dir, u, got[0], got[1],
                                                spec)))
             found_entries, images, links = [], {}, []
-            for u, j in jobs:                                # (the pages read are cut, even when stopping)
-                while not j.done():
+            uncut, until = [], None
+            for u, j in jobs:                                # the pages read are cut; stopping, they get
+                while not j.done():                          # GRACE seconds (a big page: next time)
+                    if stop["why"]:
+                        until = until or time.monotonic() + cli.GRACE
+                        if time.monotonic() > until:
+                            break
                     cf.wait([j], timeout=0.2)                # (short waits, as in arrived)
+                if not j.done():
+                    uncut.append(u)
+                    continue
                 got = cli.page_result(j, u, fails)
                 if got is None:
                     broken += 1
@@ -751,6 +797,8 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
                 images.update(imgs)
                 if follow and depth_of.get(u, 0) < depth:
                     links += [(link, depth_of.get(u, 0) + 1) for link in page_links]
+            if uncut:
+                cli.stop_workers(cpu)
             kinds = [err.kind if isinstance(err, cli.Failed) else "other" for _, err in failed]
             for (u, err), kind in zip(failed, kinds):        # what failed, and why
                 if kind in AGAIN and tries.get(u, 0) < TRIES - 1:
@@ -773,12 +821,12 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
                     fresh.append([link, d])
             with open(entries_file, "a", encoding="utf-8") as f:     # the round, saved
                 f.writelines(json.dumps(cli.asdict(e)) + "\n" for e in found_entries)
-            read |= new_read
+            read |= new_read - {cut_key[u] for u in uncut}
             state["dups"] = state.get("dups", 0) + dups
             state["broken"] = state.get("broken", 0) + broken
             store.add_images(images)
             retry += again
-            todo = [[u, d] for u, d in chunk if u not in taken] + todo[k:] + fresh
+            todo = [[u, depth_of[u]] for u in uncut] + [[u, d] for u, d in chunk if u not in taken] + todo[k:] + fresh
             this_time += len(taken)
             if resume:
                 state.update(todo=todo, seen=sorted(seen), read=sorted(read), retry=retry, images=store.images,
@@ -798,9 +846,7 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
         net.shutdown(wait=not stopped, cancel_futures=stopped)
         cpu.shutdown(wait=not stopped, cancel_futures=stopped)
         bar.close()
-        if old_handler is not None:
-            signal.signal(signal.SIGINT, old_handler)
-        cli.STOPPING = False
+        guard.__exit__(None, None, None)
     entries = [Entry(**json.loads(ln)) for ln in
                entries_file.read_text(encoding="utf-8").splitlines() if ln.strip()] if entries_file.exists() else []
     if stop["why"] and resume:
@@ -809,10 +855,13 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
         about = total() if state["about"] else None           # a guess from the sitemap, or none
         say(f"  {why}: {pages(len(read))} read" + (f" of about {about:,}" if about else
                                                     f"; {len(todo) + len(retry):,} more found so far")
-            + f". They are kept and searchable; to continue: search add {name}")
+            + f". They are {cli.kept()}; to continue: {cli.continue_with(name)}")
         return entries, {"failed_pages": len(fails), "failures": fails.as_meta(),
                          "partial": {"pages": len(read), "about": about, "again": len(retry)}}
-    shutil.rmtree(folder, ignore_errors=True)                # finished: nothing to continue
+    if resume:                                               # read to its end: kept as such
+        finish_part(folder, {"failed_pages": len(fails), "failures": fails.as_meta()}, store.images, store.root)
+    else:
+        shutil.rmtree(folder, ignore_errors=True)
     say(f"  {done()} pages ({len(fails)} failed) in {time.time() - t0:.0f} s")
     if fails:
         fails.report()
@@ -845,10 +894,12 @@ def unpack_zip(zip_path: Path, into: Path) -> Path:
     return tops[0] if len(tops) == 1 and tops[0].is_dir() else into     # docs-1.2/... -> its folder
 
 
-def build_local(name: str, sid: str, src: Path, workers: int) -> tuple[list[Entry], dict]:
+def build_local(name: str, sid: str, src: Path, workers: int, spec: str = "",
+                max_pages: int | None = None) -> tuple[list[Entry], dict]:
     """Docs you downloaded yourself (a folder, or a .zip of HTML or Markdown pages): read
     from disk, nothing fetched. The pages get the address https://SID.local-docs.invalid/
-    so links between them work in the search page."""
+    so links between them work in the search page. Their place is kept as they are read
+    (crawl_dir): stopped, the same command goes on."""
     import tempfile
     src = src.expanduser().resolve()
     if not src.exists():
@@ -866,45 +917,54 @@ def build_local(name: str, sid: str, src: Path, workers: int) -> tuple[list[Entr
             cli.die(f"{folder}: more than {LOCAL_LIMITS['files']} pages.")
         say(f"  {len(files)} pages in {src}")
         store = Store(sid, root)
-        store.reset()
-        entries: list[Entry] = []
-        fails = cli.Failures()
-        with cf.ProcessPoolExecutor(max_workers=os.cpu_count() or 4) as cpu:
-            jobs = []
-            for f in files:
-                rel = f.relative_to(folder).as_posix()
-                url = root + rel
-                data = f.read_bytes()
-                if len(data) > cli.MAX_DOWNLOAD:
-                    fails.add(url, cli.Failed("too-large", url, f"{cli.MAX_DOWNLOAD // 2**20} MB"))
-                    continue
-                if f.suffix.lower() in (".md", ".markdown"):
-                    jobs.append((url, cpu.submit(markdown_page, sid, name, root, store.dir, url, data, {})))
-                else:
-                    jobs.append((url, cpu.submit(website_page, sid, name, root, store.dir, url, data, url, {})))
-            with cli.Progress("  pages", len(jobs)) as bar:
-                for url, j in jobs:
-                    got = cli.page_result(j, url, fails)
-                    bar.update()
-                    if got is None:
-                        continue
-                    found, imgs, _ = got
-                    entries += found
-                    store.add_images(imgs)
+        if not begin(sid, {"kind": "local", "src": str(src)}, spec or f"{name}={src}", "local"):
+            store.reset()
+        part = part_dir(sid, 0)
+        read_before = finished_part(part, store)
+        if read_before is not None:
+            entries, extra = read_before
+        else:
+            fails = cli.Failures()
+            by_url = {root + f.relative_to(folder).as_posix(): f for f in files}
+
+            def fetch(url: str):                         # from the folder: nothing is downloaded
+                try:
+                    if by_url[url].stat().st_size > cli.MAX_DOWNLOAD:
+                        return url, None, cli.Failed("too-large", url, f"{cli.MAX_DOWNLOAD // 2**20} MB")
+                    return url, (by_url[url].read_bytes(), url), None
+                except OSError as e:
+                    return url, None, cli.Failed("other", url, str(e))
+
+            def cut(url: str, data: bytes, _real: str):
+                if url.lower().endswith((".md", ".markdown")):
+                    return markdown_page, sid, name, root, store.dir, url, data, {}
+                return website_page, sid, name, root, store.dir, url, data, url, {}
+            entries, partial, images = cli.read_listed(list(by_url), {u: u for u in by_url}, fetch, cut,
+                                                       os.cpu_count() or 4, fails, store, part, max_pages, name,
+                                                       fetched="read")
+            if fails:
+                fails.report()
+            extra = {"kind": "local", "root": root, "local": str(src), "pages": True,
+                     "failed_pages": len(fails), "failures": fails.as_meta()}
+            if partial:
+                return entries, {**extra, "partial": partial}
+            finish_part(part, extra, images)
 
         def read_image(url: str) -> bytes:              # images come from the folder, not the web
             path = (folder / urllib.parse.unquote(url[len(root):].split("?")[0])).resolve()
             if folder.resolve() not in path.parents:
                 raise ValueError("outside the folder")
             return path.read_bytes()
-        cli.download_images(store.images, store.dir / "_images", workers, read=read_image)
+        stop: dict = {"why": None}
+        with cli.stoppable(stop):
+            stored = cli.download_images(store.images, store.dir / "_images", workers, read=read_image, stop=stop)
     finally:
         if tmp is not None:
             shutil.rmtree(tmp, ignore_errors=True)
-    if fails:
-        fails.report()
-    return entries, {"kind": "local", "root": root, "local": str(src), "pages": True,
-                     "failed_pages": len(fails), "failures": fails.as_meta()}
+    if not stored:
+        return entries, {**extra, "partial": cli.images_stopped(name)}
+    shutil.rmtree(crawl_dir(sid), ignore_errors=True)    # complete: no place to keep
+    return entries, extra
 
 
 # --------------------------------------------------------------------------- Rust (rustdoc)
@@ -966,19 +1026,31 @@ def rustdoc_page(sid: str, name: str, root: str, pages_dir: Path, crate_root: st
 
 
 def build_rustdoc(name: str, sid: str, spec: dict, store: Store, workers: int,
-                  max_pages: int | None) -> tuple[list[Entry], dict]:
-    """Every item of a Rust crate (its all.html), with the methods on each item's page."""
+                  max_pages: int | None, folder: Path | None = None) -> tuple[list[Entry], dict]:
+    """Every item of a Rust crate (its all.html), with the methods on each item's page. With
+    `folder` the download can stop and continue (cli.read_listed), over the same items."""
+    read_before = finished_part(folder, store)
+    if read_before is not None:
+        return read_before
     crate_root = spec["url"] if spec["url"].endswith("/") else spec["url"] + "/"
-    html, real = cli.get_page_at(crate_root + "all.html")
-    soup = cli.make_soup(html)
-    meta = soup.find("meta", attrs={"name": "rustdoc-vars"})
-    version = (meta.get("data-channel") if meta else "") or ""
-    items = [normal(urllib.parse.urljoin(real, a["href"])) for a in soup.select("#main-content a[href]")]
-    items = [u for u in dict.fromkeys(items) if u.startswith(crate_root)]
-    modules = sorted({u[: u.rfind("/") + 1] + "index.html" for u in items})
-    urls = list(dict.fromkeys([crate_root + "index.html", *modules, *items]))[: max_pages or 10**6]
-    say(f"  {name}: {len(items)} items in {len(modules)} modules (rustdoc {version})")
-    entries: list[Entry] = []
+    listed = folder / "items.json" if folder is not None else None
+    if listed is not None and listed.exists():
+        known = json.loads(listed.read_text(encoding="utf-8"))
+    else:
+        html, real = cli.get_page_at(crate_root + "all.html")
+        soup = cli.make_soup(html)
+        meta = soup.find("meta", attrs={"name": "rustdoc-vars"})
+        items = [normal(urllib.parse.urljoin(real, a["href"])) for a in soup.select("#main-content a[href]")]
+        items = [u for u in dict.fromkeys(items) if u.startswith(crate_root)]
+        modules = sorted({u[: u.rfind("/") + 1] + "index.html" for u in items})
+        urls = list(dict.fromkeys([crate_root + "index.html", *modules, *items]))
+        known = {"urls": urls if folder is not None else urls[: max_pages or 10**6], "items": len(items),
+                 "modules": len(modules), "version": (meta.get("data-channel") if meta else "") or ""}
+        if listed is not None:
+            folder.mkdir(parents=True, exist_ok=True)
+            cli.write_atomic(listed, json.dumps(known).encode())
+    urls, version = known["urls"], known["version"]
+    say(f"  {name}: {known['items']} items in {known['modules']} modules (rustdoc {version})")
     fails = cli.Failures()
 
     def fetch(u: str):
@@ -987,24 +1059,15 @@ def build_rustdoc(name: str, sid: str, spec: dict, store: Store, workers: int,
         except Exception as e:  # noqa: BLE001
             return u, None, e
 
-    jobs = []
-    with cf.ThreadPoolExecutor(max_workers=workers) as net, \
-            cf.ProcessPoolExecutor(max_workers=os.cpu_count() or 4) as cpu:
-        with cli.Progress("  pages", len(urls), note=lambda: f"{len(fails)} failed" if fails else "") as bar:
-            for u, got, err in net.map(fetch, urls):
-                bar.update()
-                if got is None:
-                    fails.add(u, err)
-                    continue
-                jobs.append((u, cpu.submit(rustdoc_page, sid, name, store.root, store.dir, crate_root, u,
-                                           got[0], got[1])))
-        for u, j in jobs:
-            got = cli.page_result(j, u, fails)
-            if got is None:
-                continue
-            found, imgs, _ = got
-            entries += found
-            store.add_images(imgs)
+    def cut(u: str, html: bytes, real: str):
+        return rustdoc_page, sid, name, store.root, store.dir, crate_root, u, html, real
+
+    entries, partial, images = cli.read_listed(urls, {u: u for u in urls}, fetch, cut, workers, fails, store,
+                                               folder, max_pages, name)
+    extra = {"version": version, "failed_pages": len(fails), "failures": fails.as_meta()}
     if fails:
         fails.report()
-    return entries, {"version": version, "failed_pages": len(fails), "failures": fails.as_meta()}
+    if partial:
+        return entries, {**extra, "partial": partial}
+    finish_part(folder, extra, images)
+    return entries, extra

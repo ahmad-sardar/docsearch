@@ -30,7 +30,9 @@ buttons; text can be selected and copied as in any web page.
 from __future__ import annotations
 
 import argparse
+import collections
 import concurrent.futures as cf
+import contextlib
 import functools
 import json
 import os
@@ -508,6 +510,229 @@ class Failures:
     def as_meta(self) -> dict:
         return {k: {"count": len(v), "example": v[0]} for k, v in self.by_kind.items()}
 
+    def note(self) -> str:
+        """For a progress bar, what failed as well as how many: "3 failed: 404 ×2, timeout"."""
+        kinds = collections.Counter()
+        for key, urls in self.by_kind.items():
+            kinds[SHORT.get(key.partition(":")[0], key.partition(":")[0])] += len(urls)
+        return f"{len(self)} failed: " + ", ".join(f"{k} ×{n}" if n > 1 else k for k, n in kinds.most_common(3))
+
+
+SHORT = {"not-found": "404", "gone": "gone", "forbidden": "403", "login": "login", "timeout": "timeout",
+         "dropped": "dropped", "rate-limited": "429", "server-error": "server error", "robots": "robots.txt",
+         "empty": "no text", "bot-check": "bot check", "too-large": "too large", "redirect": "redirect",
+         "certificate": "certificate", "dns": "no such name", "offline": "offline", "refused": "refused",
+         "not-https": "not https", "other": "error"}        # failure kinds in a word, for the bar
+
+
+# --------------------------------------------------------------------------- reading many pages
+
+AHEAD = 200          # pages downloaded and not yet cut into entries, at most: memory stays small
+CONTINUE_WITH = ""   # the command that goes on with a download that stops (search upgrade NAME...)
+
+
+def continue_with(name: str) -> str:
+    return CONTINUE_WITH or f"search add {name}"
+
+
+def kept() -> str:
+    """What a stop keeps: searchable docs, or (a new copy, in staging) a copy to go on with."""
+    return "kept" if HOME == STAGING else "kept and searchable"
+
+
+def ignore_ctrl_c() -> None:
+    """Worker processes leave ctrl+c to the main one, which stops the work: one message, not
+    a traceback from every worker."""
+    import signal
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+
+@contextlib.contextmanager
+def stoppable(stop: dict, active: bool = True):
+    """While active: the first ctrl+c asks the work to stop after the pages under way
+    (stop["why"] = "ctrl+c"), the second stops it at once."""
+    import signal
+    import threading
+    global STOPPING
+
+    def ctrl_c(_sig, _frame) -> None:
+        global STOPPING
+        if stop["why"] == "ctrl+c":
+            raise KeyboardInterrupt                        # the second time: at once
+        stop["why"], STOPPING = "ctrl+c", True
+        say("  stopping after the pages under way (ctrl+c again: at once)")
+    old = None
+    if active and threading.current_thread() is threading.main_thread():
+        old = signal.signal(signal.SIGINT, ctrl_c)
+    try:
+        yield
+    finally:
+        if old is not None:
+            signal.signal(signal.SIGINT, old)
+        STOPPING = False
+
+
+GRACE = 2.0          # seconds the pages being cut get to finish when a download stops
+
+
+def stop_workers(cpu) -> None:
+    """End the worker processes still cutting pages (a download that stops: those pages are
+    read again next time), so stopping never waits for a big page. Python 3.14 has
+    terminate_workers; before it, each worker process is ended."""
+    if hasattr(cpu, "terminate_workers"):
+        cpu.terminate_workers()
+        return
+    for proc in list((getattr(cpu, "_processes", None) or {}).values()):
+        proc.terminate()
+
+
+def read_pages(urls: list[str], fetch, cut, workers: int, fails: Failures, take, stop: dict | None = None,
+               total: int | None = None, start: int = 0, fetched: str = "downloaded") -> list[str]:
+    """Download `urls` (threads) and cut them into entries (worker processes) at the same time,
+    at most AHEAD pages downloaded and not cut yet: memory stays small however big the site.
+    Each page is taken as soon as it is done, in any order, so a slow page holds up nothing:
+    `take(url, result)`. The bar counts pages done (cut, or failed) and moves to the end,
+    with what is downloaded in its note. `fetch(url)` gives (url, (bytes, real url) or None,
+    error); `cut(url, bytes, real)` the call for a worker, (function, *arguments). With
+    `stop`: once stop["why"] is set (ctrl+c; a lost connection sets "offline"), nothing more
+    is downloaded, the pages being cut get GRACE seconds, and the pages not read are returned."""
+    can_stop, stop = stop is not None, stop if stop is not None else {"why": None}
+    todo: collections.deque = collections.deque(urls)
+    fetching: dict = {}                                  # future -> url, downloading
+    cutting: dict = {}                                   # future -> url, being cut into entries
+    got = [0, 0]                                         # pages downloaded, their bytes
+    bar = Progress("  pages", start + len(urls) if total is None else total, start=start,
+                   note=lambda: f"{got[0]:,} {fetched}  {got[1] / 2**20:,.0f} MB" + (f"  {fails.note()}" if fails else ""))
+    net = cf.ThreadPoolExecutor(max_workers=workers)
+    cpu = cf.ProcessPoolExecutor(max_workers=os.cpu_count() or 4, initializer=ignore_ctrl_c)
+    at_once = True
+
+    def done_with(fut) -> None:
+        if fut in fetching:
+            u = fetching.pop(fut)
+            _, page, err = fut.result()
+            if page is None:
+                fails.add(u, err)
+                bar.update()
+                if can_stop and getattr(err, "kind", "") in ("offline", "dns"):
+                    stop["why"] = "offline"              # the connection is gone: stop, keep it
+                return
+            got[0], got[1] = got[0] + 1, got[1] + len(page[0])
+            cutting[cpu.submit(*cut(u, page[0], page[1]))] = u
+            return
+        u = cutting.pop(fut)
+        result = page_result(fut, u, fails)
+        if result is not None:
+            take(u, result)
+        bar.update()
+
+    try:
+        while (todo or fetching or cutting) and not stop["why"]:
+            while todo and len(fetching) + len(cutting) < AHEAD:
+                u = todo.popleft()
+                fetching[net.submit(fetch, u)] = u
+            ready, _ = cf.wait([*fetching, *cutting], timeout=0.2, return_when=cf.FIRST_COMPLETED)
+            for fut in ready:                            # (short waits: ctrl+c is seen at once)
+                done_with(fut)
+        if stop["why"]:                                  # stopping: the pages being cut, a moment
+            until = time.monotonic() + GRACE
+            while cutting and time.monotonic() < until:
+                ready, _ = cf.wait(list(cutting), timeout=0.2, return_when=cf.FIRST_COMPLETED)
+                for fut in ready:
+                    done_with(fut)
+            if cutting:
+                stop_workers(cpu)                        # the rest: next time
+        at_once = False
+    finally:
+        quit_ = at_once or bool(stop["why"])
+        if at_once:
+            stop_workers(cpu)
+        net.shutdown(wait=not quit_, cancel_futures=quit_)
+        cpu.shutdown(wait=not quit_, cancel_futures=quit_)
+        bar.close()
+    return list(fetching.values()) + list(cutting.values()) + list(todo)
+
+
+def read_listed(keys: list[str], urls: dict[str, str], fetch, cut, workers: int, fails: Failures, store,
+                folder: Path | None, max_pages: int | None, name: str,
+                fetched: str = "downloaded") -> tuple[list[Entry], dict | None, dict]:
+    """Pages known before the download starts (a Sphinx inventory, rustdoc's all.html, a
+    folder), read with read_pages. With `folder`, each page is kept there as it is done, so
+    the download can stop (ctrl+c, a lost connection, or `max_pages`: the pages to read this
+    time) and go on later with the pages not read yet. Returns the entries, in the order of
+    `keys`; {"pages": read, "about": all} if it stopped before the end; the pages' images."""
+    from docsearch import importers
+    key_of = {u: k for k, u in urls.items()}
+    order = {k: n for n, k in enumerate(keys)}
+    try:
+        state = json.loads((folder / "state.json").read_text(encoding="utf-8")) if folder else None
+    except (OSError, ValueError):
+        state = None
+    entries_file = folder / "entries.jsonl" if folder else None
+    if folder is not None and state is None:              # a new download, kept as it goes
+        folder.mkdir(parents=True, exist_ok=True)
+        entries_file.write_bytes(b"")
+        state = {"done": [], "failures": {}, "images": {}, "entries_bytes": 0}
+        if len(keys) > 1000:
+            say(f"  ctrl+c stops and keeps what is read; {continue_with(name)} continues")
+    elif state is not None:                              # one that stopped: go on
+        fails.by_kind = state["failures"]
+        store.add_images(state["images"])
+        with open(entries_file, "ab") as f:              # cut what a stop left half written
+            f.truncate(state["entries_bytes"])
+        say(f"  continuing: {len(state['done']):,} of {len(keys):,} pages read before")
+    done = set(state["done"]) if state else set()
+    images = dict(state["images"]) if state else {}
+    left = [k for k in keys if k not in done]
+    now = left[:max_pages] if max_pages and folder is not None else left
+    by_key: dict[str, list[Entry]] = {}                  # (no place kept: in memory)
+    rows = open(entries_file, "a", encoding="utf-8") if folder else None
+
+    def save_state() -> None:
+        rows.flush()
+        state.update(done=sorted(done), images=images, entries_bytes=entries_file.stat().st_size,
+                     failures={k: v for k, v in fails.by_kind.items() if k.partition(":")[0] not in importers.AGAIN})
+        write_atomic(folder / "state.json", json.dumps(state).encode())
+
+    def take(url: str, result) -> None:
+        found, used = result[0], result[1]
+        store.add_images(used)
+        images.update(used)
+        if rows is None:
+            by_key[key_of[url]] = found
+            return
+        rows.writelines(json.dumps({"page": key_of[url], **asdict(e)}) + "\n" for e in found)
+        done.add(key_of[url])
+        if len(done) % 50 == 0:
+            save_state()
+
+    stop: dict = {"why": None}
+    try:
+        with stoppable(stop, folder is not None):
+            unread = read_pages([urls[k] for k in now], fetch, cut, workers, fails, take,
+                                stop if folder is not None else None, total=len(keys),
+                                start=len(keys) - len(left), fetched=fetched)
+        if rows is not None:
+            for key, failed in fails.by_kind.items():    # failed for good: not tried again
+                if key.partition(":")[0] not in importers.AGAIN:
+                    done.update(key_of[u] for u in failed if u in key_of)
+            save_state()
+    finally:
+        if rows is not None:
+            rows.close()
+    if rows is None:
+        return [e for k in keys for e in by_key.get(k, [])], None, images
+    lines = [json.loads(ln) for ln in entries_file.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    lines.sort(key=lambda r: order.get(r["page"], len(order)))       # in page order, as one download gives
+    entries = [Entry(**{k: v for k, v in r.items() if k != "page"}) for r in lines]
+    if any(k not in done for k in keys) and (stop["why"] or unread or len(now) < len(left)):
+        why = {"offline": "the connection is gone; stopped"}.get(stop["why"], "stopped")
+        say(f"  {why}: {len(done):,} of {len(keys):,} pages read. They are {kept()}; "
+            f"to continue: {continue_with(name)}")
+        return entries, {"pages": len(done), "about": len(keys)}, images
+    write_atomic(entries_file, "".join(json.dumps(r) + "\n" for r in lines).encode())   # (in order)
+    return entries, None, images
+
 
 def describe(key: str) -> str:
     """A failure kind (or "redirect:<what happened>") in words."""
@@ -737,12 +962,14 @@ def main_content(soup):
     return soup.body
 
 
-def sphinx_fragment(soup, anchor: str):
-    """Return the HTML nodes that document one inventory entry."""
+def sphinx_fragment(soup, anchor: str, ids: dict | None = None):
+    """Return the HTML nodes that document one inventory entry. `ids`: the page's elements
+    by id (the first of each, as soup.find gives), made once per page: a page with 2,235
+    objects (matplotlib's collections API) took 49 s searching the page again for each."""
     if not anchor:
         main = soup.select_one('div[role="main"], main, article, div.body') or soup.body
         return [main] if main else None
-    el = soup.find(id=anchor)
+    el = ids.get(anchor) if ids is not None else soup.find(id=anchor)
     if el is None:
         return None
     if el.name == "dt":                       # API object: signature <dt> + body <dd>
@@ -754,10 +981,39 @@ def sphinx_fragment(soup, anchor: str):
     return [el]
 
 
-def build_sphinx(name: str, root: str, inv: bytes, workers: int, max_pages: int | None,
-                 store=None) -> tuple[list[Entry], dict]:
+def sphinx_docs(name: str, sid: str, root: str, inv: bytes | None, args, spec: str) -> tuple[list[Entry], dict]:
+    """The Sphinx docs `search add` found (PyPI, or an address), kept for offline reading;
+    their place is kept as they are read, so the same command goes on if they stop."""
+    from docsearch import importers
+    store = importers.Store(sid, root)
+    if not importers.begin(sid, {"kind": "sphinx", "url": root}, spec, "sphinx"):
+        store.reset()
+    entries, extra = build_sphinx(name, root, inv, args.workers, args.max_pages, store=store,
+                                  folder=importers.part_dir(sid, 0))
+    return last_steps(name, sid, store, entries, extra, args.workers, True)
+
+
+def build_sphinx(name: str, root: str, inv: bytes | None, workers: int, max_pages: int | None,
+                 store=None, folder: Path | None = None) -> tuple[list[Entry], dict]:
     """Every object in a Sphinx inventory, cut out of its page. `store` keeps the pages for
-    offline reading (a source made of several Sphinx sites shares one, e.g. CUDA)."""
+    offline reading (a source made of several Sphinx sites shares one, e.g. CUDA); `inv`
+    None: fetched here. With `folder` (its place kept, see importers.crawl_dir) the download
+    can stop and continue (read_listed), with the same docs: their inventory is kept too."""
+    from docsearch import importers
+    own = store is None
+    if own:                                              # offline copies, for the browser
+        store = importers.Store(source_id(name), root)
+        store.reset()
+    read_before = importers.finished_part(folder, store)
+    if read_before is not None:
+        return read_before
+    if folder is not None and (folder / "objects.inv").exists():
+        inv = (folder / "objects.inv").read_bytes()      # the docs it started with, not newer ones
+    elif inv is None:
+        inv = http_get(root + "objects.inv")[0]
+    if folder is not None and not (folder / "objects.inv").exists():
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "objects.inv").write_bytes(inv)
     project, version, objs = parse_objects_inv(inv)
     # One entry per target URL. Prefer API objects over pages, pages over labels.
     rank = {"doc": 1, "label": 2}
@@ -772,53 +1028,37 @@ def build_sphinx(name: str, root: str, inv: bytes, workers: int, max_pages: int 
     for o in best.values():
         page, _, anchor = o["uri"].partition("#")
         pages.setdefault(page, []).append((o, anchor))
-    page_list = list(pages)[:max_pages] if max_pages else list(pages)
+    page_list = list(pages)[:max_pages] if max_pages and folder is None else list(pages)
     say(f"  {project} {version}: {len(best)} documented objects on {len(page_list)} pages")
-    if len(page_list) > 1500:
+    if len(page_list) > 1500 and not (folder is not None and (folder / "state.json").exists()):
         say("  This is a large site. The first download can take several minutes.")
-
     page_list = [p for p in page_list if same_site(root, urllib.parse.urljoin(root, p))]
-
-    def fetch(page: str):
-        try:
-            return page, get_page_at(urllib.parse.urljoin(root, page)), None
-        except Exception as e:  # noqa: BLE001 - report and continue
-            return page, None, e
-
-    entries: list[Entry] = []
+    urls = {p: urllib.parse.urljoin(root, p) for p in page_list}
+    page_of = {u: p for p, u in urls.items()}
     fails = Failures()
-    own = store is None
-    if own:                                              # offline copies, for the browser
-        from docsearch.importers import Store
-        store = Store(source_id(name), root)
-        store.reset()
-    # Downloads (threads, waiting on the network) and cutting pages into entries (worker
-    # processes, one per core) run at the same time: neither waits for the other.
-    jobs = []
-    with cf.ThreadPoolExecutor(max_workers=workers) as net, \
-            cf.ProcessPoolExecutor(max_workers=os.cpu_count() or 4) as cpu:
-        with Progress("  pages", len(page_list), note=lambda: f"{len(fails)} failed" if fails else "") as bar:
-            for page, got, err in net.map(fetch, page_list):
-                bar.update()
-                if got is None:
-                    fails.add(urllib.parse.urljoin(root, page), err)
-                    continue
-                jobs.append((urllib.parse.urljoin(root, page),
-                             cpu.submit(sphinx_page, name, root, page, got[0], got[1], pages[page],
-                                        store.dir, store.root)))
-        for url, job in jobs:                            # in page order: the same index each time
-            got = page_result(job, url, fails)
-            if got is None:
-                continue
-            found, used = got
-            entries += found
-            store.add_images(used)
-    if own:
-        store.finish(workers)
+
+    def fetch(url: str):
+        try:
+            return url, get_page_at(url), None
+        except Exception as e:  # noqa: BLE001 - report and continue
+            return url, None, e
+
+    def cut(url: str, html: bytes, real: str):
+        page = page_of[url]
+        return sphinx_page, name, root, page, html, real, pages[page], store.dir, store.root
+
+    entries, partial, images = read_listed(page_list, urls, fetch, cut, workers, fails, store, folder,
+                                           max_pages, name)
+    extra = {"project": project, "version": version, "failed_pages": len(fails),
+             "failures": fails.as_meta(), "pages": True}
     if fails:
         fails.report()
-    return entries, {"project": project, "version": version, "failed_pages": len(fails),
-                     "failures": fails.as_meta(), "pages": True}
+    if partial:
+        return entries, {**extra, "partial": partial}
+    importers.finish_part(folder, extra, images)
+    if own:
+        store.finish(workers)
+    return entries, extra
 
 
 def sphinx_page(name: str, root: str, page: str, html: bytes, real_url: str,
@@ -838,11 +1078,14 @@ def sphinx_page(name: str, root: str, page: str, html: bytes, real_url: str,
 
     soup = make_soup(html)
     clean_soup(soup)
+    ids: dict = {}
+    for el in soup.find_all(id=True):                    # each id's first element, in page order
+        ids.setdefault(el["id"], el)
     entries = []
     for o, anchor in items:
         if not same_site(root, urllib.parse.urljoin(root, o["uri"])):
             continue
-        nodes = sphinx_fragment(soup, anchor)
+        nodes = sphinx_fragment(soup, anchor, ids)
         if not nodes:
             continue
         if nodes[0].name == "dt":
@@ -869,11 +1112,20 @@ def sphinx_page(name: str, root: str, page: str, html: bytes, real_url: str,
     return entries, images
 
 
-def download_images(images: dict[str, str], folder: Path, workers: int, read=None) -> None:
+def download_images(images: dict[str, str], folder: Path, workers: int, read=None,
+                    stop: dict | None = None) -> bool:
     """Store the images the pages show, so the pages need no internet. The type is read
     from the image's own bytes; anything that is not PNG/JPEG/GIF/WebP/SVG is dropped.
-    `read(url)`: where the bytes come from (default: download; a local import reads files)."""
+    `read(url)`: where the bytes come from (default: download; a local import reads files).
+    Images stored before (a download that stopped) are not fetched again. With `stop`: once
+    stop["why"] is set (ctrl+c), it stops, keeping those stored; returns False then."""
     folder.mkdir(parents=True, exist_ok=True)
+    try:
+        before = json.loads((folder / "images.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        before = {}
+    types = {n: before[n] for n in images.values() if n in before and (folder / n).exists()}
+    todo = [(u, n) for u, n in images.items() if n not in types]
 
     def one(item: tuple[str, str]):
         url, name = item
@@ -886,15 +1138,58 @@ def download_images(images: dict[str, str], folder: Path, workers: int, read=Non
             (folder / name).write_bytes(data)
         return name, ctype
 
-    types: dict[str, str] = {}
-    with cf.ThreadPoolExecutor(max_workers=workers) as ex, \
-            Progress("  images", len(images), quiet=not images) as bar:
-        for name, ctype in ex.map(one, images.items()):
-            bar.update()
-            if ctype:
-                types[name] = ctype
-    write_atomic(folder / "images.json", json.dumps(types).encode())
-    say(f"  images: {len(types)} of {len(images)} stored")
+    stopped = True
+    ex = cf.ThreadPoolExecutor(max_workers=workers)
+    try:
+        with Progress("  images", len(images), quiet=not todo, start=len(images) - len(todo)) as bar:
+            futures = collections.deque(ex.submit(one, item) for item in todo)
+            until = None
+            while futures:
+                if stop and stop["why"]:                  # stopping: those under way, GRACE seconds
+                    if until is None:
+                        until = time.monotonic() + GRACE
+                        for f in futures:
+                            f.cancel()                   # (those not started: next time)
+                    if time.monotonic() > until:
+                        break
+                    futures = collections.deque(f for f in futures if not f.cancelled())
+                    if not futures:
+                        break
+                if not futures[0].done():
+                    cf.wait([futures[0]], timeout=0.2)    # short waits: ctrl+c is seen at once
+                    continue
+                name, ctype = futures.popleft().result()
+                bar.update()
+                if ctype:
+                    types[name] = ctype
+        stopped = bool(stop and stop["why"]) and len(types) < len(images)
+    finally:
+        ex.shutdown(wait=not stopped, cancel_futures=stopped)
+        write_atomic(folder / "images.json", json.dumps(types).encode())     # what is stored, in any case
+    say(f"  images: {len(types)} of {len(images)} stored" + (" (stopped: the rest next time)" if stopped else ""))
+    return not stopped
+
+
+def images_stopped(name: str) -> dict:
+    """The "partial" of docs whose pages are all read, stopped while their images were stored."""
+    say(f"  stopped: the pages are {kept()}, some images are missing; to continue: {continue_with(name)}")
+    return {"step": "images"}
+
+
+def last_steps(name: str, sid: str, store, entries: list[Entry], meta: dict, workers: int,
+               keep: bool) -> tuple[list[Entry], dict]:
+    """After all the pages: their images (a step that can stop and go on too), then the place
+    the download kept (`keep`) is let go: the docs are complete."""
+    from docsearch import importers
+    if meta.get("partial"):
+        return entries, meta
+    stop: dict = {"why": None}
+    with stoppable(stop, keep):
+        stored = store.finish(workers, stop if keep else None)
+    if not stored:
+        return entries, {**meta, "partial": images_stopped(name)}
+    shutil.rmtree(importers.crawl_dir(sid), ignore_errors=True)
+    return entries, meta
 
 
 # --------------------------------------------------------------------------- MkDocs
@@ -2045,55 +2340,83 @@ def confirm(question: str, assume_yes: bool) -> bool:
 
 
 def build_known(name: str, sid: str, plan: dict, workers: int, max_pages: int | None,
-                resumable: bool = False) -> tuple[list[Entry], dict]:
+                resumable: bool = False, spec: str = "") -> tuple[list[Entry], dict]:
     """Docs from the known list (sources.py), or a website given by its address: one or more
-    parts, one offline store. `resumable`: docs that are one website can stop half way and
-    continue later (importers.build_website)."""
+    parts, one offline store. `resumable`: each part keeps its place as it is read (rust: the
+    book, the reference, std), so a download that stops goes on where it stopped."""
     from docsearch import importers
     parts = plan.get("parts") or [plan]
     root = plan.get("root") or parts[0].get("url")
     store = importers.Store(sid, root)
-    resume = resumable and len(parts) == 1 and parts[0]["kind"] == "website"
-    if not (resume and importers.continues(sid, parts[0])):
-        store.reset()                                # (continuing: keep the pages read before)
+    if not (resumable and importers.begin(sid, plan, spec or name, "known")):
+        store.reset()                                # (going on: keep the pages read before)
     entries: list[Entry] = []
     meta = {"kind": "known", "root": root, "about": plan.get("about", ""), "version": plan.get("version", ""),
             "pages": True}
-    for part in parts:
+    for k, part in enumerate(parts):
         kind = part["kind"]
+        folder = importers.part_dir(sid, k) if resumable else None
         if kind == "sphinx":
-            inv, _ = http_get(part["url"] + "objects.inv")
-            found, extra = build_sphinx(name, part["url"], inv, workers, max_pages, store=store)
+            found, extra = build_sphinx(name, part["url"], None, workers, max_pages, store=store, folder=folder)
         elif kind == "website":
-            found, extra = importers.build_website(name, sid, part, store, workers, max_pages, resume)
+            found, extra = importers.build_website(name, sid, part, store, workers, max_pages, folder)
         elif kind == "rustdoc":
-            found, extra = importers.build_rustdoc(name, sid, part, store, workers, max_pages)
+            found, extra = importers.build_rustdoc(name, sid, part, store, workers, max_pages, folder)
         else:
             die(f"unknown kind of docs: {kind}")
         entries += found
         say(f"  {kind}: {len(found)} entries")
         meta["failed_pages"] = meta.get("failed_pages", 0) + extra.get("failed_pages", 0)
-        if extra.get("partial"):                                      # stopped half way
-            meta["partial"] = extra["partial"]
-        for k, v in (extra.get("failures") or {}).items():           # the causes, over all parts
-            have = meta.setdefault("failures", {}).setdefault(k, {"count": 0, "example": v["example"]})
+        for key, v in (extra.get("failures") or {}).items():         # the causes, over all parts
+            have = meta.setdefault("failures", {}).setdefault(key, {"count": 0, "example": v["example"]})
             have["count"] += v["count"]
         got, have = extra.get("version") or "", meta["version"] or ""
         if got and (not re.fullmatch(r"\d+(\.\d+)*", have) or got.startswith(have + ".")):
             meta["version"] = got                             # the real number for "stable", "3"
+        if extra.get("partial"):                              # stopped in this part: the rest later
+            meta["partial"] = {**extra["partial"], **({"part": k + 1, "parts": len(parts)} if len(parts) > 1 else {})}
+            break
     if not meta["version"]:
         meta["version"] = published_version(plan)
     meta["root"] = store.root                        # where the docs live now, if they moved
-    if not meta.get("partial"):                      # (a stopped download: its images at the end)
-        store.finish(workers)
-    return entries, meta
+    return last_steps(name, sid, store, entries, meta, workers, resumable)
+
+
+def make_vectors(sid: str, name: str) -> None:
+    """The source's vectors (search by meaning). Stopped by ctrl+c, its docs stay searchable
+    by name and words, marked as missing them: the same command makes them, and nothing else."""
+    try:
+        embed_source(sid)
+    except KeyboardInterrupt:
+        meta, _ = load(sid)
+        if not meta.get("partial"):
+            meta["partial"] = {"step": "vectors"}
+            write_atomic(HOME / sid / "meta.json", json.dumps(meta, indent=2).encode())
+        say(f"\n  stopped before its vectors were made; it is searchable by name and words. "
+            f"To make them: {continue_with(name)}")
+        raise SystemExit(130) from None
+    meta, _ = load(sid)
+    if (meta.get("partial") or {}).get("step") == "vectors":
+        del meta["partial"]
+        write_atomic(HOME / sid / "meta.json", json.dumps(meta, indent=2).encode())
 
 
 def cmd_add(args) -> None:
+    global CONTINUE_WITH
+    outer = CONTINUE_WITH                                # (sync, upgrade: their own command)
+    try:
+        add_each(args, outer)
+    finally:
+        CONTINUE_WITH = outer
+
+
+def add_each(args, outer: str) -> None:
     from docsearch import sources
+    global CONTINUE_WITH
     for spec in args.sources:
         t0 = time.time()
         say(f"Indexing {spec}")
+        CONTINUE_WITH = outer or f"search add {spec.split('=')[0] if '=' in spec.replace('==', '') else spec}"
         forced_pypi = spec.startswith("pypi:")
         spec_ = spec[len("pypi:"):] if forced_pypi else spec
         name, want = spec_.split("==", 1) if "==" in spec_ else (spec_, "")
@@ -2103,14 +2426,18 @@ def cmd_add(args) -> None:
             override += "/"                              # https://git-scm.com -> https://git-scm.com/
         from docsearch import importers
         staged = getattr(args, "staged", False)
-        stopped = None if staged else importers.unfinished(sid)     # a download that stopped half way
-        if stopped is not None and override and override != stopped["plan"].get("root"):
+        stopped = importers.unfinished(sid)              # a download that stopped (in staging: a new copy)
+        if stopped is not None and override and spec != stopped.get("spec"):
             stopped = None                               # other docs under this name: start anew
         if stopped is not None and not override and not want:   # search add aks: as it was added
-            m = HOME / sid / "meta.json"
-            spec = (json.loads(m.read_text(encoding="utf-8")).get("spec") if m.exists() else None) or (
-                name if stopped["plan"].get("about") else f"{name}={stopped['plan']['root']}")
-        if not staged and stopped is None and (HOME / sid / "meta.json").exists():
+            spec = stopped.get("spec") or spec
+        meta_f = HOME / sid / "meta.json"
+        old = json.loads(meta_f.read_text(encoding="utf-8")) if meta_f.exists() else None
+        if stopped is None and old and (old.get("partial") or {}).get("step") == "vectors" and not args.no_embed:
+            say(f"  {sid}: all its pages are read; making its vectors (they stopped before)")
+            make_vectors(sid, name)                      # the one step left
+            continue
+        if not staged and stopped is None and old is not None:
             refresh(spec, sid, args)                     # never risks the copy you have
             continue
         meta = {"name": name, "spec": spec, "created": time.strftime("%Y-%m-%d %H:%M"), "model": None}
@@ -2123,14 +2450,24 @@ def cmd_add(args) -> None:
             plan = sources.resolve(name, published_version(plan) or "")    # the newest release
         try:
             if stopped is not None:                      # go on where it stopped
-                entries, extra = build_known(name, sid, stopped["plan"], args.workers, args.max_pages, True)
-                meta.update(extra)
+                say("  going on where it stopped")
+                how, plan_ = stopped.get("how"), stopped["plan"]
+                if how == "sphinx":                      # the Sphinx docs found for a name
+                    entries, extra = sphinx_docs(name, sid, plan_["url"], None, args, spec)
+                    meta.update(kind="sphinx", root=plan_["url"], **extra)
+                elif how == "local":                     # docs you downloaded yourself
+                    entries, extra = importers.build_local(name, sid, Path(plan_["src"]), args.workers, spec,
+                                                           args.max_pages)
+                    meta.update(extra)
+                else:                                    # docs we know, or a website
+                    entries, extra = build_known(name, sid, plan_, args.workers, args.max_pages, True, spec)
+                    meta.update(extra)
             elif override and LOCAL_PATH.match(override):  # docs you downloaded yourself
-                entries, extra = importers.build_local(name, sid, Path(override), args.workers)
+                entries, extra = importers.build_local(name, sid, Path(override), args.workers, spec, args.max_pages)
                 meta.update(extra)
             elif plan is not None:                       # a language or toolkit we know
                 say(f"  {plan.get('about', name)}")
-                entries, extra = build_known(name, sid, plan, args.workers, args.max_pages, not staged)
+                entries, extra = build_known(name, sid, plan, args.workers, args.max_pages, True, spec)
                 meta.update(extra)
             elif spec == "git-man":                      # the git manual pages on this Mac
                 entries = build_git(args.workers)
@@ -2166,7 +2503,7 @@ def cmd_add(args) -> None:
                                    f"(pages under that address)?", args.yes):
                         continue
                     plan = {"kind": "website", "root": override, "start": override, "prefix": override}
-                    entries, extra = build_known(name, sid, plan, args.workers, args.max_pages, not staged)
+                    entries, extra = build_known(name, sid, plan, args.workers, args.max_pages, True, spec)
                     meta.update(extra)
                     found = None
                 elif not found:
@@ -2202,11 +2539,7 @@ def cmd_add(args) -> None:
                         if not got.startswith(want.lstrip("v")):
                             say(f"  Note: you asked for {want}, these docs say version {got}.")
                     if kind == "sphinx":
-                        from docsearch.importers import Store
-                        store = Store(sid, root)
-                        store.reset()
-                        entries, extra = build_sphinx(name, root, data, args.workers, args.max_pages, store=store)
-                        store.finish(args.workers)
+                        entries, extra = sphinx_docs(name, sid, root, data, args, spec)
                     else:
                         entries, extra = build_mkdocs(name, root, data)
                     meta.update(kind=kind, root=root, **extra)
@@ -2220,7 +2553,7 @@ def cmd_add(args) -> None:
             say(f"  {LOCAL_TIP.format(name=name)}")
             continue
         if not entries and meta.get("partial"):
-            say(f"  stopped before a page was read. To start again: search add {spec}")
+            say(f"  stopped before a page was read. To start again: {continue_with(name)}")
             continue
         if not entries and meta.get("failures") and str(meta.get("root", "")).startswith("http"):
             entries, extra = try_alternatives(name, sid, meta, args)
@@ -2243,8 +2576,10 @@ def cmd_add(args) -> None:
             meta["nav"] = order.fetch_nav(meta)        # the docs' sidebar: their reading order
         save(sid, entries, meta)
         say(f"  saved {len(entries)} entries in {time.time() - t0:.0f} s")
-        if not args.no_embed:
-            embed_source(sid)
+        if meta.get("partial"):                    # stopped: no waiting for vectors now; they are made
+            say("  (found by name and words until it is complete; then by meaning too)")   # at the end
+        elif not args.no_embed:
+            make_vectors(sid, name)
         failed = missed_pages(meta)
         if failed and failed > 0.05 * (failed + stored_pages(sid)) and not getattr(args, "staged", False):
             say(f"  Note: {failed} pages could not be downloaded (the site may be busy or blocking); "
@@ -2458,6 +2793,15 @@ def read_config() -> list[tuple[str, bool]]:
 
 
 def cmd_sync(args) -> None:
+    global CONTINUE_WITH
+    CONTINUE_WITH = "search sync"                        # what goes on with a download that stops
+    try:
+        sync_all(args)
+    finally:
+        CONTINUE_WITH = ""
+
+
+def sync_all(args) -> None:
     if not CONFIG.exists():
         CONFIG.parent.mkdir(parents=True, exist_ok=True)
         if EXAMPLE.exists():
@@ -2511,7 +2855,13 @@ def cmd_sync(args) -> None:
 
 def partial_text(p: dict) -> str:
     """How far a download that stopped half way got: "9,812 of about 41,000 pages"."""
+    if p.get("step") == "vectors":
+        return "every page read, its vectors not made yet"
+    if p.get("step") == "images":
+        return "every page read, some images not stored yet"
     text = f"{p['pages']:,} of about {p['about']:,} pages" if p.get("about") else f"{p['pages']:,} pages so far"
+    if p.get("parts"):
+        text += f" in part {p['part']} of {p['parts']}"
     return text + (f", {p['again']:,} to try again" if p.get("again") else "")
 
 
@@ -2623,11 +2973,11 @@ def refresh(spec: str, sid: str, args) -> bool:
     say(f"  {sid}: downloading again; the copy you have stays in use until the new one is complete")
     d = build_staged(spec, args)
     if d is None:
-        say(f"  {sid}: the download failed; your copy is kept.")
+        say(f"  {sid}: {not_staged(spec, continue_with(name_of(spec)))}; your copy is kept.")
         return False
     why = incomplete(d, old)
     if why and not getattr(args, "accept_partial", False):
-        shutil.rmtree(STAGING, ignore_errors=True)
+        shutil.rmtree(d, ignore_errors=True)
         say(f"  {sid}: the new download looks incomplete ({why}); your copy is kept. "
             f"Try again later, or take it anyway with --accept-partial.")
         return False
@@ -2638,11 +2988,13 @@ def refresh(spec: str, sid: str, args) -> bool:
 
 
 def build_staged(spec: str, args) -> Path | None:
-    """Download and index `spec` into data/staging, leaving the index in use untouched.
-    Returns the finished folder, or None if that failed."""
+    """Download and index `spec` into data/staging/SID, leaving the index in use untouched.
+    A new copy that stopped half way stays there, and the same command goes on with it.
+    Returns the finished folder, or None if there is none (yet)."""
     global HOME
-    if STAGING.exists():
-        shutil.rmtree(STAGING)
+    d = STAGING / source_id(spec)
+    if d.exists() and not (d / "crawl" / "plan.json").exists() and not stopped_at_vectors(d):
+        shutil.rmtree(d)                                 # an old new copy, not a stopped one
     real, HOME = HOME, STAGING
     try:
         # yes: docs you have, so you said yes to them ("read it as a website?") when you added them
@@ -2650,8 +3002,28 @@ def build_staged(spec: str, args) -> Path | None:
                                    no_embed=False, yes=True, record=False, staged=True))
     finally:
         HOME = real
+    if not (d / "meta.json").exists() or not (d / "emb.npy").exists():
+        return None
+    return None if json.loads((d / "meta.json").read_text(encoding="utf-8")).get("partial") else d
+
+
+def stopped_at_vectors(d: Path) -> bool:
+    try:
+        return (json.loads((d / "meta.json").read_text(encoding="utf-8")).get("partial") or {}).get("step") == "vectors"
+    except (OSError, ValueError):
+        return False
+
+
+def name_of(spec: str) -> str:
+    return spec.removeprefix("pypi:").split("==")[0].split("=")[0]
+
+
+def not_staged(spec: str, again: str) -> str:
+    """Why there is no new copy of `spec` to put in place: it stopped (kept, to go on), or failed."""
     d = STAGING / source_id(spec)
-    return d if (d / "meta.json").exists() and (d / "emb.npy").exists() else None
+    if (d / "crawl" / "plan.json").exists() or stopped_at_vectors(d):
+        return f"the new copy stopped half way (kept: {again} goes on with it)"
+    return "the new copy could not be downloaded"
 
 
 def install_staged(d: Path, replace: list[str]) -> None:
@@ -2665,7 +3037,6 @@ def install_staged(d: Path, replace: list[str]) -> None:
     if target.exists():
         shutil.rmtree(target)
     os.replace(d, target)
-    shutil.rmtree(STAGING, ignore_errors=True)
 
 
 def cmd_save(args) -> None:
@@ -2776,6 +3147,7 @@ def cmd_setup(args) -> None:
 
 
 def cmd_upgrade(args) -> None:
+    global CONTINUE_WITH
     """search upgrade [NAME[==VERSION]...] and search downgrade NAME==VERSION: replace a
     package's docs with the newest (or the given) version. The new docs are downloaded
     first; the old ones are deleted only when the new ones are complete."""
@@ -2818,14 +3190,19 @@ def cmd_upgrade(args) -> None:
         else:
             build = f"{'pypi:' if forced or str(meta.get('spec', '')).startswith('pypi:') else ''}{name}=={want}"
             say(f"{name}: {old} -> {want}")
-        d = build_staged(build, args)
+        again = f"search {args.cmd} {spec}"
+        CONTINUE_WITH = again
+        try:
+            d = build_staged(build, args)
+        finally:
+            CONTINUE_WITH = ""
         if d is None:
-            say(f"  {name}: the new docs could not be downloaded; the old ones are kept.")
+            say(f"  {name}: {not_staged(build, again)}; the old ones are kept.")
             continue
         same = d.name in have
         why = incomplete(d, json.loads((HOME / d.name / "meta.json").read_text(encoding="utf-8")) if same else None)
         if why and not args.accept_partial:
-            shutil.rmtree(STAGING, ignore_errors=True)
+            shutil.rmtree(d, ignore_errors=True)
             say(f"  {name}: the new download looks incomplete ({why}); the old docs are kept. "
                 f"Try again later, or take it anyway with --accept-partial.")
             continue
@@ -3098,7 +3475,7 @@ def main(argv: list[str] | None = None) -> None:
     try:
         args.func(args)
     except KeyboardInterrupt:
-        say("\n  stopped.")
+        say("\n  stopped." + (" The same command goes on where it stopped." if args.cmd in ONLINE - {"setup", "save"} else ""))
         sys.exit(130)
     if args.cmd in ("add", "sync", "remove", "embed", "upgrade", "downgrade", "setup", "save"):
         index_changed()

@@ -3669,7 +3669,8 @@ def index_changed() -> None:
 def main(argv: list[str] | None = None) -> None:
     if os.name == "nt":                     # output piped to a file would be in the code page
         for stream in (sys.stdout, sys.stderr):
-            stream.reconfigure(encoding="utf-8", errors="replace")
+            if hasattr(stream, "reconfigure"):     # (not one a program put in its place: io.StringIO)
+                stream.reconfigure(encoding="utf-8", errors="replace")
     p = argparse.ArgumentParser(prog="search", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)

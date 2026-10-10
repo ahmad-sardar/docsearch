@@ -48,8 +48,9 @@ then open a new terminal). uv also gets python 3.11+ if you don't have it.
 git clone https://github.com/ahmad-sardar/docsearch ~/docsearch && cd ~/docsearch
 uv sync
 .venv/bin/search setup        # downloads the models, once
-rc=~/.$(basename "$SHELL")rc  # ~/.zshrc or ~/.bashrc
-echo "alias search='$HOME/docsearch/.venv/bin/search'" >> $rc && source $rc
+sh=$(basename "$SHELL"); rc=~/.${sh}rc     # ~/.zshrc or ~/.bashrc
+[ "$sh" = zsh ] && ng="noglob " || ng=""   # zsh: [ ] * ? in a search stay as typed
+echo "alias search='$ng$HOME/docsearch/.venv/bin/search'" >> $rc && source $rc
 ```
 
 on wsl (linux inside windows) the results open in your windows browser. wsl and windows
@@ -121,6 +122,11 @@ contents.
 - `"drop_duplicates"` in quotes: exact match only
 - `/^numpy\.linalg\./` between slashes: regex on names
 - `search -e drop_duplicates`: exact match from the terminal (the shell eats quotes)
+- symbols in a query, `( ) < > [ ] { } # $ ! * ? & | ; ~`: put it in single quotes,
+  `search python 'Path()'`, `search rust 'Vec<T>'`. without them the shell reads those
+  characters itself: it refuses the command (`Path()`), or changes the query before docsearch
+  sees it (`#define` disappears, `$PATH` becomes your path). or type it in the page:
+  `search python`, then type.
 - `search ai ...`: for questions and ideas. a small model on your computer reorders the
   top results. slower (~3 s on a mac), better for "how do i...". plain search is better
   for names.
@@ -162,6 +168,18 @@ search downgrade numpy==1.26   # an older one
 ```
 
 want two versions side by side? `numpy = ["latest", "1.26"]` in `packages.toml`.
+
+releases that are not out yet are versions too, where the docs site publishes them: nightly
+(also called dev or main), beta (rc) and alpha. the stable docs stay the default.
+
+```bash
+search add max==nightly             # next to the stable max docs
+search add rust==beta python==nightly numpy==nightly pandas==beta
+search upgrade max==nightly         # nightly docs change often: download them again
+```
+
+`search known` shows which ones each built-in site has. a plain `search upgrade` leaves
+nightly and beta copies as they are.
 
 ## saving tutorials
 

@@ -72,13 +72,24 @@ class SentenceEncoder:
         import mlx.nn as nn
         return nn.gelu(x)                                   # exact (erf) GELU, as BERT uses
 
-    def encode(self, texts: list[str], batch: int = 64, progress=None) -> np.ndarray:
-        """Unit-length vectors, one row per text. progress(n) is called after each n texts."""
+    def encode(self, texts: list[str], batch: int = 64, progress=None, part: int = 8192) -> np.ndarray:
+        """Unit-length vectors, one row per text. progress(n) is called after each n texts.
+
+        Similar lengths batch together. The texts are tokenized `part` at a time, twice: for
+        their lengths, then each part of that order as it comes (all 300,000 of a big site's
+        at once took 2 GB). The batches are the same as tokenizing them all at once."""
         mx = self.mx
-        encs = self.tok.encode_batch(texts)
-        order = np.argsort([len(e.ids) for e in encs])         # similar lengths batch together
+        lengths: list[int] = []
+        for k in range(0, len(texts), part):
+            lengths += [len(e.ids) for e in self.tok.encode_batch(texts[k:k + part])]
+        order = np.argsort(lengths)
+        part = max(batch, part // batch * batch)                # (a batch never spans two parts)
         out = np.zeros((len(texts), self.cfg["hidden_size"]), dtype=np.float32)
+        encs: dict = {}
         for k in range(0, len(texts), batch):
+            if k % part == 0:
+                these = order[k:k + part].tolist()
+                encs = dict(zip(these, self.tok.encode_batch([texts[i] for i in these])))
             idx = order[k:k + batch]
             L = max(len(encs[i].ids) for i in idx)
             if mx is None:                                      # numpy, on the processor

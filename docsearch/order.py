@@ -151,12 +151,13 @@ def page_order(sid: str, meta: dict) -> tuple[list[str], dict[str, dict[str, int
     pages_dir = cli.HOME / sid / "pages"
     root = meta.get("root", "")
     stored = set(stored_pages(pages_dir))
-    html: dict[str, str] = {}
+    found: dict[str, dict[str, int]] = {}
 
     def text(rel: str) -> str:
-        if rel not in html:
-            html[rel] = offline.load_page(pages_dir, rel) or ""
-        return html[rel]
+        """A page, read once: its anchors are kept, not its HTML (a big site's is gigabytes)."""
+        page = offline.load_page(pages_dir, rel) or ""
+        found[rel] = {m.group(1): m.start() for m in ID.finditer(page)}
+        return page
 
     def find(rel: str | None) -> str | None:
         """The stored page for an address: cuda-programming-guide/ -> .../index.html."""
@@ -197,7 +198,7 @@ def page_order(sid: str, meta: dict) -> tuple[list[str], dict[str, dict[str, int
             walk(find(s))
     for rel in sorted(stored - seen, key=lambda r: (r.count("/"), natural(r))):
         walk(rel)
-    anchors = {rel: {m.group(1): m.start() for m in ID.finditer(text(rel))} for rel in order}
+    anchors = {rel: found[rel] for rel in order}           # (each page in the order was read)
     return order, anchors
 
 
@@ -210,21 +211,22 @@ def reading_order(sid: str, count: int | None = None) -> np.ndarray:
         cached = np.load(cache, allow_pickle=False)
         if count is None or len(cached) == count:
             return cached
-    meta, entries = cli.load(sid)
+    meta = cli.load_meta(sid)
+    locations = [e.location for e in cli.iter_entries(sid, keep=1)]     # (their addresses only)
     order, anchors = page_order(sid, meta)
     rank = {rel: k for k, rel in enumerate(order)}
     root = meta.get("root", "")
-    others = sorted({r for e in entries if (r := rel_of(e.location, root) or e.location) not in rank}, key=natural)
+    others = sorted({r for loc in locations if (r := rel_of(loc, root) or loc) not in rank}, key=natural)
     rank.update({r: len(order) + k for k, r in enumerate(others)})
 
     def key(i: int):
-        e = entries[i]
-        rel = rel_of(e.location, root) or e.location
-        anchor = urllib.parse.unquote(e.location.partition("#")[2])
+        loc = locations[i]
+        rel = rel_of(loc, root) or loc
+        anchor = urllib.parse.unquote(loc.partition("#")[2])
         where = anchors.get(rel, {})
-        pos = -1 if not anchor else where.get(anchor, where.get(e.location.partition("#")[2], 1 << 30))
+        pos = -1 if not anchor else where.get(anchor, where.get(loc.partition("#")[2], 1 << 30))
         return rank[rel], pos, i
-    out = np.array(sorted(range(len(entries)), key=key), dtype=np.int32)
+    out = np.array(sorted(range(len(locations)), key=key), dtype=np.int32)
     try:
         np.save(cache, out)
     except OSError:

@@ -35,6 +35,7 @@ import contextlib
 import http.server
 import io
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -97,6 +98,17 @@ for _n in range(3):
         f'<img src="/pics/i{_n}-{k}.png" alt="{k}">' for k in range(10))))
     for _k in range(10):
         SITE[f"/pics/i{_n}-{_k}.png"] = (200, PNG)
+SITE["/lang/"] = (200, page("Library", '<a href="thread">thread</a> <a href="commit">commit</a> '
+                                       '<a href="fn/lt_to_tt">lt_to_tt</a>'))
+SITE["/lang/thread"] = (200, page("std::thread", '<a href="thread/id">id</a>'))       # "id": Indonesian too
+SITE["/lang/thread/id"] = (200, page("std::thread::id", ""))
+SITE["/lang/fn/lt_to_tt"] = (200, page("lt_to_tt", ""))                            # "lt": Lithuanian
+SITE["/lang/commit"] = (200, page("git-commit", "".join(f'<a href="commit/{v}">{v}</a> '   # git-scm's menu
+                                                         for v in ("fr", "pt_BR", "2.43.0", "2.42.1"))))
+for _v in ("fr", "pt_BR", "2.43.0", "2.42.1"):
+    SITE[f"/lang/commit/{_v}"] = (200, page(f"git-commit {_v}", ""))
+SITE["/nolist/"] = (200, page("No list", '<a href="a.html">a</a>'))       # its llms.txt is missing
+SITE["/nolist/a.html"] = (200, page("Listed nowhere", ""))
 SITE["/far/"] = (200, page("Far", "".join(f'<a href="p{n}.html">{n}</a> ' for n in range(40))))
 for _n in range(40):
     SITE[f"/far/p{_n}.html"] = (200, page(f"Far {_n}", ""))
@@ -196,12 +208,14 @@ def main() -> None:
     import urllib.robotparser
     SITE["/sm.xml"] = (200, f"<sitemapindex><sitemap><loc>{site}/sm2.xml</loc></sitemap></sitemapindex>".encode())
     SITE["/sm2.xml"] = (200, "<urlset>".encode() + "".join(
-        f"<url><loc>{site}/v26/docs/{p}</loc></url>" for p in ("a.html", "b.html", "c/", "x.html")).encode()
+        f"<url><loc>{site}/v26/docs/{p}</loc></url>" for p in ("a.html", "b.html", "c/", "x.html",
+                                                              "t/id", "m/fr", "m/de")).encode()
         + f"<url><loc>{site}/elsewhere.html</loc></url></urlset>".encode())
     rp = urllib.robotparser.RobotFileParser()
     rp.parse([f"Sitemap: {site}/sm.xml"])
-    count = importers.count_pages(rp, f"{site}/v26/docs/", lambda u: u.startswith(f"{site}/v26/docs/"))
-    check(count == 4, "the number of pages under the address, from the sitemap")
+    count = importers.count_pages(rp, f"{site}/v26/docs/", lambda u: u.startswith(f"{site}/v26/docs/"),
+                                  keep={"", "v26", "docs"})
+    check(count == 5, "the number of pages under the address, from the sitemap (a page's translations not counted)")
 
     cli.RETRY_WAITS = (0.05, 0.05, 0.05)          # (the test only: no long pauses between tries)
     said = io.StringIO()
@@ -211,6 +225,29 @@ def main() -> None:
                                                  "prefix": [count_site, f"{site}/flaky/"]}, 8, None, resumable=True)
     check("3 pages (1 failed)" in said.getvalue(), "pages are counted once (an app page is read, and failed)")
     check(cli.missed_pages(meta) == 0, "an app page is not a page another try may get")
+
+    lang = f"{site}/lang/"
+    found, _ = cli.build_known("lang", "lang", {"kind": "website", "root": lang, "start": lang, "prefix": lang}, 4, None)
+    read = {e.location.split("#")[0] for e in found}
+    check({f"{lang}thread/id", f"{lang}fn/lt_to_tt"} <= read and not any(p.startswith("/lang/commit/") for _, p in LOG),
+          "pages named like a language (id, lt_to_tt) are read; a page's menu of languages and versions is not")
+
+    nolist = f"{site}/nolist/"
+    found, _ = cli.build_known("nolist", "nolist", {"kind": "website", "root": nolist, "llms": f"{nolist}llms.txt",
+                                                    "prefix": nolist}, 4, None)
+    check({e.location.split("#")[0] for e in found} == {nolist, f"{nolist}a.html"},
+          "a site whose page list cannot be read is read from its own address")
+
+    said = io.StringIO()                          # a log, not a terminal: the bar's lines as it goes
+    with contextlib.redirect_stderr(said):
+        bar = cli.Progress("  pages", 1)
+        bar.so_far = True
+        for n in range(1, 601):                   # each page read finds one more
+            bar.update(1, total=n + 1)
+        bar.total, bar.so_far = bar.done, False   # all read
+        bar.close()
+    counts = [re.search(r"([\d,]+)/", line).group(1) for line in said.getvalue().splitlines()]
+    check(counts == ["1", "250", "500", "600"], f"in a log, a site's bar shows every 250 pages and the last ({counts})")
 
     down = f"{site}/down/"
     DROP.update(f"/down/p{n}.html" for n in range(12))

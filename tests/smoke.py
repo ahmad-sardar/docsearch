@@ -63,6 +63,18 @@ def get(port: int, path: str, **params) -> dict:
         return json.loads(r.read())
 
 
+# Queries with symbols, as docsearch gets them in single quotes (the shell would refuse or
+# change most of them otherwise): every one is the query's, never taken for a docs name
+SYMBOLS = ["Path()", "np.sum()", "f(x, y)", "arr[0]", "dict[str, int]", "pd.DataFrame.loc[]", "Vec<T>",
+           "HashMap<String, Vec<u8>>", "std::map<K,V>", "#include <vector>", "vec!", "!=", "&str", "a && b",
+           "*args", "**kwargs", "x?", "?.", "??", "std::array::operator[]", "operator<<", "operator()", "~vector",
+           "(+)", "( + )", "(|>)", "@property", "#define", "...", "=>", "->", "<=>", "a|b", "a;b", "$PATH",
+           "`ls`", "$(ls)", "it's", '"quote', "{a,b}", "^x", "%d", "100%", "--amend", "lambda x: x+1", "a > b",
+           "[x for x in y]", "re.sub(r'\\d+')", "C:\\path", '"drop_duplicates"', '"unclosed', '"', "/", "//",
+           "/[/", "/(/", "/^frames\\./", '"" ""', "\\", "%", "+", "&", "#", "?", "=", " ", "\u2028", "é",
+           "中文", "😀", "a" * 500, "print()", "Option<T>", "println!", "a*b", "std::vector::push_back",
+           "operator+=", "@dataclass", "${x}", "git commit --amend", "a < b", "foo@bar", "x = 1", "Path", "np.sum",
+           "/a/ /b/", "%%", "++", "\t"]
 ASKED: list[str] = []                           # what the local website was asked for
 
 
@@ -206,6 +218,12 @@ def main() -> None:
         check(get(port, "/api/info")["mode"] == "hybrid"
               and [it["name"] for it in get(port, "/api/search", q="kept without vectors", src="plain")["items"]][:1]
               == ["Plain notes"], "docs without vectors: found by their words; search by meaning stays on")
+        kept, answered = [], []
+        for q in SYMBOLS:
+            kept.append(cli.split_sources(["mini", *q.split()]) == (["mini"], " ".join(q.split())))
+            answered.append(isinstance(get(port, "/api/search", q=q, src="mini").get("items"), list))
+        check(all(kept) and all(answered), f"{len(SYMBOLS)} queries with symbols: each is the query, and answered "
+              f"({[q for q, k, a in zip(SYMBOLS, kept, answered) if not (k and a)]} not)")
         for q in ("Console output", "Notes"):
             hit = get(port, "/api/search", q=q, src="mini")["items"][0]
             entry = get(port, f"/api/entry/{hit['id']}")

@@ -17,6 +17,7 @@ Store, with its images (see pages.py). robots.txt is respected.
 from __future__ import annotations
 
 import concurrent.futures as cf
+import copy
 import gzip
 import json
 import os
@@ -154,9 +155,11 @@ def from_sitemap(url: str, prefixes: list[str], limit: int) -> list[str]:
     return out[:limit]
 
 
-def count_pages(rp, root: str, wanted, seconds: float = 15, most: int = 100) -> int | None:
+def count_pages(rp, root: str, wanted, seconds: float = 15, most: int = 100,
+                keep: set[str] | None = None) -> int | None:
     """How many pages a download will read, before it starts: the pages its sitemap lists
-    that `wanted(url)` keeps; the sitemap of the docs' own folder (AWS: one per guide), else
+    that `wanted(url)` keeps, without other languages' and versions' copies (`keep`: see
+    variants); the sitemap of the docs' own folder (AWS: one per guide), else
     those robots.txt names. None if there is none, or it lists over `most` sitemaps or takes
     more than `seconds` to read (learn.microsoft.com lists 5,412: not worth asking for; the
     count then grows as pages turn up)."""
@@ -190,6 +193,8 @@ def count_pages(rp, root: str, wanted, seconds: float = 15, most: int = 100) -> 
                     return None                          # too many to read for a count
         if todo:
             return None                                  # not read in time: no guess
+        if keep is not None:
+            found -= variants(found, keep)
         if found:
             return len(found)
     return None
@@ -250,7 +255,7 @@ NAV_RELS = {"contents", "toc", "index", "start", "first", "prev", "previous", "n
 
 
 def heading_text(h) -> str:
-    text = h.get_text(" ", strip=True).replace("\u200b", "").replace("\ufeff", "")
+    text = cli.shown_text(h).replace("\u200b", "").replace("\ufeff", "")
     return HEADING_JUNK.sub("", " ".join(text.split()))
 
 
@@ -259,11 +264,11 @@ def api_title(title: str, pattern: str | None) -> str | None:
     API page (its title matches the source's api pattern)."""
     if not pattern or not re.fullmatch(pattern, title):
         return None
-    name = title
+    name, op, symbol = title.partition("::operator")      # the operator itself as it is: <=>, [], ()
     for _ in range(5):
         name = re.sub(r"<[^<>]*>", "", name)             # template parameters
-    name = re.sub(r"\s*::\s*", "::", name)
-    return re.sub(r"\(\)$", "", name.strip()) or None
+    name = re.sub(r"\s*::\s*", "::", name) + op + symbol
+    return re.sub(r"(?<!operator)\(\)$", "", name.strip()) or None
 
 
 def section_parts(main):
@@ -350,7 +355,7 @@ def website_page(sid: str, name: str, root: str, pages_dir: Path, url: str, html
         pre = span.find_parent("pre")
         info = pre.find_next_sibling() if pre is not None else None
         doc = cli.html_to_md(str(info)) if info is not None and "info" in (info.get("class") or []) else ""
-        sig = " ".join((pre or span).get_text(" ", strip=True).split())
+        sig = cli.shown_text(pre or span)
         entries.append(Entry(title=f"{module}.{m.group(2)}", kind=OCAMLDOC_KIND[m.group(1)],
                              location=f"{url}#{span['id']}", text=f"```ocaml\n{sig}\n```\n\n{doc}"[:cli.PREVIEW_CHARS],
                              source=name))
@@ -376,7 +381,7 @@ def website_page(sid: str, name: str, root: str, pages_dir: Path, url: str, html
     if spec.get("options") and api:
         for dt in main.find_all("dt"):
             hid = dt.get("id") or (dt.find(attrs={"id": True}) or {}).get("id")
-            term = " ".join(dt.get_text(" ", strip=True).split())
+            term = cli.shown_text(dt)
             if not hid or not term.startswith("-"):
                 continue
             dd = dt.find_next_sibling("dd")
@@ -402,15 +407,25 @@ LANGUAGE = re.compile(r"(ar|bg|bn|ca|cs|da|de|el|es|et|fa|fi|fr|he|hi|hr|hu|id|i
 VERSION_SEGMENT = re.compile(r"v?\d+(\.\d+)+")
 
 
-def other_variant(url: str, keep: set[str]) -> bool:
-    """Is this page another language's or another version's copy of the docs (git-scm:
-    /docs/git-commit/fr, /docs/git-commit/2.43.0)? Only English and the version you asked
-    for are read, unless the starting address itself is in that language or version."""
-    for seg in urllib.parse.urlparse(url).path.split("/"):
-        low = seg.lower()
-        if low and low not in keep and (LANGUAGE.fullmatch(low) or VERSION_SEGMENT.fullmatch(low)):
-            return True
-    return False
+def variants(urls, keep: set[str]) -> set[str]:
+    """The addresses among `urls` that are another language's or another version's copy of a
+    page (git-scm: /docs/git-commit/fr, /docs/git-commit/2.43.0). Only English and the version
+    you asked for are read, unless the starting address itself is in that language or version
+    (`keep`: its path's segments). A segment naming a language or a version makes a copy only
+    when the same address is there with others in its place, as in a site's menu of them
+    (git-commit/es, /fr, /2.43.0, /2.42.1...). One alone is a page of its own: std::thread::id
+    at /cpp/thread/thread/id ("id" is also Indonesian), a function lt_to_tt, a Go package
+    crypto/internal/entropy/v1.0.0."""
+    places: dict[tuple, dict[str, set[str]]] = {}
+    for url in urls:
+        p = urllib.parse.urlparse(url)
+        segs = p.path.split("/")
+        for i, seg in enumerate(segs):
+            low = seg.lower()
+            if low and low not in keep and (LANGUAGE.fullmatch(low) or VERSION_SEGMENT.fullmatch(low)):
+                place = (p.netloc, tuple(segs[:i]), tuple(segs[i + 1:]))
+                places.setdefault(place, {}).setdefault(low, set()).add(url)
+    return {url for found in places.values() if len(found) > 1 for same in found.values() for url in same}
 
 
 def save_pages(name: str, sid: str, urls: list[str], workers: int, series: bool) -> tuple[list[Entry], cli.Failures]:
@@ -580,8 +595,8 @@ def finished_part(folder: Path | None, store: Store) -> tuple[list[Entry], dict]
         return None
     store.add_images(state.get("images") or {})
     store.root = state.get("root") or store.root
-    rows = [json.loads(ln) for ln in (folder / "entries.jsonl").read_text(encoding="utf-8").splitlines() if ln.strip()]
-    return [Entry(**{k: v for k, v in r.items() if k != "page"}) for r in rows], state["extra"]
+    return ([Entry(**{k: v for k, v in r.items() if k != "page"}) for r in cli.read_jsonl(folder / "entries.jsonl")],
+            state["extra"])
 
 
 def finish_part(folder: Path | None, extra: dict, images: dict, root: str | None = None) -> None:
@@ -640,6 +655,8 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
             say(f"  {len(listed)} pages listed in {spec['llms']}")
         if spec.get("sitemap"):
             listed += from_sitemap(spec["sitemap"], prefixes, cap)
+        if not starts and not listed:                      # its list could not be read: the docs'
+            starts = prefixes[:1] or [store.root]          # own address (and a failure, if it fails)
         todo = [[u, 0] for u in dict.fromkeys(starts + listed) if not exclude.search(u)
                 and (u in starts or not ALL_IN_ONE.search(u))]
         state = {"plan": spec, "todo": todo, "seen": [u for u, _ in todo], "read": [], "failures": {},
@@ -647,8 +664,7 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
                  "bytes": 0, "listed": bool(listed), "about": len(todo) if listed else None}
         if not listed and resume:                          # how many pages, before the first one
             state["about"] = count_pages(rp, store.root, lambda u: any(u.startswith(p) for p in prefixes)
-                                         and not exclude.search(u) and not ALL_IN_ONE.search(u)
-                                         and not other_variant(u, keep))
+                                         and not exclude.search(u) and not ALL_IN_ONE.search(u), keep=keep)
         if state["about"] and not listed:
             delay = cli.PACE.get(urllib.parse.urlparse(store.root).netloc, {}).get("floor")
             say(f"  about {state['about']:,} pages under {store.root} (its sitemap)"
@@ -811,11 +827,12 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
             elif resume and len(failed) >= GONE and len(failed) == len(taken) and all(k_ in AGAIN for k_ in kinds):
                 stop["why"] = "unreachable"                  # a whole round, and none answered
             fresh = []
+            copies = variants({link for link, _ in links}, keep)     # translations, old versions
             for link, d in links:
                 if (link not in seen and cli.safe_url(link) and not exclude.search(link)
                         and not link.endswith(".txt")        # llms.txt indexes, sources
                         and not ALL_IN_ONE.search(link)      # print copies of whole sections
-                        and not other_variant(link, keep)    # translations, old versions
+                        and link not in copies
                         and any(link.startswith(p) for p in prefixes)):
                     seen.add(link)
                     fresh.append([link, d])
@@ -847,8 +864,7 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
         cpu.shutdown(wait=not stopped, cancel_futures=stopped)
         bar.close()
         guard.__exit__(None, None, None)
-    entries = [Entry(**json.loads(ln)) for ln in
-               entries_file.read_text(encoding="utf-8").splitlines() if ln.strip()] if entries_file.exists() else []
+    entries = [Entry(**r) for r in cli.read_jsonl(entries_file)] if entries_file.exists() else []
     if stop["why"] and resume:
         why = (f"the site stopped answering ({cli.describe(kinds[-1])}); stopped" if stop["why"] == "unreachable"
                else "the connection is gone; stopped" if stop["why"] == "offline" else "stopped")
@@ -983,9 +999,22 @@ def rust_name(crate_root: str, url: str) -> tuple[str, str]:
     m = RUST_ITEM.search(rel)
     if m:
         path = [p for p in rel[:m.start()].split("/") if p]
-        return "::".join([crate, *path, m.group(2)]), RUST_KIND.get(m.group(1), m.group(1))
+        bang = "!" if m.group(1) == "macro" else ""         # vec! the macro, not std::vec the module
+        return "::".join([crate, *path, m.group(2)]) + bang, RUST_KIND.get(m.group(1), m.group(1))
     path = [p for p in rel.removesuffix("index.html").split("/") if p]
     return "::".join([crate, *path]), "module"
+
+
+def code_text(el) -> str:
+    """A signature as rustdoc shows it: Option<U>, not "Option <U>" (no space put between
+    the pieces of its markup), its where clause on a line of its own, without the ⓘ icon."""
+    el = copy.copy(el)                                    # (the page itself stays as it is)
+    for w in el.select(".where"):
+        w.insert_before("\n")
+        w.insert_after("\n")
+    for icon in el.select(".tooltip"):
+        icon.decompose()
+    return re.sub(r"[ \t]+\n", "\n", el.get_text("")).strip()
 
 
 def rustdoc_page(sid: str, name: str, root: str, pages_dir: Path, crate_root: str, url: str,
@@ -997,7 +1026,7 @@ def rustdoc_page(sid: str, name: str, root: str, pages_dir: Path, crate_root: st
     item, kind = rust_name(crate_root, url)
     decl = main.select_one("pre.item-decl, .item-decl")
     top = main.select_one("details.top-doc .docblock") or main.select_one(".docblock")
-    sig = f"```rust\n{decl.get_text(strip=False).strip()}\n```\n\n" if decl else ""
+    sig = f"```rust\n{code_text(decl)}\n```\n\n" if decl else ""
     entries = [Entry(title=item, kind=kind, location=url,
                      text=(sig + (cli.html_to_md(str(top)) if top else ""))[:cli.PREVIEW_CHARS], source=name)]
     # the type's own methods, and a trait's required/provided methods (not trait impls:
@@ -1006,12 +1035,16 @@ def rustdoc_page(sid: str, name: str, root: str, pages_dir: Path, crate_root: st
                                          "required-associated-types", "required-associated-consts")]:
         if box is None:
             continue
+        if box.name in ("h2", "h3"):                     # a trait's: the heading, its list after it
+            box = box.find_next_sibling()
+            if box is None:
+                continue
         for sec in box.find_all(id=RUST_MEMBER):
             m = RUST_MEMBER.match(sec["id"])
             head = sec.select_one(".code-header")
             det = sec.find_parent("details")
             doc = det.select_one(".docblock") if det is not None else None
-            text = (f"```rust\n{head.get_text(' ', strip=True) if head else m.group(2)}\n```\n\n"
+            text = (f"```rust\n{code_text(head) if head else m.group(2)}\n```\n\n"
                     + (cli.html_to_md(str(doc)) if doc else ""))
             entries.append(Entry(title=f"{item}::{m.group(2)}", kind="method" if "method" in m.group(1) else
                                  m.group(1).replace("associated", "associated "),

@@ -20,6 +20,8 @@ Search (opens the browser: results on the left, the documentation as real HTML):
     search numpy svd                 # svd, in numpy
     search pandas numpy mean         # several packages
     search sum of elements           # no package named: all packages
+    search python 'Path()'           # symbols ( ) < > [ ] # $ ! * ? & | ; ~: in single quotes
+                                     # (else the shell reads them itself), or type in the page
     search stop                      # stop the background server (it starts by itself)
 
 In the page: type to search, Up/Down to choose, Enter for the full page (an offline
@@ -102,7 +104,7 @@ CHUNK_CHARS = 2500    # long man page sections are cut into parts of about this 
 SKIP_HOSTS = {"github.com", "gitlab.com", "bitbucket.org", "pypi.org", "www.github.com"}
 
 
-@dataclass
+@dataclass(slots=True)
 class Entry:
     title: str      # what spelling search matches against
     kind: str       # function, class, page, section, man, ...
@@ -139,7 +141,7 @@ class Progress:
     def __init__(self, what: str, total: int | None = None, unit: str = "", note=None,
                  quiet: bool = False, start: int = 0) -> None:
         self.what, self.total, self.unit, self.note, self.quiet = what, total, unit, note, quiet
-        self.done, self.t0, self.drawn, self.width, self.step = start, time.time(), 0.0, 0, -1
+        self.done, self.t0, self.drawn, self.width, self.shown = start, time.time(), 0.0, 0, None
         self.start, self.guess, self.so_far = start, False, False
         self.tty = sys.stderr.isatty()
         if not quiet:
@@ -160,10 +162,10 @@ class Progress:
         if self.tty:
             if time.time() - self.drawn >= 0.1:
                 self.draw()
-        else:
-            step = int(10 * self.done / self.total) if self.total else self.done // 250
-            if step > self.step:
-                self.step = step
+        else:                                # a total found so far is no measure: every 250
+            every = self.total / 10 if self.total and not self.so_far else 250
+            if self.shown is None or self.done // every > self.shown // every:
+                self.shown = self.done
                 print(self.text(), file=sys.stderr, flush=True)
 
     def amount(self, n: float) -> str:
@@ -207,7 +209,7 @@ class Progress:
             self.draw()
             sys.stderr.write("\n")
             sys.stderr.flush()
-        elif self.step < (10 if self.total else self.done // 250):
+        elif self.shown != self.done:            # the last count, once
             print(self.text(), file=sys.stderr, flush=True)
 
     @staticmethod
@@ -722,7 +724,7 @@ def read_listed(keys: list[str], urls: dict[str, str], fetch, cut, workers: int,
             rows.close()
     if rows is None:
         return [e for k in keys for e in by_key.get(k, [])], None, images
-    lines = [json.loads(ln) for ln in entries_file.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    lines = list(read_jsonl(entries_file))
     lines.sort(key=lambda r: order.get(r["page"], len(order)))       # in page order, as one download gives
     entries = [Entry(**{k: v for k, v in r.items() if k != "page"}) for r in lines]
     if any(k not in done for k in keys) and (stop["why"] or unread or len(now) < len(left)):
@@ -730,7 +732,7 @@ def read_listed(keys: list[str], urls: dict[str, str], fetch, cut, workers: int,
         say(f"  {why}: {len(done):,} of {len(keys):,} pages read. They are {kept()}; "
             f"to continue: {continue_with(name)}")
         return entries, {"pages": len(done), "about": len(keys)}, images
-    write_atomic(entries_file, "".join(json.dumps(r) + "\n" for r in lines).encode())   # (in order)
+    write_lines(entries_file, (json.dumps(r) + "\n" for r in lines), sep="")            # (in order)
     return entries, None, images
 
 
@@ -750,6 +752,41 @@ def clean(s: str) -> str:
 
 
 # --------------------------------------------------------------------------- HTML -> Markdown
+
+BLOCKS = {"address", "article", "aside", "blockquote", "br", "dd", "details", "div", "dl", "dt", "figcaption",
+          "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main", "nav", "ol",
+          "p", "pre", "section", "summary", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "ul"}
+
+
+def shown_text(el) -> str:
+    """An element's text as a browser shows it, on one line: pieces of inline markup (a
+    link, a span) joined as they are; a space only where the text has one, or a block (a
+    div, a p, a br) starts or ends. std::array<T,N>::operator[], fn push(&mut self), not
+    "std::array<T,N>:: operator[]", "fn push (&mut self)": a space between every piece of
+    markup is wrong in code, in every language."""
+    from bs4 import NavigableString
+    from bs4.element import Comment, Declaration, Doctype, ProcessingInstruction
+    out: list[str] = []
+
+    def walk(node) -> None:
+        for child in node.children:
+            if isinstance(child, NavigableString):
+                if not isinstance(child, (Comment, Declaration, Doctype, ProcessingInstruction)):
+                    out.append(str(child))
+            elif child.name in BLOCKS:
+                out.append(" ")
+                walk(child)
+                out.append(" ")
+            else:
+                walk(child)
+    if isinstance(el, NavigableString):
+        return " ".join(str(el).split())
+    try:
+        walk(el)
+    except RecursionError:                               # (thousands of levels: words apart, at least)
+        return " ".join(el.get_text(" ").split())
+    return " ".join("".join(out).split())
+
 
 def make_soup(html: bytes):
     from bs4 import BeautifulSoup
@@ -839,7 +876,7 @@ def tidy_definitions(soup) -> None:
                 dt.name = "pre"
                 dt.string = text
             elif field_list:
-                text = dt.get_text(" ", strip=True).rstrip(":")
+                text = shown_text(dt).rstrip(":")
                 dt.clear()
                 dt.name = "h4"
                 dt.string = text
@@ -1302,24 +1339,31 @@ VERSION_SEGMENT = re.compile(r"^(stable|latest|dev|devdocs|main|master|current|v
 
 
 def find_version(root: str, want: str) -> tuple[str, str, bytes] | None:
-    """Docs of another version usually sit next to the current ones: numpy.org/doc/stable/
-    -> numpy.org/doc/2.1/, foo.readthedocs.io/en/latest/ -> foo.readthedocs.io/en/v2.1/.
+    """Docs of another version, or of a release not out yet (nightly, beta, alpha: see
+    sources.CHANNELS), of the docs at `root`. First where the site's own list of its versions
+    says (switcher_urls: numpy, pandas, scipy...); else where they usually sit, next to the
+    current ones: numpy.org/doc/stable/ -> numpy.org/doc/2.1/, docs.pytorch.org/docs/stable/
+    -> .../main/ (nightly), foo.readthedocs.io/en/latest/ -> foo.readthedocs.io/en/v2.1/.
     Swap the version part of the URL and check that docs are there."""
+    from docsearch import sources
+    ch = sources.channel(want)
     v = want.lstrip("v")
     short = ".".join(v.split(".")[:2])
     variants = list(dict.fromkeys([v, "v" + v, short, "v" + short, v + ".x", short + ".x"]))
+    if ch:                                           # their names: dev, main, devdocs, rc...
+        variants = list(sources.CHANNELS[ch]) + (["latest"] if ch == "nightly" and ".readthedocs." in root else [])
     u = urllib.parse.urlparse(root)
     segs = u.path.strip("/").split("/")
-    roots = []
+    roots = switcher_urls(root, want)
     for k, seg in enumerate(segs):
         if VERSION_SEGMENT.match(seg):
             for var in variants:
                 path = "/".join(segs[:k] + [var] + segs[k + 1:])
                 roots.append(f"{u.scheme}://{u.netloc}/{path}/")
-    for r in roots:
+    for r in dict.fromkeys(roots):
         for fname, kind in (("objects.inv", "sphinx"), ("search/search_index.json", "mkdocs")):
-            try:
-                data, final = http_get(r + fname, timeout=10)
+            try:                                 # (once: a guessed address that is refused does
+                data, final = http_get_once(r + fname, timeout=10)     # not mean the site is)
             except Exception:  # noqa: BLE001
                 continue
             if kind == "sphinx" and data.startswith(b"# Sphinx inventory version 2"):
@@ -1327,6 +1371,36 @@ def find_version(root: str, want: str) -> tuple[str, str, bytes] | None:
             if kind == "mkdocs" and data.lstrip().startswith(b"{"):
                 return kind, final[: -len(fname)], data
     return None
+
+
+def switcher_urls(root: str, want: str) -> list[str]:
+    """Where a docs site's version switcher says the docs of `want` are: the list of versions
+    of PyData-themed docs (DOCUMENTATION_OPTIONS.theme_switcher_json_url: numpy's
+    [{"name": "dev", "version": "devdocs", "url": "https://numpy.org/devdocs/"}, ...])."""
+    try:
+        html = http_get_once(root, timeout=15)[0].decode("utf-8", "replace")
+        m = re.search(r"""theme_switcher_json_url['"]?\s*[:=]\s*['"]([^'"]+\.json)""", html)
+        items = json.loads(http_get_once(urllib.parse.urljoin(root, m.group(1)), timeout=15)[0]) if m else []
+    except Exception:  # noqa: BLE001 - no list: the usual places only
+        return []
+    return [d["url"] if d["url"].endswith("/") else d["url"] + "/" for d in items if isinstance(items, list)
+            and isinstance(d, dict) and isinstance(d.get("url"), str) and safe_url(d["url"]) and switcher_match(d, want)]
+
+
+def switcher_match(item: dict, want: str) -> bool:
+    """Is this entry of a version switcher the version (or channel) asked for?"""
+    from docsearch import sources
+    label = f"{item.get('name', '')} {item.get('version', '')}".lower()
+    ch = sources.channel(want)
+    if ch == "nightly":                              # "dev", "3.12 (dev)", "1.10.dev0", "development"
+        return "stable" not in label and bool(re.search(r"\b(dev|development|devdocs|main|master|nightly|latest)\b|\.dev", label))
+    if ch == "beta":                                 # "3.1 (rc)", "2.0.0b1", "beta"
+        return bool(re.search(r"\b(beta|rc|pre|preview|prerelease)\b|\d(b|rc)\d", label))
+    if ch == "alpha":
+        return bool(re.search(r"\balpha\b|\da\d", label))
+    v = want.lower().lstrip("v")                     # a number: 2.4, or 1.16 for 1.16.2 (the first listed)
+    names = {str(item.get("version", "")).lower().lstrip("v"), str(item.get("name", "")).lower().split(" ")[0].lstrip("v")}
+    return any(x == v or x.startswith(v + ".") for x in names if x)
 
 
 def hosted_versions(root: str) -> list[str]:
@@ -1551,14 +1625,27 @@ def build_man(page: str, source: str) -> list[Entry]:
 
 def source_id(spec: str) -> str:
     """The folder name of a source: numpy; numpy==1.26 -> numpy@1.26 (a second version, kept
-    next to the latest one)."""
+    next to the latest one); a folder name is its own (numpy@1.26: the search page's, and a
+    second version's entries say which folder they are in)."""
+    sid = folder_name(spec)
+    if sid is None:
+        die(f"'{spec}' is not a usable source name.")
+    return sid
+
+
+def folder_name(spec: str) -> str | None:
+    """source_id, or None for what cannot name a source (=>, (+), ...: in a search, the query's)."""
     name, _, version = spec.partition("==")
     name = name.split("=", 1)[0].removeprefix("pypi:")
+    if not version and "@" in name:
+        name, _, version = name.partition("@")
     sid = re.sub(r"[^\w.-]+", "-", name).strip("-.").lower()
     if version and version not in ("latest", "stable"):
+        from docsearch.sources import channel
+        version = channel(version) or version            # numpy==dev and numpy==nightly: one copy
         sid += "@" + re.sub(r"[^\w.-]+", "-", version).strip("-.").lower()
     if not sid or sid.startswith("."):      # never "..": that would be a folder outside the cache
-        die(f"'{spec}' is not a usable source name.")
+        return None
     return sid
 
 
@@ -1584,6 +1671,39 @@ def write_atomic(path: Path, data: bytes) -> None:
     os.replace(tmp, path)
 
 
+def write_lines(path: Path, lines, first: str = "", sep: str = "\n", last: str = "") -> None:
+    """write_atomic, a line at a time: a big site's entries are never one string in memory."""
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        f.write(first)
+        for k, line in enumerate(lines):
+            f.write(sep + line if k else line)
+        f.write(last)
+    os.replace(tmp, path)
+
+
+def read_jsonl(path: Path):
+    """The JSON values of a file of one per line, a line at a time."""
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                yield json.loads(line)
+
+
+def read_entries(path: Path):
+    """The entries of an entries.json, a line at a time: save writes the array one entry per
+    line (a big site's would be gigabytes as one parse). One written whole (before) is read whole."""
+    with open(path, encoding="utf-8") as f:
+        first = f.readline()
+        if first.strip() != "[":
+            yield from json.loads(first + f.read())
+            return
+        for line in f:
+            line = line.strip()
+            if line and line != "]":
+                yield json.loads(line.removesuffix(","))
+
+
 CHANGED = False                      # did this command change any index?
 
 
@@ -1594,23 +1714,32 @@ def save(sid: str, entries: list[Entry], meta: dict) -> None:
     private_dir(d)
     for e in entries:
         e.title, e.kind, e.location, e.text = clean(e.title), clean(e.kind), clean(e.location), clean(e.text)
-    write_atomic(d / "entries.json", json.dumps([asdict(e) for e in entries]).encode())
+    write_lines(d / "entries.json", (json.dumps(asdict(e)) for e in entries), "[\n", ",\n", "\n]\n")
     write_atomic(d / "meta.json", json.dumps(meta, indent=2).encode())
     emb = d / "emb.npy"
     if emb.exists():
         emb.unlink()
 
 
-def load(sid: str) -> tuple[dict, list[Entry]]:
+def load(sid: str, keep: int | None = None) -> tuple[dict, list[Entry]]:
+    """A source's settings and entries; `keep`: only the start of each text (a running search,
+    which reads the rest from disk)."""
+    return load_meta(sid), list(iter_entries(sid, keep))
+
+
+def load_meta(sid: str) -> dict:
     d = source_dir(sid)
     if d.exists():
         private_dir(d)
     if not (d / "entries.json").exists():
         die(f"'{sid}' is not indexed yet. Run: search add {sid}")
-    meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
-    entries = [Entry(**{k: clean(e[k]) for k in ("title", "kind", "location", "text", "source")})
-               for e in json.loads((d / "entries.json").read_text(encoding="utf-8"))]
-    return meta, entries
+    return json.loads((d / "meta.json").read_text(encoding="utf-8"))
+
+
+def iter_entries(sid: str, keep: int | None = None):
+    for e in read_entries(source_dir(sid) / "entries.json"):
+        yield Entry(clean(e["title"]), clean(e["kind"]), clean(e["location"]),
+                    clean(e["text"])[:keep] if keep else clean(e["text"]), clean(e["source"]))
 
 
 # --------------------------------------------------------------------------- embeddings
@@ -1772,8 +1901,8 @@ def embed_source(sid: str) -> None:
     global CHANGED
     CHANGED = True
     import numpy as np
-    meta, entries = load(sid)
-    texts = [f"{e.title}\n{plain(e.text)[:EMBED_CHARS]}" for e in entries]
+    meta = load_meta(sid)
+    texts = [f"{e.title}\n{plain(e.text)[:EMBED_CHARS]}" for e in iter_entries(sid)]   # (a line at a time)
     model = get_model(download=True)
     with Progress(f"  vectors for {sid}", len(texts)) as bar:
         vecs = model.encode(texts, batch=64, progress=bar.update)
@@ -1871,21 +2000,13 @@ class FileSlices:
             return f.read(part.stop - part.start)
 
 
-def tails(sid: str, entries: list[Entry]):
+def tails(sid: str):
     """What a running search does not keep in memory of each text (from KEEP_CHARS on), in
-    one file read by position (tails.bin, offsets in tails.npy): reading one entry's whole
-    text then costs microseconds. Built once per index, from the full texts in `entries`."""
+    one file read by position (tails.bin, offsets in tails.npy; see make_search_caches):
+    reading one entry's whole text then costs microseconds."""
     import numpy as np
-    d = HOME / sid
-    data_f, offs_f, src = d / "tails.bin", d / "tails.npy", d / "entries.json"
-    if not (offs_f.exists() and data_f.exists() and offs_f.stat().st_mtime >= src.stat().st_mtime
-            and len(np.load(offs_f, mmap_mode="r")) == len(entries) + 1):
-        parts = [e.text[KEEP_CHARS:].encode("utf-8") for e in entries]
-        write_atomic(data_f, b"".join(parts))
-        tmp = d / "tails.tmp.npy"
-        np.save(tmp, np.cumsum([0] + [len(x) for x in parts]).astype(np.int64))
-        os.replace(tmp, offs_f)
-    offs = np.load(offs_f)
+    data_f = HOME / sid / "tails.bin"
+    offs = np.load(HOME / sid / "tails.npy")
     if not data_f.stat().st_size:
         return offs, np.zeros(0, np.uint8)
     return offs, (FileSlices(data_f) if os.name == "nt" else np.memmap(data_f, dtype=np.uint8, mode="r"))
@@ -1922,40 +2043,93 @@ def phrase_regex(p: str) -> re.Pattern:
     return re.compile(body, 0 if any(c.isupper() for c in p) else re.I)
 
 
-def keyword_postings(sid: str, entries: list[Entry]):
-    """Inverted index of one source: word -> (entry ids, counts). Built once, then cached."""
+def keyword_postings(sid: str):
+    """Inverted index of one source: its words, and for word k the entries that have it and how
+    often (ids, tfs from starts[k] to starts[k + 1]); each entry's length in words (bm25.npz,
+    see make_search_caches)."""
+    import numpy as np
+    with np.load(HOME / sid / "bm25.npz", allow_pickle=False) as z:     # plain arrays only, no code
+        return z["words"].tolist(), z["starts"], z["ids"], z["tfs"], z["lengths"]
+
+
+def make_search_caches(sid: str) -> None:
+    """What a running search needs of the whole texts, made once, in one pass that reads an
+    entry at a time (a big site's whole texts are gigabytes): the keyword index (bm25.npz) and
+    the texts past KEEP_CHARS (tails.bin, where each starts in tails.npy)."""
+    from array import array
     from collections import Counter
 
     import numpy as np
-    f, src = HOME / sid / "bm25.npz", HOME / sid / "entries.json"
-    (HOME / sid / "bm25.pkl").unlink(missing_ok=True)      # old format: pickle can run code
-    if f.exists() and f.stat().st_mtime >= src.stat().st_mtime:
-        with np.load(f, allow_pickle=False) as z:          # plain arrays only, no code
-            words, starts = z["words"].tolist(), z["starts"]
-            ids, tfs, lengths = z["ids"], z["tfs"], z["lengths"]
-        return ({w: (ids[starts[k]:starts[k + 1]], tfs[starts[k]:starts[k + 1]])
-                 for k, w in enumerate(words)}, lengths)
-    say(f"Building the keyword index for '{sid}' (only once)...")
-    post: dict[str, tuple[list[int], list[int]]] = {}
-    lengths = []
-    for i, e in enumerate(entries):
-        toks = tokens(e.title) * TITLE_WEIGHT + tokens(plain(e.text))
-        lengths.append(len(toks))
-        for t, c in Counter(toks).items():
-            p = post.setdefault(t, ([], []))
-            p[0].append(i)
-            p[1].append(c)
-    data = ({t: (np.array(a, np.int32), np.array(c, np.float32)) for t, (a, c) in post.items()},
-            np.array(lengths, np.float32))
-    words = list(data[0])
-    starts = np.cumsum([0] + [len(data[0][w][0]) for w in words])
-    tmp = f.with_name("bm25.tmp.npz")
-    np.savez(tmp, words=np.array(words, dtype=str), starts=starts,
-             ids=np.concatenate([data[0][w][0] for w in words]) if words else np.zeros(0, np.int32),
-             tfs=np.concatenate([data[0][w][1] for w in words]) if words else np.zeros(0, np.float32),
-             lengths=data[1])
-    os.replace(tmp, f)
-    return data
+    d = HOME / sid
+    (d / "bm25.pkl").unlink(missing_ok=True)               # old format: pickle can run code
+    say(f"  keyword index for {sid}...")
+    post: dict[str, tuple[array, array]] = {}              # (compact arrays: a big site has
+    lengths = array("f")                                    # tens of millions of pairs)
+    ends, at = [0], 0
+    with open(d / "tails.bin.tmp", "wb") as out:
+        for i, e in enumerate(iter_entries(sid)):
+            toks = tokens(e.title) * TITLE_WEIGHT + tokens(plain(e.text))
+            lengths.append(len(toks))
+            for t, c in Counter(toks).items():
+                p = post.setdefault(t, (array("i"), array("f")))
+                p[0].append(i)
+                p[1].append(c)
+            rest = e.text[KEEP_CHARS:].encode("utf-8")
+            out.write(rest)
+            at += len(rest)
+            ends.append(at)
+    os.replace(d / "tails.bin.tmp", d / "tails.bin")
+    np.save(d / "tails.tmp.npy", np.array(ends, np.int64))
+    os.replace(d / "tails.tmp.npy", d / "tails.npy")
+    words = list(post)
+    starts = np.cumsum([0] + [len(post[w][0]) for w in words])
+    ids = np.concatenate([np.frombuffer(post[w][0], np.int32) for w in words]) if words else np.zeros(0, np.int32)
+    tfs = np.concatenate([np.frombuffer(post[w][1], np.float32) for w in words]) if words else np.zeros(0, np.float32)
+    del post
+    np.savez(d / "bm25.tmp.npz", words=np.array(words, dtype=str), starts=starts, ids=ids, tfs=tfs,
+             lengths=np.frombuffer(lengths, np.float32))
+    os.replace(d / "bm25.tmp.npz", d / "bm25.npz")
+
+
+def fresh(sid: str, cache: Path) -> bool:
+    """Is this cache of a source made from its entries as they are now?"""
+    src = HOME / sid / "entries.json"
+    return cache.exists() and cache.stat().st_mtime >= src.stat().st_mtime
+
+
+class Postings:
+    """Word -> (entry ids, counts) over all the chosen sources: each source's arrays as they
+    are (keyword_postings), joined only for the words a search has. (One merged copy of every
+    word's arrays took 0.5 GB more for a site of 50,000 pages.)"""
+
+    def __init__(self) -> None:
+        self.parts: list[tuple[dict[str, int], object, object, object, int]] = []
+
+    def add(self, words: list[str], starts, ids, tfs, offset: int) -> None:
+        self.parts.append(({w: k for k, w in enumerate(words)}, starts, ids, tfs, offset))
+
+    def __contains__(self, t: str) -> bool:
+        return any(t in where for where, *_ in self.parts)
+
+    def __getitem__(self, t: str):
+        import numpy as np
+        got = [(ids[starts[k]:starts[k + 1]] + off, tfs[starts[k]:starts[k + 1]])
+               for where, starts, ids, tfs, off in self.parts if (k := where.get(t)) is not None]
+        if not got:
+            raise KeyError(t)
+        return np.concatenate([a for a, _ in got]), np.concatenate([b for _, b in got])
+
+    def df(self) -> dict[str, int]:
+        """How many entries have each word (in the order the words first come)."""
+        out: dict[str, int] = {}
+        for where, starts, *_ in self.parts:
+            for w, k in where.items():
+                out[w] = out.get(w, 0) + int(starts[k + 1] - starts[k])
+        return out
+
+    def items(self):
+        for t in self.df():
+            yield t, self[t]
 
 
 PAGE_KINDS = {"doc", "label", "page", "section", "man", "help", "usage", "term"}   # prose, not API
@@ -1998,6 +2172,35 @@ def snippet(e: Entry, q: str, width: int = 170) -> str:
 
 # --------------------------------------------------------------------------- the search index
 
+def search_caches(sid: str) -> bool:
+    """Are the caches a running search makes from the whole texts (keyword index, the texts'
+    ends) made from the entries as they are now? Then only the texts' starts need reading."""
+    return all(fresh(sid, HOME / sid / f) for f in ("bm25.npz", "tails.npy", "tails.bin"))
+
+
+def caches_fit(sid: str, count: int) -> bool:
+    """Do those caches have one row per entry (not a copy of other entries' with a later date)?"""
+    import numpy as np
+    with np.load(HOME / sid / "bm25.npz", allow_pickle=False) as z:
+        rows = len(z["lengths"])
+    return rows == count and len(np.load(HOME / sid / "tails.npy", mmap_mode="r")) == count + 1
+
+
+def joined(vecs: list, dim: int, dtype):
+    """The sources' vectors as one matrix, filled a source at a time from the files (`vecs`:
+    each source's, or how many entries one without them has: zeros), in one copy."""
+    import numpy as np
+    out = np.zeros((sum(v if isinstance(v, int) else len(v) for v in vecs), dim), dtype)
+    at = 0
+    for v in vecs:
+        n = v if isinstance(v, int) else len(v)
+        if not isinstance(v, int):
+            for k in range(0, n, 65536):                 # (a slice at a time: float32 -> dtype)
+                out[at + k:at + min(n, k + 65536)] = v[k:k + 65536]
+        at += n
+    return out
+
+
 class Index:
     def __init__(self, specs: list[str], mode: str):
         import numpy as np
@@ -2006,20 +2209,27 @@ class Index:
         self.cut: set[int] = set()           # entries whose text is shortened in memory
         self.tails: list = []                # per source: (first entry, offsets, the rest on disk)
         self.pool = cf.ThreadPoolExecutor(max_workers=1)    # the spelling ranker, see search()
-        vecs, posts, lens = [], [], []
+        vecs, firsts, lens = [], [], []
+        self.post = Postings()               # one keyword index over the chosen sources
         self.labels: list[str] = []          # "numpy 2.5": the name and the docs version
         for spec in specs:
             sid = source_id(spec)
-            meta, ents = load(sid)
+            # memory: keep the start of each text (summaries, snippets); the rest is read from
+            # disk if needed. Whole texts are read only to make the caches, once.
+            meta, ents = load(sid, KEEP_CHARS)
+            if not (search_caches(sid) and caches_fit(sid, len(ents))):
+                make_search_caches(sid)                  # from the whole texts, once
+            first = len(self.entries)
             self.labels.append(f"{spec} {meta.get('version') or ''}".strip())
-            post, ln = keyword_postings(sid, ents)       # (built from the full text, cached)
-            posts.append((post, len(self.entries)))
+            words, starts, ids, tfs, ln = keyword_postings(sid)
+            self.post.add(words, starts, ids, tfs, first)
+            firsts.append(first)
             lens.append(ln)
-            self.tails.append((len(self.entries), *tails(sid, ents)))
-            for e in ents:          # memory: keep the start of each text (summaries, snippets);
-                if len(e.text) > KEEP_CHARS:              # the rest is read from disk if needed
-                    self.cut.add(len(self.entries))
-                    e.text = e.text[:KEEP_CHARS]
+            offs, rest = tails(sid)
+            self.tails.append((first, offs, rest))
+            self.cut.update((np.flatnonzero(np.diff(offs) > 0) + first).tolist())   # (more on disk)
+            for e in ents:
+                e.text = e.text[:KEEP_CHARS]
                 self.entries.append(e)
             if mode != "spell":
                 f = HOME / sid / "emb.npy"
@@ -2031,16 +2241,9 @@ class Index:
                 if meta.get("model") != MODEL_NAME:
                     die(f"'{sid}' was embedded with {meta.get('model')}, not {MODEL_NAME}. "
                         f"Run: search embed {sid}")
-                vecs.append(np.load(f, allow_pickle=False))
+                vecs.append(np.load(f, mmap_mode="r", allow_pickle=False))   # (read below, once)
         if not self.entries:
             die("the chosen sources have no entries.")
-        # One keyword index for all chosen sources: shift each source's ids by its offset.
-        merged: dict[str, list] = {}
-        for post, off in posts:
-            for t, (ids, tf) in post.items():
-                merged.setdefault(t, []).append((ids + off, tf))
-        self.post = {t: (np.concatenate([a for a, _ in v]), np.concatenate([b for _, b in v]))
-                     for t, v in merged.items()}
         self.dl = np.concatenate(lens)
         self.avgdl = float(self.dl.mean()) or 1.0
         from rapidfuzz.utils import default_process
@@ -2061,16 +2264,21 @@ class Index:
             parts = re.split(r"\.|::", api_name(e.title).lower())     # numpy.sum, Vec::push
             self.full_names.add(".".join(parts))
             for k in range(len(parts)):
-                self.names.setdefault(".".join(parts[k:]), []).append(i)
+                key = ".".join(parts[k:])
+                self.names.setdefault(key, []).append(i)
+                if key.endswith("!"):                        # a Rust macro: println! and println
+                    self.names.setdefault(key[:-1], []).append(i)
+                if " " in key:                               # git commit --amend, operator new: as a
+                    self.names.setdefault(re.sub(r"\s+", "_", key), []).append(i)   # query has them
         self.keys_by_len: dict[int, list[str]] = {}      # API name keys by length (rank_typo)
         for k in self.names:
             self.keys_by_len.setdefault(len(k), []).append(k)
         # The list shown before you type: every entry, in the order the docs are read
         # (table of contents, then each page top to bottom; see order.py).
         from docsearch import order
-        ends = [off for _, off in posts[1:]] + [len(self.entries)]
+        ends = firsts[1:] + [len(self.entries)]
         browse = np.concatenate([order.reading_order(source_id(spec), end - off) + off
-                                 for spec, (_, off), end in zip(specs, posts, ends)]).tolist()
+                                 for spec, off, end in zip(specs, firsts, ends)]).tolist()
         self.browse, prev = [], None             # Sphinx keeps a page and its first heading under
         for i in browse:                         # one title: list it once
             key = (re.sub(r" \((page|section)\)$", "", self.entries[i].title), self.entries[i].location.split("#")[0])
@@ -2078,7 +2286,7 @@ class Index:
                 self.browse.append(i)
             prev = key
         from docsearch.spelling import Speller             # misspelled words (see search)
-        self.speller: Speller | None = Speller({t: len(v[0]) for t, v in self.post.items()})
+        self.speller: Speller | None = Speller(self.post.df())
         self.no_vectors = None              # entries of sources without vectors (None: there are none)
         if mode != "spell":
             dim = next((v.shape[1] for v in vecs if not isinstance(v, int)), None)
@@ -2087,16 +2295,16 @@ class Index:
             if any(isinstance(v, int) for v in vecs):
                 self.no_vectors = np.concatenate([np.full(v if isinstance(v, int) else len(v), isinstance(v, int))
                                                   for v in vecs])
-                vecs = [np.zeros((v, dim), np.float32) if isinstance(v, int) else v for v in vecs]
             self.has_vectors = None if self.no_vectors is None else ~self.no_vectors   # (numpy)
             if use_mlx():
                 import mlx.core as mx
                 # on the GPU at half precision: half the memory, and the similarity is computed there
-                self.emb = mx.array(np.concatenate(vecs)).astype(mx.float16)
+                self.emb = mx.array(joined(vecs, dim, np.float16))
                 if self.no_vectors is not None:
                     self.no_vectors = mx.array(self.no_vectors)
             else:
-                self.emb = np.concatenate(vecs).astype(np.float32)
+                self.emb = joined(vecs, dim, np.float32)
+            del vecs
             self.model = get_model()
             self.model.encode(["warm up"])               # the first search is then fast
 
@@ -2178,17 +2386,40 @@ class Index:
     @staticmethod
     def name_key(q: str) -> str | None:
         """The query as an API name key: 'np.linalg svd' -> 'numpy.linalg_svd', 'Vec::push'
-        -> 'vec.push' (None if it cannot be a name)."""
-        key = re.sub(r"\s+", "_", q.strip().lower()).replace("::", ".")   # read csv -> read_csv
+        -> 'vec.push'; a name as code writes it, in any language, is the name: type arguments
+        (Vec<T>::push, std::map<K,V>, List[T].append), sigils (&str, @property, #define), a
+        call (np.sum()), Go's receiver ((*Builder).WriteString); names with symbols stay
+        (vec!, ~vector, operator<<, operator[], ( + )). None if it cannot be a name."""
+        key = re.sub(r"^\((?:\w+\s+)?\*?(\w+)\)\.", r"\1.", q.strip())     # (*Builder).Write -> Builder.Write
+        for _ in range(4):                                             # type arguments, inside out
+            key = re.sub(r"(?<=\w)(<[\w\s,:&*'\[\]]*>|\[[\w\s,:&*']+\])", "", key)
+        key = re.sub(r"^[&*@#]+(?=\w)", "", key)                       # &str, @property, #define
+        key = re.sub(r"(?<!operator)\(\)$", "", key)                   # np.sum() (not operator())
+        key = re.sub(r"\(\s*([^\w\s()]+)\s*\)", r"(\1)", key)            # ( + ) -> (+): OCaml, Haskell
+        key = re.sub(r"\s+", "_", key.lower()).replace("::", ".")      # read csv -> read_csv
         for short, full in ALIASES.items():
             if key.startswith(short + "."):
                 key = full + key[len(short):]
                 break
-        return key if re.fullmatch(r"[\w.]+", key) else None
+        return key or None
 
     def name_order(self, i: int):
         name = api_name(self.entries[i].title)
         return name.count("."), len(name)
+
+    def rank_symbols(self, q: str) -> list[int]:
+        """A query made only of symbols (?. ?? ... << ->): the entries whose title shows that
+        operator, the word rankers seeing nothing in it. Those that name it in brackets first
+        (Optional chaining (?.)), pages before their sections, shorter titles first."""
+        if getattr(self, "_symbols", None) is None:
+            self._symbols: dict[str, list[int]] = {}
+            for i, e in enumerate(self.entries):
+                for run in set(re.findall(r"[^\w\s()\[\]{},]+", e.title)):
+                    self._symbols.setdefault(run, []).append(i)
+        sym = "".join(q.split())
+        return sorted(self._symbols.get(sym, []), key=lambda i: (
+            f"({sym})" not in self.entries[i].title, " › " in self.entries[i].title,
+            len(self.entries[i].title)))[:CANDIDATES]
 
     def rank_typo(self, q: str) -> list[int]:
         """API names the query misspells (dataframe.mrege, torch.nn.Lienar, Vec::psuh): at
@@ -2253,6 +2484,10 @@ class Index:
         q = q.strip()
         if not q:
             return []
+        if not re.search(r"\w", q):                     # only symbols (?. ?? ... <<): a name with them
+            exact, prefix = self.rank_name(q)            # (~, <<) or a title showing them; words,
+            lists = [("name", exact, 3.0), ("prefix", prefix, 1.0), ("symbols", self.rank_symbols(q), 3.0)]
+            return [h for h in rrf(lists) if not self.duplicate(h[0])][:limit]   # spelling, meaning: noise
         # The spelling ranker runs on the other cores (in C++, outside the GIL) while the
         # others run here; together they take about as long as it does alone.
         edit = self.pool.submit(self.rank_edit, q) if self.mode in ("spell", "hybrid") else None
@@ -2385,17 +2620,18 @@ def build_known(name: str, sid: str, plan: dict, workers: int, max_pages: int | 
 def make_vectors(sid: str, name: str) -> None:
     """The source's vectors (search by meaning). Stopped by ctrl+c, its docs stay searchable
     by name and words, marked as missing them: the same command makes them, and nothing else."""
+    meta_f = HOME / sid / "meta.json"                    # (its settings only, not its entries)
     try:
         embed_source(sid)
     except KeyboardInterrupt:
-        meta, _ = load(sid)
+        meta = json.loads(meta_f.read_text(encoding="utf-8"))
         if not meta.get("partial"):
             meta["partial"] = {"step": "vectors"}
             write_atomic(HOME / sid / "meta.json", json.dumps(meta, indent=2).encode())
         say(f"\n  stopped before its vectors were made; it is searchable by name and words. "
             f"To make them: {continue_with(name)}")
         raise SystemExit(130) from None
-    meta, _ = load(sid)
+    meta = json.loads(meta_f.read_text(encoding="utf-8"))
     if (meta.get("partial") or {}).get("step") == "vectors":
         del meta["partial"]
         write_atomic(HOME / sid / "meta.json", json.dumps(meta, indent=2).encode())
@@ -2421,6 +2657,9 @@ def add_each(args, outer: str) -> None:
         spec_ = spec[len("pypi:"):] if forced_pypi else spec
         name, want = spec_.split("==", 1) if "==" in spec_ else (spec_, "")
         name, _, override = name.partition("=")
+        if want and not forced_pypi and not override and name in sources.KNOWN and not sources.offers(name, want):
+            say(f"  {name}: there are no {want} docs. They come in: {sources.versions(name)}")
+            continue
         sid = source_id(f"{name}=={want}" if want else name)
         if override and not LOCAL_PATH.match(override) and not urllib.parse.urlparse(override).path:
             override += "/"                              # https://git-scm.com -> https://git-scm.com/
@@ -2448,6 +2687,13 @@ def add_each(args, outer: str) -> None:
         plan = None if (forced_pypi or override) else sources.resolve(known_as or name, want)
         if plan and not want and re.fullmatch(r"[\d.]+", sources.KNOWN[name].get("version", "")):
             plan = sources.resolve(name, published_version(plan) or "")    # the newest release
+        if plan and plan.get("version_now"):            # python==beta: the version in beta now
+            now = published_version({"version_from": plan["version_now"]})
+            if not now:
+                say(f"  {name}: no {want} release right now. Its docs come in: {sources.versions(name)}")
+                continue
+            say(f"  {name} {want}: {now}")
+            plan = sources.resolve(name, now)
         try:
             if stopped is not None:                      # go on where it stopped
                 say("  going on where it stopped")
@@ -2488,7 +2734,9 @@ def add_each(args, outer: str) -> None:
                     say(f"  (For a PyPI package of that name: search add pypi:{name})")
                     continue
                 found = find_docs([override] if override else pypi_candidates(name))
-                if found and want:
+                if found and not want and "/latest/" in found[1] and not override:
+                    found = find_version(found[1], "stable") or found     # (Read the Docs: latest is
+                if found and want:                                          # its development branch)
                     current_root = found[1]
                     found = find_version(current_root, want)
                     if not found:
@@ -2534,7 +2782,7 @@ def add_each(args, outer: str) -> None:
                             say(f"  Skipped. For other docs: search add {name}=https://...  "
                                 f"(or see: search known)")
                             continue
-                    if want and kind == "sphinx":
+                    if want and kind == "sphinx" and not sources.channel(want):
                         got = parse_objects_inv(data)[1]
                         if not got.startswith(want.lstrip("v")):
                             say(f"  Note: you asked for {want}, these docs say version {got}.")
@@ -2576,10 +2824,13 @@ def add_each(args, outer: str) -> None:
             meta["nav"] = order.fetch_nav(meta)        # the docs' sidebar: their reading order
         save(sid, entries, meta)
         say(f"  saved {len(entries)} entries in {time.time() - t0:.0f} s")
+        entries = []                               # (a big site's whole texts: not needed from here on)
         if meta.get("partial"):                    # stopped: no waiting for vectors now; they are made
             say("  (found by name and words until it is complete; then by meaning too)")   # at the end
-        elif not args.no_embed:
-            make_vectors(sid, name)
+        else:
+            make_search_caches(sid)                # now, not by the search page (which would keep the memory)
+            if not args.no_embed:
+                make_vectors(sid, name)
         failed = missed_pages(meta)
         if failed and failed > 0.05 * (failed + stored_pages(sid)) and not getattr(args, "staged", False):
             say(f"  Note: {failed} pages could not be downloaded (the site may be busy or blocking); "
@@ -2726,10 +2977,12 @@ def forget(sid: str) -> bool:
 def cmd_known(_args) -> None:
     from docsearch import sources
     indexed = {d.name for d in HOME.iterdir()} if HOME.exists() else set()
+    width = max(len(e.get("about", "")) for e in sources.KNOWN.values())
     for name, e in sources.KNOWN.items():
         mark = "indexed" if name in indexed else ""
-        print(f"{name:12} {e.get('about', ''):70} {mark}")
-    print("\nAdd one with: search add NAME   (or NAME==VERSION, e.g. python==3.12)")
+        also = ", ".join(e.get("channels", {}))
+        print(f"{name:12} {e.get('about', ''):{width}}  {'also ' + also if also else '':22} {mark}".rstrip())
+    print("\nAdd one with: search add NAME   (or NAME==VERSION: python==3.12, max==nightly, rust==beta)")
 
 
 CONFIG_TEMPLATE = """\
@@ -3074,6 +3327,7 @@ def cmd_save(args) -> None:
     meta.update(urls=list(dict.fromkeys(meta.get("urls", []) + pages)), updated=now, count=len(kept) + len(new))
     meta["nav"] = meta["urls"]                       # read in the order you saved them
     save(sid, kept + new, meta)
+    make_search_caches(sid)
     for e in new:
         if "#" not in e.location:
             say(f"  saved: {e.title}  ({e.location})")
@@ -3154,17 +3408,24 @@ def cmd_upgrade(args) -> None:
     from docsearch import sources
     named = bool(args.sources)
     specs = args.sources or [s for s in indexed() if "@" not in s]     # pinned ones stay
+    for s in [] if named else indexed():               # nightly, beta: renewed when asked for
+        ch = sources.channel(s.partition("@")[2]) if "@" in s else None
+        if ch and args.cmd == "upgrade":
+            say(f"{s}: {ch} docs change often; to download them again: search upgrade {s.split('@')[0]}=={ch}")
     for spec in specs:
         forced = spec.startswith("pypi:")
         name, _, want = spec.removeprefix("pypi:").partition("==")
         base = source_id(name)
         have = [s for s in indexed() if s.split("@")[0] == base]
+        tracks = [s for s in have if sources.channel(s.partition("@")[2])]   # nightly, beta: their own
+        have = [s for s in have if s == source_id(spec)] if sources.channel(want) else \
+            [s for s in have if s not in tracks]       # (renewed only when asked for, never replaced)
         if args.cmd == "downgrade" and not want:
             say(f"{name}: say which version, e.g. search downgrade {name}==1.2")
             continue
         known = sources.KNOWN.get(name) if not forced else None
-        if want and known is not None and "{version}" not in json.dumps(known):
-            say(f"{name}: these docs only exist as the current version (no {want}).")
+        if want and known is not None and not sources.offers(name, want):
+            say(f"{name}: there are no {want} docs. They come in: {sources.versions(name)}")
             continue
         if not have:
             say(f"{name}: not indexed. Add it with: search add {spec}")
@@ -3206,8 +3467,12 @@ def cmd_upgrade(args) -> None:
             say(f"  {name}: the new download looks incomplete ({why}); the old docs are kept. "
                 f"Try again later, or take it anyway with --accept-partial.")
             continue
-        install_staged(d, [s for s in have if s != d.name])
-        config_set(name, want or "latest")
+        if want and sources.channel(want):              # nightly, beta: renewed next to the others
+            install_staged(d, [])
+            remember(build)
+        else:
+            install_staged(d, [s for s in have if s != d.name])
+            config_set(name, want or "latest")
         new = json.loads((HOME / d.name / "meta.json").read_text(encoding="utf-8")).get("version") or "no version number"
         say(f"  {name}: now {d.name} ({new})")
 
@@ -3313,11 +3578,13 @@ ONLINE = {"add", "sync", "embed", "upgrade", "downgrade", "setup", "save"}   # t
 
 
 def split_sources(words: list[str]) -> tuple[list[str], str]:
-    """'numpy pandas mean of rows' -> (['numpy', 'pandas'], 'mean of rows')."""
+    """'numpy pandas mean of rows' -> (['numpy', 'pandas'], 'mean of rows'). A word that cannot
+    name a source (=>, (+), ...) is the query's: python => -> (['python'], '=>')."""
     indexed = {d.name for d in HOME.iterdir() if (d / "meta.json").exists()} if HOME.exists() else set()
     words, sources = list(words), []
-    while words and source_id(words[0]) in indexed:
-        sources.append(source_id(words.pop(0)))
+    while words and (sid := folder_name(words[0])) in indexed:
+        sources.append(sid)
+        words.pop(0)
     return sources, " ".join(words)
 
 

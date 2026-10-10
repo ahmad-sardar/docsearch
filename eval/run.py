@@ -62,10 +62,10 @@ RERANKERS = {
 
 class Bench:
     def __init__(self, split: str):
-        sids = sorted(d.name for d in cli.HOME.iterdir() if (d / "meta.json").exists())
+        sids = sorted(cli.in_use(g)[0] or have[0] for g, have in cli.groups().items())   # one copy each
         self.index = cli.Index(sids, "hybrid")
         self.index.search("warm up")
-        self.sid_of = [cli.source_id(e.source) for e in self.index.entries]
+        self.sid_of = [cli.source_id(e.source).split("@")[0] for e in self.index.entries]   # the package
         qs, dropped = bench.load_questions(self.index, self.sid_of)
         self.questions = [q for q in qs if q["split"] == split]
         self.split, self.dropped = split, dropped

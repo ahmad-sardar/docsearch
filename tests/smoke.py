@@ -7,7 +7,8 @@ tags deep, as some sites are.
 
 Then a small local website whose download stops half way and continues; whose vectors
 stop and are made by the same command alone; and whose new copy (search upgrade) stops,
-keeping the copy you have, and goes on the next time.
+keeping the copy you have, and goes on the next time. Then docs with versions: each version
+pulled is a copy of its own, the one search uses chosen once; and a project's versions.
 
 Everything goes to a temporary folder (DOCSEARCH_DATA, and a packages.toml there). The
 models are downloaded into it the first time, unless DOCSEARCH_DATA already has them.
@@ -100,6 +101,149 @@ class Chain(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+
+VERSION = {"now": "1.0"}                         # what the versioned site says it is
+
+
+class Versioned(http.server.BaseHTTPRequestHandler):
+    """Docs with versions, as a known site: /v/ (the release, its number at /v/VERSION) and
+    /n/ (its nightly)."""
+
+    def log_message(self, *args) -> None:
+        pass
+
+    def do_GET(self) -> None:
+        ASKED.append(self.path)
+        m = re.fullmatch(r"/(v|n)/(\w*)", self.path)
+        if self.path in ("/v/VERSION", "/n/VERSION"):
+            body = f"testdocs {VERSION['now'] if self.path[1] == 'v' else 'Nightly'}".encode()
+        elif m:
+            which = "release " + VERSION["now"] if m.group(1) == "v" else "nightly"
+            page = m.group(2) or "index"
+            body = (f"<html><head><title>Testdocs {page}</title></head><body><main><h1>Testdocs {page}</h1>"
+                    f"<p>{f'The {page} page of the {which} docs. ' * 8}</p>"
+                    f"{'<a href=a>a</a> <a href=b>b</a>' if page == 'index' else ''}</main></body></html>").encode()
+        else:
+            body = b"not found"
+        self.send_response(200 if m or self.path.endswith("VERSION") else 404)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def versions() -> None:
+    """Each version pulled is a copy of its own; one you have is not pulled again; search uses
+    the one you chose (or your project's); a package with several copies is removed one copy at
+    a time (or with --all)."""
+    import contextlib
+    import io
+
+    from docsearch import sources
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Versioned)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    site = f"http://127.0.0.1:{server.server_address[1]}"
+    sources.KNOWN["testdocs"] = {
+        "about": "Test docs with versions", "kind": "website", "root": f"{site}/",
+        "start": f"{site}/v/", "prefix": f"{site}/v/", "exclude": "VERSION",
+        "version_from": [f"{site}/v/VERSION", r"testdocs (\d+\.\d+)"],
+        "channels": {"nightly": {"start": f"{site}/n/", "prefix": f"{site}/n/",
+                                 "version_from": [f"{site}/n/VERSION", r"testdocs (\w+)"]}}}
+
+    def run(*argv: str) -> str:
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said), contextlib.redirect_stdout(said):
+            cli.main(list(argv))
+        return said.getvalue()
+
+    def pages_read() -> int:
+        return sum(1 for path in ASKED if re.fullmatch(r"/[vn]/\w*", path) and not path.endswith("VERSION"))
+    try:
+        run("add", "testdocs", "--no-embed")
+        check(cli.copies("testdocs") == ["testdocs@1.0"], "a pull is kept under its version: testdocs@1.0")
+        ASKED.clear()
+        said = run("add", "testdocs", "--no-embed")
+        check("you have this version already" in said and pages_read() == 0,
+              "the version you have is not downloaded again")
+        VERSION["now"] = "1.1"
+        said = run("upgrade", "testdocs")
+        check(cli.copies("testdocs") == ["testdocs@1.1", "testdocs@1.0"] and "next search asks" in said,
+              "search upgrade: the new version next to the old one; the next search asks which one to use")
+        ASKED.clear()
+        said = run("upgrade", "testdocs")
+        check("you have this version already" in said and pages_read() == 0, "and again: nothing to download")
+        check(cli.in_use("testdocs")[0] is None and cli.ask_copy("testdocs", cli.copies("testdocs")) == "testdocs@1.1",
+              "several copies, none chosen: asked (without a terminal: the newest)")
+        cli.choose("testdocs@1.0")
+        listed = run("list")
+        check(cli.in_use("testdocs")[0] == "testdocs@1.0" and cli.config_use().get("testdocs") == "1.0"
+              and re.search(r"testdocs@1\.0 .*<- search uses this", listed) is not None,
+              "the copy you chose is kept (packages.toml [use]), and search list shows it")
+        uses, note = cli.in_use("testdocs", {"testdocs": "1.1.3"}), cli.in_use("testdocs", {"testdocs": "2.0"})[1]
+        check(uses[0] == "testdocs@1.1" and "your project uses 2.0" in note,
+              "in a project: the version it uses (1.1 for 1.1.3); one you do not have is said so")
+        check(cli.split_sources(["testdocs", "x"]) == (["testdocs"], "x")
+              and cli.search_copies(["testdocs"], {}) == (["testdocs@1.0"], ["testdocs@1.0"])
+              and cli.search_copies(["testdocs@1.1"], {})[0] == ["testdocs@1.1"]
+              and cli.search_copies([], {"testdocs": "1.1"})[1] == ["testdocs@1.1"],
+              "a search names a package (its copy in use) or a copy; a project's version wins")
+
+        lib = web.Library()
+        first = "testdocs@1.0" in lib.loaded and "testdocs@1.1" not in lib.loaded
+        hits = lib.search("", {"testdocs@1.1"}, 0, 50)["items"]
+        check(first and "testdocs@1.1" in lib.loaded and hits and {h["source"] for h in hits} == {"testdocs@1.1"},
+              "the search page loads the copy in use, and another one when a search asks for it")
+        port = web.start()
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/use", data=b'{"source": "testdocs@1.1"}',
+                                     headers={"Content-Type": "application/json", "X-Docsearch": "1",
+                                              "Origin": f"http://127.0.0.1:{port}"}, method="POST")
+        with urllib.request.urlopen(req, timeout=60) as r:
+            chosen_in_page = json.loads(r.read()).get("use")
+        web.stop()
+        check(chosen_in_page == "testdocs@1.1" and cli.in_use("testdocs")[0] == "testdocs@1.1",
+              "chosen in the page: kept as your choice")
+
+        run("add", "testdocs==nightly", "--no-embed")
+        nightly = f"testdocs@nightly-{time.strftime('%Y-%m-%d')}"
+        ASKED.clear()
+        said = run("add", "testdocs==nightly", "--no-embed")
+        check(nightly in cli.copies("testdocs") and "you have this version already" in said and pages_read() == 0
+              and cli.match_version(cli.copies("testdocs"), "nightly") is None,
+              "a nightly is a copy of its day; the same day's again is not downloaded; never chosen for you")
+
+        os.replace(cli.HOME / "testdocs@1.1", cli.HOME / "testdocs")       # as before copies had versions
+        cli.migrate_copies()
+        check((cli.HOME / "testdocs@1.1").exists() and not (cli.HOME / "testdocs").exists(),
+              "docs from before: renamed once to their version")
+
+        said = run("remove", "testdocs")
+        check(len(cli.copies("testdocs")) == 3 and "--all" in said, "search remove NAME with several copies: listed, none removed")
+        run("remove", "testdocs@1.0")
+        check(cli.copies("testdocs") == ["testdocs@1.1", nightly] and cli.config_use().get("testdocs") == "1.1",
+              "search remove NAME@VERSION: that copy only")
+        run("remove", "testdocs", "--all")
+        toml = cli.CONFIG.read_text(encoding="utf-8")
+        check(not cli.copies("testdocs") and "testdocs" not in toml, "--all: every copy, and its lines in packages.toml")
+    finally:
+        del sources.KNOWN["testdocs"]
+        server.shutdown()
+
+
+def project_files() -> None:
+    """The versions a project uses, read from its files (in the folder search runs in, or above)."""
+    root = Path(tempfile.mkdtemp(prefix="docsearch-project-"))
+    (root / ".git").mkdir()
+    (root / "uv.lock").write_text('version = 1\n[[package]]\nname = "numpy"\nversion = "2.4.1"\n', encoding="utf-8")
+    (root / "requirements.txt").write_text("pandas[excel]==2.2.3\nrequests>=2\n", encoding="utf-8")
+    (root / ".python-version").write_text("3.12\n", encoding="utf-8")
+    (root / ".venv" / "lib" / "python3.12" / "site-packages" / "scikit_learn-1.5.0.dist-info").mkdir(parents=True)
+    (root / "go.mod").write_text("module x\n\ngo 1.22\n", encoding="utf-8")
+    (root / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "1.80.0"\n', encoding="utf-8")
+    (root / "src" / "deep").mkdir(parents=True)
+    found = cli.project_versions(root / "src" / "deep")
+    want = {"numpy": "2.4.1", "pandas": "2.2.3", "python": "3.12", "scikit-learn": "1.5.0", "go": "1.22", "rust": "1.80.0"}
+    check(all(found.get(k) == v for k, v in want.items()) and "requests" not in found,
+          f"a project's versions, from its files ({ {k: found.get(k) for k in want} })")
 
 
 def stop_and_continue() -> None:
@@ -235,6 +379,8 @@ def main() -> None:
         web.stop()
     stop_and_continue()
     vectors_and_new_copies()
+    versions()
+    project_files()
     print("all good")
 
 

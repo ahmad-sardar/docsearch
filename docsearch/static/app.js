@@ -33,6 +33,10 @@ async function init() {
   const p = new URLSearchParams(location.search);
   state.q = p.get("q") || "";
   for (const s of state.sources) if (s.default) state.active[s.group] = s.id;
+  for (const id of (p.get("use") || "").split(",").filter(Boolean)) {   // the copies searched here:
+    const s = state.sources.find((x) => x.id === id);                  // your project's versions
+    if (s) state.active[s.group] = s.id;
+  }
   for (const id of (p.get("src") || "").split(",").filter(Boolean)) {   // e.g. numpy@1.26
     const s = state.sources.find((x) => x.id === id);
     if (s) { state.srcs.add(s.group); state.active[s.group] = s.id; }
@@ -42,6 +46,7 @@ async function init() {
   $("#ai").setAttribute("aria-pressed", state.ai ? "true" : "false");
   $("#q").value = state.q;
   renderSources();
+  renderChoose();
   bindEvents();
   await search({ openFirst: !p.get("id") && !p.get("page") });
   if (p.get("page")) openPage(p.get("page"), p.get("at"), false);
@@ -90,6 +95,39 @@ function renderSources() {
     }
     nav.append(b);
   }
+}
+
+// A package with several copies and none chosen yet: which one should search use? The answer
+// is kept (packages.toml); the version menu changes it for this page only (search list NAME: for good).
+function renderChoose() {
+  const box = $("#choose");
+  box.textContent = "";
+  const groups = {};
+  for (const s of state.sources) if (s.choose) (groups[s.group] = groups[s.group] || []).push(s);
+  for (const [group, versions] of Object.entries(groups)) {
+    const row = el("div", "choose-row");
+    row.append(el("span", null, `${versions[0].name}: which version should search use?`));
+    for (const v of versions) {
+      const b = el("button", null, v.version || v.id);
+      b.title = `Search ${v.name} ${v.version} from now on (to change it later: search list ${group})`;
+      b.addEventListener("click", () => chooseCopy(v));
+      row.append(b);
+    }
+    box.append(row);
+  }
+  box.hidden = !box.childElementCount;
+}
+
+async function chooseCopy(s) {
+  const r = await fetch("/api/use", { method: "POST", headers: { "Content-Type": "application/json", "X-Docsearch": "1" },
+                                      body: JSON.stringify({ source: s.id }) });
+  if (!r.ok) { toast("Could not keep the choice"); return; }
+  for (const x of state.sources) if (x.group === s.group) { x.choose = false; x.default = x.id === s.id; }
+  state.active[s.group] = s.id;
+  renderChoose();
+  renderSources();
+  toast(`${s.name}: searching ${s.version} from now on`);
+  search({ openFirst: !!state.q });
 }
 
 // "numpy 2.5": a source's name and docs version, as on its button.
@@ -466,6 +504,7 @@ async function removeSource(s, button) {
   if (state.active[s.group] === s.id) delete state.active[s.group];
   for (const x of state.sources) if (!state.active[x.group] && x.default) state.active[x.group] = x.id;
   renderSources();
+  renderChoose();
   openPanel();
   search({ openFirst: !!state.q });
 }

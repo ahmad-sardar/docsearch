@@ -61,7 +61,7 @@ html, body { height: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--text);
   font: 16px/1.6 var(--font); -webkit-font-smoothing: antialiased;
-  display: grid; grid-template-rows: auto 1fr; overflow: hidden;
+  display: grid; grid-template-rows: auto auto 1fr; overflow: hidden;   /* the bar, the choice (or nothing), the rest */
 }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; text-underline-offset: 2px; }
@@ -102,13 +102,20 @@ kbd {
 .sources button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 
 /* ---- three columns ----------------------------------------------------------- */
-.layout { display: grid; grid-template-columns: minmax(300px, 380px) 1fr 230px; min-height: 0; }
+.layout { display: grid; grid-template-columns: minmax(300px, 380px) 1fr 230px; min-height: 0; grid-row: 3; }
 @media (max-width: 1250px) { .layout { grid-template-columns: minmax(280px, 340px) 1fr; } .toc { display: none; } }
 .results-pane, .doc-pane, .toc { overflow-y: auto; min-height: 0; }
 
 /* ---- results ------------------------------------------------------------------ */
 .results-pane { border-right: 1px solid var(--border); background: var(--bg); }
 .status { font-size: 13px; color: var(--faint); padding: 12px 18px 6px; }
+.choose { grid-row: 2; font-size: 13px; padding: 8px 20px; background: var(--accent-soft); border-bottom: 1px solid var(--border); }
+.choose[hidden] { display: none; }
+.choose-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.choose-row + .choose-row { margin-top: 8px; }
+.choose button { font: inherit; padding: 2px 10px; border: 1px solid var(--border); border-radius: 6px;
+                 background: var(--panel); color: var(--text); cursor: pointer; }
+.choose button:hover { border-color: var(--accent); }
 .results { list-style: none; margin: 0; padding: 0 8px 24px; }
 .r {
   display: grid; grid-template-columns: 30px 1fr; gap: 2px 6px; align-items: baseline;

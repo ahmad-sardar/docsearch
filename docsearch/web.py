@@ -63,51 +63,72 @@ def pygments_css() -> str:
 # --------------------------------------------------------------------------- the library
 
 class Library:
-    """Everything that is indexed, searchable, with its offline pages."""
+    """Everything that is indexed, searchable, with its offline pages. Of each package the copy
+    search uses is loaded (cli.in_use; with several and none chosen, the newest until you choose
+    one), and another copy when a search asks for it (the page's version menu)."""
 
-    def __init__(self) -> None:
-        sids = sorted(d.name for d in cli.HOME.iterdir() if (d / "meta.json").exists()) \
-            if cli.HOME.exists() else []
+    def __init__(self, extra: frozenset[str] = frozenset()) -> None:
+        sids = [s for have in cli.groups().values() for s in have]      # (each package's newest first)
         if not sids:
             raise SystemExit("search: nothing is indexed yet. Run: search sync")
-        vectors = any((cli.HOME / s / "emb.npy").exists() for s in sids) and cli.model_cached()   # (a source
-        # without vectors, embed = false or not made yet, is left out of search by meaning only)
-        self.index = cli.Index(sids, "hybrid" if vectors else "spell")
+        self.meta = {s: json.loads((cli.HOME / s / "meta.json").read_text(encoding="utf-8")) for s in sids}
+        self.default: set[str] = set()               # of each package, the copy search uses
+        self.choose: set[str] = set()                # packages with several copies, none chosen
+        for group, have in cli.groups().items():
+            now, _ = cli.in_use(group)
+            if now is None:
+                self.choose.add(group)
+            self.default.add(now or have[0])
         self.lock = threading.Lock()                 # one search at a time (the model)
-        self.meta = {s: json.loads((cli.HOME / s / "meta.json").read_text(encoding="utf-8"))
-                     for s in sids}
+        self.load(self.default | (set(extra) & set(sids)))
         self.sites = {s: (m["root"], cli.HOME / s / "pages") for s, m in self.meta.items()
                       if str(m.get("root", "")).startswith("http")}
-        self.sid_of = [cli.source_id(e.source) for e in self.index.entries]
-        # one version per package unless asked: the latest (numpy), else a pinned one (numpy@1.26)
-        groups: dict[str, list[str]] = {}
-        for s in self.meta:
-            groups.setdefault(s.split("@")[0], []).append(s)
-        self.default = {min(v, key=lambda s: ("@" in s, s)) for v in groups.values()}
-        self.summaries: dict[int, str] = {}
         self.image_types: dict[str, dict[str, str]] = {}
-        self._browse_pos: dict[int, int] = {}
         self.pygments = pygments_css()
         self.index.search("warm up")                 # load caches before the first request
 
+    def load(self, sids: set[str]) -> None:
+        """Index these copies (the ones in use, and any other asked for)."""
+        vectors = any((cli.HOME / s / "emb.npy").exists() for s in sids) and cli.model_cached()   # (a source
+        # without vectors, embed = false or not made yet, is left out of search by meaning only)
+        self.index = cli.Index(sorted(sids), "hybrid" if vectors else "spell")
+        self.loaded = set(sids)
+        ends = [first for first, _ in self.index.spans[1:]] + [len(self.index.entries)]
+        self.sid_of = [sid for (first, sid), end in zip(self.index.spans, ends) for _ in range(end - first)]
+        self.summaries: dict[int, str] = {}
+        self._browse_pos: dict[int, int] = {}
+
+    def ensure(self, srcs: set[str]) -> None:
+        """Copies a search asks for that are not loaded (another version, from the menu):
+        loaded now, in place of other ones asked for before."""
+        if any(s in self.meta and s not in self.loaded for s in srcs):
+            self.load(self.default | {s for s in srcs if s in self.meta})
+
+    def use(self, sid: str) -> None:
+        """The copy you chose for search, where several were and none was chosen (the page)."""
+        group = sid.split("@")[0]
+        cli.choose(sid)
+        self.default = {s for s in self.default if s.split("@")[0] != group} | {sid}
+        self.choose.discard(group)
+
     def info(self) -> dict:
-        counts: dict[str, int] = {}
-        for s in self.sid_of:
-            counts[s] = counts.get(s, 0) + 1
         return {"app": "docsearch", "mode": self.index.mode,
                 "sources": [{"id": s, "name": m.get("name", s), "version": self.label(s),
-                             "dated": not m.get("version"),
-                             "count": counts.get(s, 0), "offline": bool(m.get("pages")),
+                             "dated": not m.get("version"), "count": m.get("count", 0),
+                             "offline": bool(m.get("pages")),
                              "about": m.get("about") or m.get("project") or "", "root": m.get("root", ""),
                              "group": s.split("@")[0], "default": s in self.default,
+                             "choose": s.split("@")[0] in self.choose, "channel": cli.is_channel(s),
                              "kind": m.get("kind", ""), "added": m.get("created", "")}
                             for s, m in self.meta.items()]}
 
     def label(self, sid: str) -> str:
-        """The docs version to show next to the name; for docs that publish no version
-        number (cppreference, MDN), the day they were downloaded."""
+        """The docs version to show next to the name: a nightly by its day (nightly-2026-10-09);
+        for docs that publish no version number (cppreference, MDN), the day they were downloaded."""
         m = self.meta[sid]
-        return m.get("version") or str(m.get("created", ""))[:10]
+        if cli.is_channel(sid):
+            return sid.partition("@")[2]
+        return m.get("version") or sid.partition("@")[2] or str(m.get("created", ""))[:10]
 
     def item(self, i: int, q: str) -> dict:
         e = self.index.entries[i]
@@ -120,6 +141,8 @@ class Library:
     def search(self, q: str, srcs: set[str], offset: int, limit: int, ai: bool = False) -> dict:
         q = q.strip()
         srcs = srcs or self.default                  # never two versions of one package at once
+        with self.lock:
+            self.ensure(srcs)
         rest, phrases, patterns = cli.parse_strict(q)
         plain_q = " ".join([rest] + phrases).strip()     # what ranks the results (and the AI reads)
         if not q:                                    # no query: all the docs, in reading order
@@ -367,7 +390,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.json({"error": "internal error"}, 500)
 
     def do_POST(self) -> None:
-        """The one thing the page can change: remove a source (wrong docs were matched).
+        """What the page can change: remove a source (wrong docs were matched), and choose the
+        copy of a package search uses (several, none chosen).
         Only from the docsearch page itself: the Origin must be this server, and the
         request must carry a custom header, which other sites cannot send without asking
         this server first (CORS preflight), and it never says yes."""
@@ -375,7 +399,7 @@ class Handler(BaseHTTPRequestHandler):
         if (host not in self.hosts or self.headers.get("Origin") != f"http://{host}"
                 or self.headers.get("X-Docsearch") != "1"):
             return self.send(403, b"forbidden", "text/plain")
-        if self.path != "/api/remove":
+        if self.path not in ("/api/remove", "/api/use"):
             return self.send(404, b"not found", "text/plain")
         try:
             size = int(self.headers.get("Content-Length", "0"))
@@ -385,6 +409,9 @@ class Handler(BaseHTTPRequestHandler):
         lib = self.library
         if sid not in lib.meta:
             return self.json({"error": "no such source"}, 404)
+        if self.path == "/api/use":                  # the copy search uses, chosen in the page
+            lib.use(sid)
+            return self.json({"ok": True, "use": sid})
         cli.forget(sid)
         reload_library()
         return self.json({"ok": True, "removed": sid})
@@ -459,7 +486,8 @@ def start() -> int:
         detach = {"start_new_session": True}
     with open(LOG, "ab") as log:
         subprocess.Popen([sys.executable, "-m", "docsearch.web", "serve"], stdout=log, stderr=log,
-                         stdin=subprocess.DEVNULL, cwd=str(cli.ROOT), **detach)
+                         stdin=subprocess.DEVNULL, cwd=str(cli.ROOT), **detach,
+                         env={**os.environ, "DOCSEARCH_CONFIG": str(cli.CONFIG)})   # (choices it keeps go there)
     deadline = time.time() + 180
     while time.time() < deadline:
         time.sleep(0.25)

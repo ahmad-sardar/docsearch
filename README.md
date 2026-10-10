@@ -161,25 +161,43 @@ search add aks=https://learn.microsoft.com/en-us/azure/aks/
 
 ## versions
 
+every version you pull is kept as a copy of its own, until you remove it.
+
 ```bash
-search upgrade                 # everything to latest
+search upgrade                 # the newest docs of every package, next to the ones you have
 search upgrade numpy           # one package
-search downgrade numpy==1.26   # an older one
+search upgrade numpy==1.26     # an older version
+search list                    # every copy, and the one search uses
+search list numpy              # numpy's copies: choose the one search uses
+search remove numpy@1.26       # remove one copy
 ```
 
-want two versions side by side? `numpy = ["latest", "1.26"]` in `packages.toml`.
+a version you have is not downloaded again. docs without a version number (cppreference, MDN)
+and docs you added by address or from a folder are one copy, downloaded again in place.
+
+which copy a search uses:
+
+- in a project folder: the version the project uses, when you have it (from its `.venv`,
+  `uv.lock`, `poetry.lock`, `requirements.txt`, `.python-version`, `go.mod`,
+  `rust-toolchain.toml`)
+- else the one you chose with `search list numpy`
+- else the only one; with several and none chosen, search asks once
+
+for one search: `search numpy@1.26 svd`, or the version menu in the page. `packages.toml`
+lists the versions you pulled and the one you chose, so `search sync` on another computer
+gets the same.
 
 releases that are not out yet are versions too, where the docs site publishes them: nightly
-(also called dev or main), beta (rc) and alpha. the stable docs stay the default.
+(also called dev or main), beta (rc) and alpha. the stable docs stay the default, and search
+never chooses a nightly or beta for you.
 
 ```bash
 search add max==nightly             # next to the stable max docs
 search add rust==beta python==nightly numpy==nightly pandas==beta
-search upgrade max==nightly         # nightly docs change often: download them again
+search upgrade max==nightly         # a new nightly copy (each one is named by its day)
 ```
 
-`search known` shows which ones each built-in site has. a plain `search upgrade` leaves
-nightly and beta copies as they are.
+`search known` shows which ones each built-in site has.
 
 ## saving tutorials
 

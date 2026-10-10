@@ -7,8 +7,10 @@ them in the browser (Safari on a Mac). Everything runs on this computer and is 1
 Build an index once per source (downloads the docs pages and their images):
     search add numpy pandas          # PyPI packages with Sphinx or MkDocs docs
     search add torch=https://pytorch.org/docs/stable/   # give the docs URL yourself
-    search add numpy==1.26           # docs of another version (replaces the indexed one)
-    search list                      # shows which version of the docs each source has
+    search add numpy==1.26           # another version, kept next to the ones you have
+    search list                      # every copy, and the one search uses of each package
+    search list numpy                # numpy's copies: choose the one search uses
+    search remove numpy@1.26         # remove one copy
     search sync                      # index everything listed in packages.toml
     search add git                   # every git man page (commands and guides)
     search add bash                  # the bash man page, split into sections
@@ -86,7 +88,8 @@ MODEL_FILES = {
     "tokenizer.json": "7fa9272f7ef1ebd1666bb3bfd9d4707660ff0076ca9d1671cd9a9c6e18e03331",
     "model.safetensors": "7bec4fd9eba43073d5c5dcf1b79b0a3397608fa063e6f626d6f8fd70a81f2d8c",
 }
-CONFIG = ROOT / "packages.toml"                 # your docs (not in git)
+CONFIG = Path(os.environ.get("DOCSEARCH_CONFIG") or ROOT / "packages.toml")   # your docs (not in git);
+                                                # (the search page's server: the one of the command that started it)
 EXAMPLE = ROOT / "packages.example.toml"        # the starting list for a new copy (in git)
 MAX_DOWNLOAD = 50 * 2**20       # bytes per download; docs pages are far smaller
 MAX_INVENTORY = 100 * 2**20     # bytes of a Sphinx inventory after decompression
@@ -2210,6 +2213,7 @@ class Index:
         self.tails: list = []                # per source: (first entry, offsets, the rest on disk)
         self.pool = cf.ThreadPoolExecutor(max_workers=1)    # the spelling ranker, see search()
         vecs, firsts, lens = [], [], []
+        self.spans: list[tuple[int, str]] = []    # (first entry, folder): whose entries are whose
         self.post = Postings()               # one keyword index over the chosen sources
         self.labels: list[str] = []          # "numpy 2.5": the name and the docs version
         for spec in specs:
@@ -2220,6 +2224,7 @@ class Index:
             if not (search_caches(sid) and caches_fit(sid, len(ents))):
                 make_search_caches(sid)                  # from the whole texts, once
             first = len(self.entries)
+            self.spans.append((first, sid))
             self.labels.append(f"{spec} {meta.get('version') or ''}".strip())
             words, starts, ids, tfs, ln = keyword_postings(sid)
             self.post.add(words, starts, ids, tfs, first)
@@ -2675,8 +2680,15 @@ def add_each(args, outer: str) -> None:
         if stopped is None and old and (old.get("partial") or {}).get("step") == "vectors" and not args.no_embed:
             say(f"  {sid}: all its pages are read; making its vectors (they stopped before)")
             make_vectors(sid, name)                      # the one step left
+            if not staged:
+                copy_hint(sid.split("@")[0], keep_copy(sid, want))
             continue
         if not staged and stopped is None and old is not None:
+            if copy_label(old, want) and not old.get("partial") and not getattr(args, "force", False):
+                say(f"  {sid}: you have this version already; nothing to download")
+                if getattr(args, "record", True):
+                    remember(spec)
+                continue                                 # (one copy per version; --force: again)
             refresh(spec, sid, args)                     # never risks the copy you have
             continue
         meta = {"name": name, "spec": spec, "created": time.strftime("%Y-%m-%d %H:%M"), "model": None}
@@ -2694,6 +2706,12 @@ def add_each(args, outer: str) -> None:
                 continue
             say(f"  {name} {want}: {now}")
             plan = sources.resolve(name, now)
+        if plan is not None and stopped is None and not staged and not getattr(args, "force", False):
+            version = plan.get("version", "")            # the version it is now: one you have?
+            if not re.search(r"\d", version) and plan.get("version_from") and not sources.channel(want):
+                version = published_version(plan)
+            if have_copy(spec, name, want, version, args):
+                continue
         try:
             if stopped is not None:                      # go on where it stopped
                 say("  going on where it stopped")
@@ -2786,6 +2804,9 @@ def add_each(args, outer: str) -> None:
                         got = parse_objects_inv(data)[1]
                         if not got.startswith(want.lstrip("v")):
                             say(f"  Note: you asked for {want}, these docs say version {got}.")
+                    if (stopped is None and not staged and not getattr(args, "force", False)
+                            and have_copy(spec, name, want, parse_objects_inv(data)[1] if kind == "sphinx" else "", args)):
+                        continue
                     if kind == "sphinx":
                         entries, extra = sphinx_docs(name, sid, root, data, args, spec)
                     else:
@@ -2837,6 +2858,8 @@ def add_each(args, outer: str) -> None:
                 f"saved the rest. To try again later: search upgrade {name} --force")
         if getattr(args, "record", True):
             remember(spec)
+        if not staged and not meta.get("partial"):      # finished: kept under its version
+            copy_hint(sid.split("@")[0], keep_copy(sid, want, replace=getattr(args, "force", False)))
 
 
 # NAME=/path, ~/path, ./path, and on Windows C:\path, .\path, \\server\share: a local copy
@@ -2940,16 +2963,19 @@ def page_title(url: str) -> str:
 
 
 def forget(sid: str) -> bool:
-    """Remove a source: its index, and its line in packages.toml (so sync does not bring it
-    back)."""
+    """Remove a copy: its index; in packages.toml the version it was listed under (the package's
+    whole line once no copy is left, so sync does not bring it back) and the choice of it."""
     global CHANGED
     CHANGED = True
     d = source_dir(sid)
     gone = d.exists()
     if gone:
         shutil.rmtree(d)
-    if CONFIG.exists():
-        base, _, version = sid.partition("@")
+    base, _, label = sid.partition("@")
+    if config_use().get(base) == label or not copies(base):
+        config_unset(base, "use")
+    if CONFIG.exists() and (label or not copies(base)):      # (copies left: only this version's)
+        version = label if copies(base) else ""
         lines = CONFIG.read_text(encoding="utf-8").splitlines(keepends=True)
         out = []
         for ln in lines:
@@ -3066,12 +3092,12 @@ def sync_all(args) -> None:
     wanted = read_config()
     keep = set()
     for spec, embed in wanted:
-        sid = source_id(spec)
-        keep.add(sid)
+        keep.update(copies(source_id(spec).split("@")[0]))
+        sid = synced_copy(spec) or source_id(spec)
         meta_f = HOME / sid / "meta.json"
         meta = json.loads(meta_f.read_text(encoding="utf-8")) if meta_f.exists() else {}
         meta.setdefault("spec", meta.get("name"))           # indexes made before sync existed
-        same = meta.get("spec") == spec and not meta.get("partial")     # partial: continue it
+        same = meta_f.exists() and (meta.get("spec") == spec or sid != source_id(spec)) and not meta.get("partial")
         ready = same and (not embed or (HOME / sid / "emb.npy").exists())
         if ready and not args.force:
             say(f"{spec}: up to date ({meta.get('version') or 'no version'})")
@@ -3106,6 +3132,23 @@ def sync_all(args) -> None:
         say(f"Indexed but not in {CONFIG.name}: {', '.join(extra)}  (search sync --prune removes them)")
 
 
+def synced_copy(spec: str) -> str | None:
+    """The copy you have of a line of packages.toml: numpy (the newest you have), numpy==1.26,
+    max==nightly (a nightly), aks=https://... (its one copy)."""
+    from docsearch import sources
+    sid = source_id(spec)
+    if (HOME / sid / "meta.json").exists():
+        return sid                                       # one copy, or a download under way
+    name, _, want = spec.removeprefix("pypi:").partition("==")
+    have = copies(source_id(name.partition("=")[0]))
+    ch = sources.channel(want) if want else None
+    if ch:
+        return next((s for s in have if channel_of(s) == ch), None)
+    if want:
+        return match_version(have, want)
+    return next((s for s in have if not is_channel(s)), None)
+
+
 def partial_text(p: dict) -> str:
     """How far a download that stopped half way got: "9,812 of about 41,000 pages"."""
     if p.get("step") == "vectors":
@@ -3118,11 +3161,22 @@ def partial_text(p: dict) -> str:
     return text + (f", {p['again']:,} to try again" if p.get("again") else "")
 
 
-def cmd_list(_args) -> None:
-    if not HOME.exists() or not any(HOME.iterdir()):
+def cmd_list(args) -> None:
+    """search list: every copy, and the one search uses of each package. search list NAME:
+    its copies, and a choice of the one search uses."""
+    if not indexed():
         print("Nothing indexed yet. Start with: search add git")
         return
-    for d in sorted(HOME.iterdir()):
+    if getattr(args, "name", None):
+        return choose_copy(args.name)
+    marks = {}
+    for group, have in groups().items():
+        now, _ = in_use(group)
+        if len(have) > 1:
+            marks.update({s: "   <- search uses this" if s == now else "" for s in have})
+            if now is None:
+                marks[have[0]] = f"   ({group}: several copies, none chosen; choose: search list {group})"
+    for d in sorted(HOME.iterdir(), key=lambda d: (d.name.split("@")[0], [-x for x in version_key(d.name)[1]])):
         f = d / "meta.json"
         if f.exists():
             m = json.loads(f.read_text(encoding="utf-8"))
@@ -3133,18 +3187,60 @@ def cmd_list(_args) -> None:
                 vec += f", partial: {partial_text(m['partial'])} (search add {m.get('name', d.name)} continues)"
             ver = m.get("version") or "-"
             print(f"{d.name:<14} {ver:<10} {m.get('count', 0):>7} entries   {m.get('kind', ''):<7} "
-                  f"{vec:<14} {m.get('root', '')}   (indexed {m.get('created', '?')})")
+                  f"{vec:<14} {m.get('root', '')}   (indexed {m.get('created', '?')}){marks.get(d.name, '')}")
+
+
+def choose_copy(name: str) -> None:
+    """search list NAME: a package's copies; at a terminal, choose the one search uses."""
+    group = (folder_name(name) or name).split("@")[0]
+    have = copies(group)
+    if not have:
+        print(f"'{name}' is not indexed. Add it with: search add {name}")
+        return
+    now, _ = in_use(group)
+    print(f"{group}:")
+    for k, sid in enumerate(have, 1):
+        print(f"  {k}) {copy_text(sid)}{'   <- search uses this' if sid == now and len(have) > 1 else ''}")
+    if len(have) == 1:
+        return
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print(f"(to choose one, run search list {group} in a terminal)")
+        return
+    answer = input(f"  which one should search use? 1-{len(have)}"
+                   f"{' (Enter: keep ' + now + ')' if now else ''}: ").strip()
+    if answer.isdigit() and 1 <= int(answer) <= len(have):
+        choose(have[int(answer) - 1])
+        print(f"search uses {have[int(answer) - 1]} now")
 
 
 def cmd_remove(args) -> None:
+    """search remove numpy@2.4: one copy. search remove numpy: its one copy; with several, only
+    with --all (else they are listed)."""
     for spec in args.sources:
-        sid = source_id(spec)
-        print(f"removed {sid} (index and packages.toml)" if forget(sid) else f"'{spec}' is not indexed")
+        target = folder_name(spec) or spec
+        group = target.split("@")[0]
+        have = copies(group)
+        if "@" in target:
+            hits = [s for s in have if s == target] or [s for s in have if s.startswith((target + "-", target + "."))]
+            if len(hits) > 1:
+                say(f"'{spec}' could be {', '.join(hits)}: say which one.")
+                continue
+        elif len(have) > 1 and not getattr(args, "all", False):
+            say(f"{group} has {len(have)} copies: {', '.join(have)}. Remove one: search remove {have[-1]}; "
+                f"all of them: search remove {group} --all")
+            continue
+        else:
+            hits = have or [target]
+        for sid in hits or [target]:
+            print(f"removed {sid} (index and packages.toml)" if forget(sid) else f"'{spec}' is not indexed")
 
 
 def cmd_embed(args) -> None:
     for spec in args.sources:
-        embed_source(source_id(spec))
+        sid = source_id(spec)
+        if not (HOME / sid / "meta.json").exists():          # a package: the copy search uses
+            sid = in_use(sid.split("@")[0])[0] or sid
+        embed_source(sid)
 
 
 # --------------------------------------------------------------------------- versions
@@ -3184,6 +3280,307 @@ def current_version(meta: dict) -> str:
 
 def indexed() -> list[str]:
     return sorted(d.name for d in HOME.iterdir() if (d / "meta.json").exists()) if HOME.exists() else []
+
+
+# --------------------------------------------------------------------------- copies, by version
+#
+# Each version of a package's docs you pull is a copy of its own, kept until you remove it:
+# numpy@2.5, numpy@1.26, max@nightly-2026-10-09. Docs without a version number, and docs added
+# by address or from a folder, are one copy (numpy, aks), downloaded again in place. Which copy
+# a search uses: the version your project uses; else the one you chose (packages.toml [use]);
+# else the only one; else search asks, once.
+
+def label_text(text: str) -> str:
+    """A version as a folder name carries it: 'v26.6' -> '26.6', '13.4 Update 1' -> '13.4-update-1'."""
+    return re.sub(r"[^\w.-]+", "-", re.sub(r"^v(?=\d)", "", text.strip(), flags=re.I)).strip("-.").lower()
+
+
+def copy_label(meta: dict, want: str = "", day: str = "") -> str | None:
+    """What a copy is kept under: its docs' version (numpy@2.5), a nightly by the day it was
+    pulled (max@nightly-2026-10-09), a beta by its version (pandas@3.1-beta). None: kept as one
+    copy (no version number; or added by address or from a folder; man pages, saved pages)."""
+    from docsearch import sources
+    spec = str(meta.get("spec") or meta.get("name") or "")
+    if meta.get("kind") in ("man", "saved", "local") or "=" in spec.removeprefix("pypi:").split("==")[0]:
+        return None
+    version = str(meta.get("version") or "").strip()
+    ch = sources.channel(want) if want else sources.channel(version)
+    day = day or str(meta.get("created", ""))[:10]
+    number = label_text(version) if re.search(r"\d", version) else ""
+    if ch == "nightly":
+        return f"nightly-{day}"
+    if ch:
+        return f"{number}-{ch}" if number else f"{ch}-{day}"
+    return number or None
+
+
+CHANNEL_COPY = re.compile(r"(nightly|beta|alpha)-\d{4}-\d\d-\d\d|.+-(beta|alpha)")
+
+
+def channel_of(sid: str) -> str | None:
+    """'nightly' for max@nightly-2026-10-09, 'beta' for pandas@3.1-beta; None for a release."""
+    m = CHANNEL_COPY.fullmatch(sid.partition("@")[2])
+    return (m.group(1) or m.group(2)) if m else None
+
+
+def is_channel(sid: str) -> bool:
+    """A copy of a release not out yet (nightly, beta, alpha): never chosen for you."""
+    return channel_of(sid) is not None
+
+
+def version_key(sid: str) -> tuple:
+    """For newest first: released versions by their numbers, then the others by day."""
+    return (not is_channel(sid), tuple(int(n) for n in re.findall(r"\d+", sid.partition("@")[2])))
+
+
+def copies(group: str) -> list[str]:
+    """A package's copies (numpy@2.5, numpy@1.26; or numpy, one copy), newest first."""
+    return sorted((s for s in indexed() if s.split("@")[0] == group), key=version_key, reverse=True)
+
+
+def groups() -> dict[str, list[str]]:
+    """Each package and its copies, newest first."""
+    out: dict[str, list[str]] = {}
+    for s in indexed():
+        out.setdefault(s.split("@")[0], []).append(s)
+    return {g: sorted(v, key=version_key, reverse=True) for g, v in sorted(out.items())}
+
+
+def copy_text(sid: str) -> str:
+    """'2.5 (pulled 2026-10-09)': a copy as a list shows it."""
+    try:
+        m = json.loads((HOME / sid / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        m = {}
+    label = sid.partition("@")[2] or m.get("version") or "one copy"
+    return f"{label:<22} (pulled {str(m.get('created', '?'))[:10]}{', download stopped half way' if m.get('partial') else ''})"
+
+
+def config_use() -> dict[str, str]:
+    """The copy of each package you chose for search (packages.toml [use]: numpy = "2.5")."""
+    import tomllib
+    try:
+        use = (tomllib.loads(CONFIG.read_text(encoding="utf-8")).get("use") or {}) if CONFIG.exists() else {}
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+    return {str(k): str(v) for k, v in use.items() if isinstance(v, (str, int, float))}
+
+
+def config_unset(name: str, table: str) -> None:
+    """Remove name's line from a table of packages.toml."""
+    if not CONFIG.exists():
+        return
+    lines = CONFIG.read_text(encoding="utf-8").splitlines(keepends=True)
+    key = re.compile(rf'\s*"?{re.escape(name)}"?\s*=', re.I)
+    current, out = None, []
+    for ln in lines:
+        head = re.match(r"\s*\[([^\]]+)\]", ln)
+        if head:
+            current = head.group(1).strip()
+        elif current == table and key.match(ln):
+            continue
+        out.append(ln)
+    if out != lines:
+        write_atomic(CONFIG, "".join(out).encode())
+
+
+def chosen(group: str) -> str | None:
+    """The copy you chose for search, if it is still there."""
+    label = config_use().get(group)
+    sid = (f"{group}@{label}" if label else group) if label is not None else None
+    return sid if sid and (HOME / sid / "meta.json").exists() else None
+
+
+def choose(sid: str) -> None:
+    """Keep the copy search uses for its package (until you choose another: search list NAME)."""
+    config_set(sid.split("@")[0], sid.partition("@")[2], table="use")
+
+
+def match_version(have: list[str], version: str) -> str | None:
+    """The copy for a version a project uses: numpy@2.5 for 2.5.1 (the closest one), never a
+    nightly or a beta."""
+    v, best = label_text(version), None
+    for sid in have:
+        label = sid.partition("@")[2]
+        if label and not is_channel(sid) and (v == label or v.startswith(label + ".") or label.startswith(v + ".")):
+            if best is None or len(label) > len(best.partition("@")[2]):
+                best = sid
+    return best
+
+
+def in_use(group: str, project: dict[str, str] | None = None) -> tuple[str | None, str]:
+    """The copy of a package a search uses, and a note if your project wants one you do not
+    have: the version your project uses; else the one you chose; else the only one. None:
+    several and none chosen, to ask (ask_copy)."""
+    have = copies(group)
+    if not have:
+        return None, ""
+    note = ""
+    wanted = (project or {}).get(group)
+    if wanted:
+        hit = match_version(have, wanted)
+        if hit:
+            return hit, ""
+        short = ".".join(wanted.split(".")[:2]) if re.fullmatch(r"[\d.]+", wanted) else wanted
+        note = (f"{group}: your project uses {wanted}; you have {', '.join(s.partition('@')[2] or s for s in have)} "
+                f"(to get it: search upgrade {group}=={short})")
+    return chosen(group) or (have[0] if len(have) == 1 else None), note
+
+
+def ask_copy(group: str, have: list[str]) -> str:
+    """A package with several copies and none chosen: ask which one search uses, and keep the
+    answer. Without a terminal to ask in: the newest, said so."""
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        say(f"{group}: searching {have[0]} (the newest of {len(have)}; to choose one: search list {group})")
+        return have[0]
+    print(f"{group}: which version should search use? (change it later: search list {group})")
+    for k, sid in enumerate(have, 1):
+        print(f"  {k}) {copy_text(sid)}")
+    while True:
+        answer = input(f"  1-{len(have)}: ").strip()
+        if answer.isdigit() and 1 <= int(answer) <= len(have):
+            choose(have[int(answer) - 1])
+            return have[int(answer) - 1]
+
+
+def copy_hint(group: str, new: str) -> None:
+    """After a pull added a copy: which one search uses now."""
+    have = copies(group)
+    if len(have) < 2:
+        return
+    now, _ = in_use(group)
+    if now is None:
+        say(f"  {group} has {len(have)} copies now; your next search asks which one to use "
+            f"(or choose now: search list {group})")
+    elif now != new:
+        say(f"  search still uses {now} (to switch: search list {group})")
+
+
+def have_copy(spec: str, name: str, want: str, version: str, args) -> str | None:
+    """The copy you have of the version about to be pulled: said so, and not downloaded again."""
+    label = copy_label({"spec": spec, "version": version}, want, day=time.strftime("%Y-%m-%d"))
+    sid = f"{source_id(name)}@{label}" if label else None
+    try:
+        if sid is None or json.loads((HOME / sid / "meta.json").read_text(encoding="utf-8")).get("partial"):
+            return None
+    except (OSError, ValueError):
+        return None
+    say(f"  {sid}: you have this version already; nothing to download")
+    if getattr(args, "record", True):
+        remember(spec)
+    copy_hint(sid.split("@")[0], sid)
+    return sid
+
+
+def keep_copy(sid: str, want: str, replace: bool = False) -> str:
+    """A finished download, named for its version (numpy -> numpy@2.5). A version you have
+    already stays as it is, and the new download goes (with replace: the new one takes its place)."""
+    try:
+        meta = json.loads((HOME / sid / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return sid
+    label = copy_label(meta, want)
+    target = f"{sid.split('@')[0]}@{label}" if label else sid
+    if target == sid:
+        return sid
+    if (HOME / target / "meta.json").exists():
+        if not replace:
+            shutil.rmtree(HOME / sid)
+            say(f"  {target}: you have this version already; the copy you had stays")
+            return target
+        shutil.rmtree(HOME / target)
+    move_folder(HOME / sid, HOME / target)
+    say(f"  kept as {target}")
+    return target
+
+
+def move_folder(old: Path, new: Path) -> None:
+    """Rename an index folder. Windows: not while the search page holds its files open."""
+    global CHANGED
+    CHANGED = True
+    try:
+        os.replace(old, new)
+    except PermissionError:
+        from docsearch import web
+        web.stop()
+        os.replace(old, new)
+
+
+def migrate_copies() -> None:
+    """Docs downloaded before copies were kept by version: renamed once to the version they
+    are (numpy -> numpy@2.5; max@nightly -> max@nightly-2026-10-05). A download that stopped half
+    way keeps its folder (it goes on there)."""
+    from docsearch import sources
+    for sid in indexed():
+        base, _, label = sid.partition("@")
+        if label and not sources.channel(label) or (HOME / sid / "crawl").exists():
+            continue                                 # numpy@1.26: named already
+        try:
+            meta = json.loads((HOME / sid / "meta.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        new = None if meta.get("partial") else copy_label(meta, label)
+        if new and not (HOME / f"{base}@{new}").exists():
+            from docsearch import web
+            web.stop()                               # (a running search page knows the old names)
+            move_folder(HOME / sid, HOME / f"{base}@{new}")
+
+
+def project_versions(start: Path) -> dict[str, str]:
+    """The versions a project uses, read from its files in this folder or the ones above it,
+    up to the project's root (.git) or your home folder (the nearest wins): Python packages from its .venv (what is
+    installed), else uv.lock, poetry.lock, requirements*.txt; Python from .python-version or
+    the .venv; Rust from rust-toolchain(.toml); Go from go.mod. Names as PyPI has them, lower case."""
+    import tomllib
+    found: dict[str, str] = {}
+
+    def put(name: str, version: str) -> None:
+        name, version = re.sub(r"[-_.]+", "-", name.strip().lower()), version.strip()
+        if name and version and name not in found:
+            found[name] = version
+    home = Path.home().resolve()
+    here = start.resolve()
+    for d in [here, *here.parents]:
+        try:
+            for site in sorted((d / ".venv").glob("[Ll]ib/*/site-packages")) + sorted((d / ".venv").glob("Lib/site-packages")):
+                for info in site.glob("*.dist-info"):
+                    m = re.fullmatch(r"(.+?)-(\d[^-]*)\.dist-info", info.name)
+                    if m:
+                        put(m.group(1), m.group(2))
+            cfg = d / ".venv" / "pyvenv.cfg"
+            if cfg.exists():
+                m = re.search(r"(?m)^version(?:_info)?\s*=\s*(\d+\.\d+)", cfg.read_text(encoding="utf-8", errors="replace"))
+                if m:
+                    put("python", m.group(1))
+            for lock in ("uv.lock", "poetry.lock"):
+                if (d / lock).exists() and (d / lock).stat().st_size < 50 * 2**20:
+                    for pkg in tomllib.loads((d / lock).read_text(encoding="utf-8")).get("package", []):
+                        if isinstance(pkg, dict) and pkg.get("name") and pkg.get("version"):
+                            put(str(pkg["name"]), str(pkg["version"]))
+            for req in sorted(d.glob("requirements*.txt")):
+                for ln in req.read_text(encoding="utf-8", errors="replace").splitlines()[:5000]:
+                    m = re.match(r"\s*([A-Za-z0-9][\w.-]*)(?:\[[^\]]*\])?\s*==\s*([\w.+!-]+)", ln)
+                    if m:
+                        put(m.group(1), m.group(2))
+            if (d / ".python-version").exists():
+                m = re.match(r"\s*(\d+\.\d+)", (d / ".python-version").read_text(encoding="utf-8", errors="replace"))
+                if m:
+                    put("python", m.group(1))
+            for f in ("rust-toolchain.toml", "rust-toolchain"):
+                if (d / f).exists():
+                    m = re.search(r'(?m)^(?:channel\s*=\s*"([^"]+)"|([\w.-]+)\s*$)', (d / f).read_text(encoding="utf-8", errors="replace"))
+                    if m and re.match(r"\d", m.group(1) or m.group(2) or ""):
+                        put("rust", m.group(1) or m.group(2))
+            if (d / "go.mod").exists():
+                text = (d / "go.mod").read_text(encoding="utf-8", errors="replace")
+                m = re.search(r"(?m)^toolchain\s+go(\d[\w.]*)", text) or re.search(r"(?m)^go\s+(\d[\w.]*)", text)
+                if m:
+                    put("go", m.group(1))
+        except (OSError, ValueError, tomllib.TOMLDecodeError):
+            pass
+        if d == home or (d / ".git").exists():       # the project's root (or your home folder)
+            break
+    return found
 
 
 def stored_pages(sid: str) -> int:
@@ -3401,25 +3798,29 @@ def cmd_setup(args) -> None:
 
 
 def cmd_upgrade(args) -> None:
+    """search upgrade [NAME[==VERSION]...] (and search downgrade NAME==VERSION): pull the newest
+    docs of each package (or that version) as a copy of its own, next to the ones you have. A
+    version you have is not pulled again, and nothing is deleted (search remove does that). Docs
+    kept as one copy (no version number; added by address or from a folder) are downloaded again
+    in place: the copy you have stays in use until the new one is complete."""
     global CONTINUE_WITH
-    """search upgrade [NAME[==VERSION]...] and search downgrade NAME==VERSION: replace a
-    package's docs with the newest (or the given) version. The new docs are downloaded
-    first; the old ones are deleted only when the new ones are complete."""
     from docsearch import sources
     named = bool(args.sources)
-    specs = args.sources or [s for s in indexed() if "@" not in s]     # pinned ones stay
-    for s in [] if named else indexed():               # nightly, beta: renewed when asked for
-        ch = sources.channel(s.partition("@")[2]) if "@" in s else None
-        if ch and args.cmd == "upgrade":
-            say(f"{s}: {ch} docs change often; to download them again: search upgrade {s.split('@')[0]}=={ch}")
+    specs = list(args.sources)
+    for group, have in ([] if named else groups().items()):
+        if any(is_channel(s) for s in have) and args.cmd == "upgrade":       # nightly, beta: when asked for
+            for ch in dict.fromkeys(channel_of(s) for s in have if is_channel(s)):
+                say(f"{group}: {ch} docs change often; to pull a new copy: search upgrade {group}=={ch}")
+        stable = [s for s in have if not is_channel(s)]
+        if stable:
+            meta = json.loads((HOME / stable[0] / "meta.json").read_text(encoding="utf-8"))
+            spec = str(meta.get("spec") or group)
+            one = copy_label(meta) is None and "@" not in stable[0]
+            specs.append(spec if one else ("pypi:" if spec.startswith("pypi:") else "") + group)
     for spec in specs:
         forced = spec.startswith("pypi:")
-        name, _, want = spec.removeprefix("pypi:").partition("==")
-        base = source_id(name)
-        have = [s for s in indexed() if s.split("@")[0] == base]
-        tracks = [s for s in have if sources.channel(s.partition("@")[2])]   # nightly, beta: their own
-        have = [s for s in have if s == source_id(spec)] if sources.channel(want) else \
-            [s for s in have if s not in tracks]       # (renewed only when asked for, never replaced)
+        head, _, want = spec.removeprefix("pypi:").partition("==")
+        name = head.partition("=")[0]
         if args.cmd == "downgrade" and not want:
             say(f"{name}: say which version, e.g. search downgrade {name}==1.2")
             continue
@@ -3427,54 +3828,59 @@ def cmd_upgrade(args) -> None:
         if want and known is not None and not sources.offers(name, want):
             say(f"{name}: there are no {want} docs. They come in: {sources.versions(name)}")
             continue
+        group = source_id(name)
+        have = copies(group)
         if not have:
             say(f"{name}: not indexed. Add it with: search add {spec}")
             continue
-        meta = json.loads((HOME / (base if base in have else have[0]) / "meta.json").read_text(encoding="utf-8"))
-        if meta.get("partial"):
-            say(f"{name}: its download stopped half way ({partial_text(meta['partial'])}). "
-                f"To continue it: search add {name}")
-            continue
-        old = ", ".join(f"{s} ({json.loads((HOME / s / 'meta.json').read_text(encoding='utf-8')).get('version') or 'no version'})"
-                        for s in have)
-        if not want:
-            now = current_version(meta) if base in have else ""     # a pinned version's site is not the newest
-            if have == [base] and now and now == meta.get("version") and not args.force:
+        again = f"search {args.cmd} {spec}"
+        if group in have and not want:                   # one copy, downloaded again in place
+            meta = json.loads((HOME / group / "meta.json").read_text(encoding="utf-8"))
+            if meta.get("partial"):
+                say(f"{name}: its download stopped half way ({partial_text(meta['partial'])}). "
+                    f"To continue it: search add {name}")
+                continue
+            now = current_version(meta)
+            if now and now == meta.get("version") and not args.force:
                 say(f"{name}: up to date ({now})")
                 continue
             if not now and not named:
                 say(f"{name}: the site does not publish a version number (downloaded "
                     f"{meta.get('created', '?')[:10]}). To download it again: search upgrade {name}")
                 continue
-            build = meta.get("spec") if base in have and meta.get("spec") else name
-            say(f"{name}: {old} -> {now or 'the newest docs'}")
-        else:
-            build = f"{'pypi:' if forced or str(meta.get('spec', '')).startswith('pypi:') else ''}{name}=={want}"
-            say(f"{name}: {old} -> {want}")
-        again = f"search {args.cmd} {spec}"
+            build = meta.get("spec") or name
+            say(f"{name}: {meta.get('version') or 'downloaded ' + str(meta.get('created', '?'))[:10]} "
+                f"-> {now or 'the newest docs'}")
+            CONTINUE_WITH = again
+            try:
+                d = build_staged(build, args)
+            finally:
+                CONTINUE_WITH = ""
+            if d is None:
+                say(f"  {name}: {not_staged(build, again)}; the old ones are kept.")
+                continue
+            why = incomplete(d, meta)
+            if why and not args.accept_partial:
+                shutil.rmtree(d, ignore_errors=True)
+                say(f"  {name}: the new download looks incomplete ({why}); the docs you have are kept. "
+                    f"Try again later, or take it anyway with --accept-partial.")
+                continue
+            install_staged(d, [])
+            new = json.loads((HOME / d.name / "meta.json").read_text(encoding="utf-8")).get("version") or "no version number"
+            say(f"  {name}: now {d.name} ({new})")
+            continue
+        pypi = forced or any(str(json.loads((HOME / s / "meta.json").read_text(encoding="utf-8")).get("spec", ""))
+                             .startswith("pypi:") for s in have)
+        build = ("pypi:" if pypi else "") + (f"{name}=={want}" if want else name)
+        say(f"{name}: you have {', '.join(s.partition('@')[2] or s for s in have)}; "
+            f"pulling {want or 'the newest'}")
         CONTINUE_WITH = again
         try:
-            d = build_staged(build, args)
+            cmd_add(argparse.Namespace(sources=[build], workers=args.workers, max_pages=None, no_embed=False,
+                                       yes=getattr(args, "yes", False), accept_partial=args.accept_partial,
+                                       force=args.force))
         finally:
             CONTINUE_WITH = ""
-        if d is None:
-            say(f"  {name}: {not_staged(build, again)}; the old ones are kept.")
-            continue
-        same = d.name in have
-        why = incomplete(d, json.loads((HOME / d.name / "meta.json").read_text(encoding="utf-8")) if same else None)
-        if why and not args.accept_partial:
-            shutil.rmtree(d, ignore_errors=True)
-            say(f"  {name}: the new download looks incomplete ({why}); the old docs are kept. "
-                f"Try again later, or take it anyway with --accept-partial.")
-            continue
-        if want and sources.channel(want):              # nightly, beta: renewed next to the others
-            install_staged(d, [])
-            remember(build)
-        else:
-            install_staged(d, [s for s in have if s != d.name])
-            config_set(name, want or "latest")
-        new = json.loads((HOME / d.name / "meta.json").read_text(encoding="utf-8")).get("version") or "no version number"
-        say(f"  {name}: now {d.name} ({new})")
 
 
 # --------------------------------------------------------------------------- packages.toml
@@ -3580,9 +3986,10 @@ ONLINE = {"add", "sync", "embed", "upgrade", "downgrade", "setup", "save"}   # t
 def split_sources(words: list[str]) -> tuple[list[str], str]:
     """'numpy pandas mean of rows' -> (['numpy', 'pandas'], 'mean of rows'). A word that cannot
     name a source (=>, (+), ...) is the query's: python => -> (['python'], '=>')."""
-    indexed = {d.name for d in HOME.iterdir() if (d / "meta.json").exists()} if HOME.exists() else set()
+    have = set(indexed())
+    known = have | {s.split("@")[0] for s in have}        # numpy (a package), numpy@1.26 (a copy)
     words, sources = list(words), []
-    while words and (sid := folder_name(words[0])) in indexed:
+    while words and (sid := folder_name(words[0])) in known:
         sources.append(sid)
         words.pop(0)
     return sources, " ".join(words)
@@ -3645,7 +4052,25 @@ def quick_search(words: list[str], ai: bool = False) -> None:
         say("The AI model is not downloaded yet; showing the normal results. Get it with: search setup")
         ai = False
     sources, q = split_sources(words)
-    web.open_browser({"q": q, "src": ",".join(sources), "ai": "1" if ai else "0"})
+    src, use = search_copies(sources, project_versions(Path.cwd()))
+    web.open_browser({"q": q, "src": ",".join(src), "use": ",".join(use), "ai": "1" if ai else "0"})
+
+
+def search_copies(sources: list[str], project: dict[str, str]) -> tuple[list[str], list[str]]:
+    """The copies a search covers (the packages named, as numpy or numpy@1.26; none: all) and,
+    of the packages with several copies, the ones it uses: the project's versions, your choice,
+    or asked now (once)."""
+    named = list(dict.fromkeys(s.split("@")[0] for s in sources))
+    picks = {s.split("@")[0]: s for s in sources if "@" in s}      # numpy@1.26: that copy
+    for group, have in groups().items():
+        if group in picks or (named and group not in named) or (len(have) < 2 and group not in named
+                                                               and group not in project):
+            continue
+        now, note = in_use(group, project)
+        if note:
+            say(note)
+        picks[group] = now or ask_copy(group, have)
+    return [picks.get(g, g) for g in named], [sid for group, sid in picks.items() if len(copies(group)) > 1]
 
 
 def cmd_serve(args) -> None:
@@ -3671,6 +4096,8 @@ def main(argv: list[str] | None = None) -> None:
         for stream in (sys.stdout, sys.stderr):
             if hasattr(stream, "reconfigure"):     # (not one a program put in its place: io.StringIO)
                 stream.reconfigure(encoding="utf-8", errors="replace")
+    if not (argv or sys.argv[1:])[:1] == ["serve"]:
+        migrate_copies()                    # docs from before copies were kept by version: once
     p = argparse.ArgumentParser(prog="search", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -3690,10 +4117,13 @@ def main(argv: list[str] | None = None) -> None:
     y.add_argument("--accept-partial", action="store_true",
                    help="replace docs you have even if the new download looks incomplete")
     y.set_defaults(func=cmd_sync)
-    sub.add_parser("list", help="show indexed sources").set_defaults(func=cmd_list)
+    ls = sub.add_parser("list", help="show indexed docs; list NAME: its copies, choose the one search uses")
+    ls.add_argument("name", nargs="?", help="a package: its copies, and which one search uses")
+    ls.set_defaults(func=cmd_list)
     sub.add_parser("known", help="languages and toolkits that can be added by name").set_defaults(func=cmd_known)
-    r = sub.add_parser("remove", help="delete indexed sources")
+    r = sub.add_parser("remove", help="delete indexed docs: NAME@VERSION (one copy), or NAME")
     r.add_argument("sources", nargs="+")
+    r.add_argument("--all", action="store_true", help="every copy of a package")
     r.set_defaults(func=cmd_remove)
     e = sub.add_parser("embed", help="compute vectors again (after --no-embed or a model change)")
     e.add_argument("sources", nargs="+")
@@ -3712,8 +4142,9 @@ def main(argv: list[str] | None = None) -> None:
                                       "then the docs packages.toml lists")
     st.add_argument("--workers", type=int, default=16, help="parallel downloads (default 16)")
     st.set_defaults(func=cmd_setup)
-    for cmd, text in (("upgrade", "replace docs with the newest version (or NAME==VERSION); no NAME: all"),
-                      ("downgrade", "replace docs with an older version: NAME==VERSION")):
+    for cmd, text in (("upgrade", "pull the newest docs (or NAME==VERSION), kept next to the ones you have; "
+                                  "no NAME: all"),
+                      ("downgrade", "pull an older version, NAME==VERSION, kept next to the ones you have")):
         u = sub.add_parser(cmd, help=text)
         u.add_argument("sources", nargs="*" if cmd == "upgrade" else "+", metavar="NAME[==VERSION]")
         u.add_argument("--force", action="store_true", help="download again even if up to date")

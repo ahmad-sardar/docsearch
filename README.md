@@ -1,3 +1,5 @@
+[This project isHard Vibe coding]
+
 # docsearch
 
 search docs from your terminal. read them in your browser. offline.
@@ -112,6 +114,7 @@ in the page:
 | / | jump to the search box |
 | w | wrap long code lines |
 | c | copy the name |
+| s | the source code it documents (when its docs link to it) |
 | ⌘↩ / ctrl+enter | rank this search with ai, once |
 
 before you type anything, the list shows the docs in reading order, like a table of
@@ -140,6 +143,17 @@ search add mydocs=https://docs.example.com/
 search add mydocs=~/Downloads/docs.zip   # docs you downloaded yourself (or C:\path on windows)
 search remove polars
 ```
+
+a package's docs are found through its source code. pypi names its repository (github,
+gitlab, codeberg), and docs count as the package's when they and the repository point at each
+other: the docs link to it, or it names their site as its website. that finds the right docs
+when pypi's own link is old or points elsewhere, and docs that point neither way are shown to
+you before anything is downloaded (`--yes` takes them). a package that names no docs site at
+all gets the readme of its release, which is its documentation.
+
+the code an entry documents comes along, where the docs link to it (numpy, pandas, torch,
+scipy, polars, matplotlib, go...): press `s` on the entry to read it, at the version the docs
+were built from, offline like everything else.
 
 a docs site gives you every page under the address you add. big sites (azure, aws, google
 cloud, oracle) have tens of thousands, so add the part you want, one product or book:
@@ -199,6 +213,10 @@ search upgrade max==nightly         # a new nightly copy (each one is named by i
 
 `search known` shows which ones each built-in site has.
 
+docs that publish no version number are named by what they show: the release their source
+links name (polars: 2.0.0), or, built from a development branch (jax, triton: main), a nightly
+of the day they were downloaded. else the day, with the newest release at the time.
+
 ## saving tutorials
 
 found a good article? keep it.
@@ -220,7 +238,8 @@ programs in, download the docs yourself and `search add name=/path/to/folder`.
 ## safe
 
 - offline after setup. the search can't reach the internet even by accident.
-- downloaded pages are stripped of scripts before you see them.
+- downloaded pages are stripped of scripts before you see them. source code is kept as text and
+  shown highlighted; nothing in it runs.
 - models come from fixed versions and are checked by hash. no pickle files.
 
 ## how good is the search

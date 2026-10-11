@@ -16,6 +16,8 @@ version: see CHANNELS). The default is always the stable release. A channel is e
 value "{version}" takes for it (rust's "nightly"), or what changes for it (max's addresses),
 which may be `version_now`: where to read which version is in that state now (python's
 beta: the one in pre-release), then filled in as "{version}".
+
+`repo`: where the source code is (the docs link to it). None for docs without public source.
 """
 from __future__ import annotations
 
@@ -39,6 +41,7 @@ def channel(version: str) -> str | None:
 KNOWN: dict[str, dict] = {
     "python": {
         "about": "Python: the language reference, tutorial and standard library",
+        "repo": "github.com/python/cpython",
         "kind": "sphinx", "url": "https://docs.python.org/{version}/", "version": "3",
         "channels": {"nightly": "dev",           # docs.python.org/dev/: the main branch
                      "beta": {"version_now": ["https://peps.python.org/api/release-cycle.json",
@@ -46,6 +49,7 @@ KNOWN: dict[str, dict] = {
     },
     "rust": {
         "about": "Rust: the standard library, The Rust Book and The Rust Reference",
+        "repo": "github.com/rust-lang/rust",
         "root": "https://doc.rust-lang.org/{version}/", "version": "stable",
         "channels": {"beta": "beta", "nightly": "nightly"},
         "version_from": ["https://doc.rust-lang.org/stable/std/index.html", r'data-channel="(\d+\.\d+\.\d+)"'],
@@ -59,6 +63,7 @@ KNOWN: dict[str, dict] = {
     },
     "ocaml": {
         "about": "OCaml: the manual and the standard library API",
+        "repo": "github.com/ocaml/ocaml",
         "kind": "website", "version": "5.5", "root": "https://ocaml.org/manual/{version}/",
         "version_from": ["https://ocaml.org/manual/latest/", r"/manual/(\d+\.\d+)/", "address"],
         "start": ["https://ocaml.org/manual/{version}/index.html", "https://ocaml.org/manual/{version}/api/index.html"],
@@ -92,6 +97,7 @@ KNOWN: dict[str, dict] = {
     },
     "mojo": {
         "about": "Mojo: the manual, language reference and standard library (mojolang.org)",
+        "repo": "github.com/modular/modular",
         "kind": "website", "root": "https://mojolang.org/", "llms": "https://mojolang.org/llms.txt",
         "version_from": ["https://mojolang.org/llms.txt", r"(?m)^Version: *(\S+)"],
         "prefix": "https://mojolang.org/docs/", "api_path": r"/docs/std/",
@@ -101,6 +107,7 @@ KNOWN: dict[str, dict] = {
     },
     "max": {
         "about": "MAX: Modular's AI serving and modeling platform (max.modular.com)",
+        "repo": "github.com/modular/modular",
         "kind": "website", "root": "https://max.modular.com/", "llms": "https://max.modular.com/stable/llms.txt",
         "version_from": ["https://max.modular.com/stable/llms.txt", r"(?m)^Version: *(\S+)"],
         "prefix": "https://max.modular.com/stable/", "api_path": r"/api/",
@@ -111,6 +118,7 @@ KNOWN: dict[str, dict] = {
     },
     "go": {
         "about": "Go: the language specification, Effective Go and the standard library",
+        "repo": "github.com/golang/go",
         "root": "https://",                      # two sites: go.dev and pkg.go.dev
         "version_from": ["https://go.dev/VERSION?m=text", r"go(\d+\.\d+(?:\.\d+)?)"],
         "parts": [
@@ -124,6 +132,7 @@ KNOWN: dict[str, dict] = {
     },
     "git": {
         "about": "Git: the reference (every command and option) and the Pro Git book (git-scm.com)",
+        "repo": "github.com/git/git",
         "root": "https://git-scm.com/",
         "version_from": ["https://git-scm.com/docs/git", r"last updated in (\d+\.\d+\.\d+)"],
         "parts": [
@@ -136,6 +145,7 @@ KNOWN: dict[str, dict] = {
     },
     "javascript": {
         "about": "JavaScript: the language reference and guide (MDN)",
+        "repo": "github.com/mdn/content",
         "kind": "website", "root": "https://developer.mozilla.org/",
         "sitemap": "https://developer.mozilla.org/sitemaps/en-us/sitemap.xml.gz",
         "prefix": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/",

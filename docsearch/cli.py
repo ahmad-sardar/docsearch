@@ -34,10 +34,12 @@ buttons; text can be selected and copied as in any web page.
 from __future__ import annotations
 
 import argparse
+import base64
 import collections
 import concurrent.futures as cf
 import contextlib
 import functools
+import gzip
 import json
 import os
 import re
@@ -104,7 +106,7 @@ EMBED_CHARS = 200     # text per entry the model reads: the name, signature and 
                       # Measured on numpy: 200 ranks the right answer higher than 1200 (mean
                       # rank 6.5 vs 15.8 on 10 questions) and embeds 3.5x faster.
 CHUNK_CHARS = 2500    # long man page sections are cut into parts of about this size
-SKIP_HOSTS = {"github.com", "gitlab.com", "bitbucket.org", "pypi.org", "www.github.com"}
+SKIP_HOSTS = {"github.com", "gitlab.com", "codeberg.org", "bitbucket.org", "pypi.org", "www.github.com"}
 
 
 @dataclass(slots=True)
@@ -455,10 +457,9 @@ def http_get_once(url: str, timeout: float = 20) -> tuple[bytes, str]:
                 paced(host, r.status_code in (429, 503), float(after) if after.isdigit() else None)
                 if r.is_redirect:
                     nxt = urllib.parse.urljoin(url, r.headers.get("location", ""))
-                    if url.startswith("https:") and not nxt.startswith("https:"):
-                        raise Failed("redirect", url, f"it redirects from HTTPS to plain HTTP ({nxt}), "
-                                                      "which is refused")
-                    url = nxt
+                    if url.startswith("https:") and nxt.startswith("http:") and not ALLOW_HTTP:
+                        nxt = "https:" + nxt[len("http:"):]   # (a site that sends HTTPS to plain HTTP:
+                    url = nxt                                 # the same address over HTTPS, as browsers do)
                     continue
                 if r.status_code >= 400:
                     head = b""
@@ -965,9 +966,7 @@ def same_site(root: str, url: str) -> bool:
 INV_LINE = re.compile(r"(?x)(.+?)\s+(\S+)\s+(-?\d+)\s+?(\S*)\s+(.*)")  # Sphinx's own pattern
 
 
-# What a docs tool writes when a project sets no name or version: "" (unknown) for docsearch
-NO_PROJECT = {"Project name not set"}      # Sphinx's (py-filelock)
-NO_VERSION = {"0.0.0"}                     # mkdocstrings' (FastAPI)
+NO_VERSION = {"0.0.0"}         # what mkdocstrings writes when a project sets no version (FastAPI)
 
 
 def parse_objects_inv(data: bytes) -> tuple[str, str, list[dict]]:
@@ -978,7 +977,6 @@ def parse_objects_inv(data: bytes) -> tuple[str, str, list[dict]]:
         raise ValueError("not a Sphinx version 2 inventory")
     project = head[1].decode("utf-8", "replace").removeprefix("# Project:").strip()
     version = head[2].decode("utf-8", "replace").removeprefix("# Version:").strip()
-    project = "" if project in NO_PROJECT else project
     version = "" if version in NO_VERSION else version
     z = zlib.decompressobj()
     body = z.decompress(head[4], MAX_INVENTORY)
@@ -1036,18 +1034,6 @@ def sphinx_fragment(soup, anchor: str, ids: dict | None = None):
     return [el]
 
 
-def sphinx_docs(name: str, sid: str, root: str, inv: bytes | None, args, spec: str) -> tuple[list[Entry], dict]:
-    """The Sphinx docs `search add` found (PyPI, or an address), kept for offline reading;
-    their place is kept as they are read, so the same command goes on if they stop."""
-    from docsearch import importers
-    store = importers.Store(sid, root)
-    if not importers.begin(sid, {"kind": "sphinx", "url": root}, spec, "sphinx"):
-        store.reset()
-    entries, extra = build_sphinx(name, root, inv, args.workers, args.max_pages, store=store,
-                                  folder=importers.part_dir(sid, 0))
-    return last_steps(name, sid, store, entries, extra, args.workers, True)
-
-
 def build_sphinx(name: str, root: str, inv: bytes | None, workers: int, max_pages: int | None,
                  store=None, folder: Path | None = None) -> tuple[list[Entry], dict]:
     """Every object in a Sphinx inventory, cut out of its page. `store` keeps the pages for
@@ -1084,7 +1070,7 @@ def build_sphinx(name: str, root: str, inv: bytes | None, workers: int, max_page
         page, _, anchor = o["uri"].partition("#")
         pages.setdefault(page, []).append((o, anchor))
     page_list = list(pages)[:max_pages] if max_pages and folder is None else list(pages)
-    say(f"  {project or name} {version}".rstrip() + f": {len(best)} documented objects on {len(page_list)} pages")
+    say(f"  {project} {version}".rstrip() + f": {len(best)} documented objects on {len(page_list)} pages")
     if len(page_list) > 1500 and not (folder is not None and (folder / "state.json").exists()):
         say("  This is a large site. The first download can take several minutes.")
     page_list = [p for p in page_list if same_site(root, urllib.parse.urljoin(root, p))]
@@ -1225,6 +1211,75 @@ def download_images(images: dict[str, str], folder: Path, workers: int, read=Non
     return not stopped
 
 
+MAX_SOURCE = 4 * 2**20        # a file of code larger than this is not kept (its link still shows)
+
+
+def download_sources(sid: str, workers: int, stop: dict | None = None) -> dict | None:
+    """Store the code the docs' entries link to (Sphinx's [source], Go's "View Source"), each
+    file once, at the version the links name: read offline next to the docs. Files stored
+    before (a download that stopped) are not fetched again; one that cannot be fetched keeps
+    its link only. Returns what was stored ({"files", "stored", "repo", "ref"}: the
+    repository and version most links name), or None if it stopped first (the rest next time)."""
+    pages_dir, folder = HOME / sid / "pages", HOME / sid / "source"
+    files: dict[str, tuple[str, str, str]] = {}     # raw address -> (repository, ref, path)
+    for f in pages_dir.rglob("*.gz") if pages_dir.exists() else []:
+        try:
+            html = gzip.decompress(f.read_bytes()).decode("utf-8", "replace")
+        except (OSError, EOFError):
+            continue
+        for link in offline.signature_links(html):
+            got = offline.raw_source(link)
+            if got:
+                files[got[0]] = got[1:]
+    if not files:
+        return {"files": 0, "stored": 0}
+    folder.mkdir(parents=True, exist_ok=True)
+    todo = [raw for raw in files if not offline.source_file(folder, raw).exists()]
+
+    def one(raw: str) -> bool:
+        try:
+            data, _ = http_get(raw, timeout=30)
+            if raw.endswith("?format=TEXT"):             # Go's source host: the file in base64
+                data = base64.b64decode(data)
+        except Exception:  # noqa: BLE001 - a missing file keeps its link
+            return False
+        if len(data) > MAX_SOURCE or b"\0" in data[:8192]:  # too large, or not text
+            return False
+        write_atomic(offline.source_file(folder, raw), gzip.compress(data, 6))
+        return True
+
+    stopped = False
+    ex = cf.ThreadPoolExecutor(max_workers=max(1, min(workers, 8)))
+    try:
+        with Progress("  source code", len(files), quiet=not todo, start=len(files) - len(todo)) as bar:
+            futures = collections.deque(ex.submit(one, raw) for raw in todo)
+            until = None
+            while futures:
+                if stop and stop["why"]:                  # stopping: those under way, GRACE seconds
+                    if until is None:
+                        until = time.monotonic() + GRACE
+                        for fut in futures:
+                            fut.cancel()
+                    if time.monotonic() > until:
+                        break
+                    futures = collections.deque(fut for fut in futures if not fut.cancelled())
+                    if not futures:
+                        break
+                if not futures[0].done():
+                    cf.wait([futures[0]], timeout=0.2)    # short waits: ctrl+c is seen at once
+                    continue
+                futures.popleft().result()
+                bar.update()
+        stopped = bool(stop and stop["why"])
+    finally:
+        ex.shutdown(wait=not stopped, cancel_futures=stopped)
+    stored = sum(offline.source_file(folder, raw).exists() for raw in files)
+    (repo, ref), _ = collections.Counter(v[:2] for v in files.values()).most_common(1)[0]
+    say(f"  source code: {stored} of {len(files)} files stored, {repo} at {ref}"
+        + (" (stopped: the rest next time)" if stopped and stored < len(files) else ""))
+    return None if stopped and stored < len(files) else {"files": len(files), "stored": stored, "repo": repo, "ref": ref}
+
+
 def images_stopped(name: str) -> dict:
     """The "partial" of docs whose pages are all read, stopped while their images were stored."""
     say(f"  stopped: the pages are {kept()}, some images are missing; to continue: {continue_with(name)}")
@@ -1233,89 +1288,198 @@ def images_stopped(name: str) -> dict:
 
 def last_steps(name: str, sid: str, store, entries: list[Entry], meta: dict, workers: int,
                keep: bool) -> tuple[list[Entry], dict]:
-    """After all the pages: their images (a step that can stop and go on too), then the place
-    the download kept (`keep`) is let go: the docs are complete."""
+    """After all the pages: their images, then the source code their entries link to (steps
+    that can stop and go on too), then the place the download kept (`keep`) is let go: the
+    docs are complete."""
     from docsearch import importers
     if meta.get("partial"):
         return entries, meta
     stop: dict = {"why": None}
     with stoppable(stop, keep):
         stored = store.finish(workers, stop if keep else None)
+        code = download_sources(sid, workers, stop if keep else None) if stored else None
     if not stored:
         return entries, {**meta, "partial": images_stopped(name)}
+    if code is None:
+        say(f"  stopped: the pages are {kept()}, some of their source code is missing; to continue: "
+            f"{continue_with(name)}")
+        return entries, {**meta, "partial": {"step": "source"}}
     shutil.rmtree(importers.crawl_dir(sid), ignore_errors=True)
-    return entries, meta
+    return entries, {**meta, "source": code}
 
 
-# --------------------------------------------------------------------------- MkDocs
+# --------------------------------------------------------------------------- a package: its project, its source, its docs
 
-def build_mkdocs(name: str, root: str, data: bytes) -> tuple[list[Entry], dict]:
-    docs = json.loads(data).get("docs", [])
-    page_titles = {d.get("location", ""): d.get("title", "") for d in docs if "#" not in d.get("location", "")}
-    entries = []
-    for d in docs:
-        loc = d.get("location", "")
-        page = loc.split("#")[0]
-        title = d.get("title") or page or "Home"
-        parent = page_titles.get(page)
-        if "#" in loc and parent and parent != title:
-            title = f"{parent} › {title}"
-        if not same_site(root, urllib.parse.urljoin(root, loc)):
-            continue
-        text = d.get("text", "") or ""
-        md = html_to_md(text) if "<" in text else text
-        entries.append(Entry(title=title, kind="section" if "#" in loc else "page",
-                             location=urllib.parse.urljoin(root, loc),
-                             text=md[:PREVIEW_CHARS], source=name))
-    return entries, {"project": name, "version": ""}
+REGISTRY = "https://pypi.org/pypi/{}/json"          # a package's record (the tests ask a local one)
+RELEASE = "https://pypi.org/pypi/{}/{}/json"        # its record of one release (its README then)
+# Where projects keep their code, and where to ask a repository what it says of itself (the
+# website it names). GitHub: 60 questions an hour without an account; GitLab names none.
+CODE_HOSTS = {"github.com": "https://api.github.com/repos/{}",
+              "codeberg.org": "https://codeberg.org/api/v1/repos/{}", "gitlab.com": ""}
+NOT_A_REPO = {"sponsors", "orgs", "apps", "features", "topics", "marketplace", "settings", "about", "login"}
+SHARED_HOSTS = ("github.io", "gitlab.io", "codeberg.page")   # one host, many projects (by folder)
+PYPI_INFO: dict[str, dict] = {}      # package -> what PyPI says of it (its description, version)
+REPO_FACTS: dict[str, dict | None] = {}   # repository -> what it says of itself (asked once a run)
+PAGES_SEEN: dict[str, tuple] = {}   # address -> (where it led, its page, why it failed) while finding docs
+UNREACHED: dict[str, Failed] = {}   # places docs may be that did not answer (a limit, a check, no answer)
+ABSENT = {"not-found", "gone", "dns", "login", "not-https"}   # failures that say there is nothing to read
+# What marks a docs site: a Sphinx inventory (its API objects, by name), or the search index
+# of MkDocs or of Zensical (FastAPI): docs are there, read then page by page
+SITE_INDEXES = (("objects.inv", "sphinx"), ("search/search_index.json", "website"), ("search.json", "website"))
 
 
-# --------------------------------------------------------------------------- finding the docs of a PyPI package
+def repo_of(url: str) -> str | None:
+    """github.com/numpy/numpy, for any address in a repository (its page, a file in it, .git)."""
+    u = urllib.parse.urlparse(url if "//" in url else "https://" + url)
+    host = u.netloc.lower().removeprefix("www.")
+    parts = [p for p in u.path.split("/") if p]
+    if host not in CODE_HOSTS or len(parts) < 2 or parts[0].lower() in NOT_A_REPO:
+        return None
+    return f"{host}/{parts[0]}/{parts[1].removesuffix('.git')}"
 
-PYPI_INFO: dict[str, dict] = {}      # package -> PyPI's own description (for the overlap check)
-GUESSED: set[str] = set()            # docs addresses we made up rather than PyPI listing them
 
-
-def pypi_candidates(pkg: str) -> list[str]:
+def project_of(name: str) -> dict:
+    """What PyPI says of a package: its source repository, its docs links, its other links."""
     try:
-        meta = json.loads(http_get(f"https://pypi.org/pypi/{pkg}/json")[0])
+        info = json.loads(http_get(REGISTRY.format(name))[0]).get("info", {})
     except Failed as e:
         if e.kind == "not-found":
-            die(f"'{pkg}' is not a package on PyPI.")
+            die(f"'{name}' is not a package on PyPI.")
         raise
-    info = meta.get("info", {})
-    PYPI_INFO[pkg] = info
-    urls = info.get("project_urls") or {}
-    docs = [u for k, u in urls.items() if re.search(r"doc", k, re.I)]
-    rtd = [u for u in urls.values() if "readthedocs" in u]
-    home = [u for k, u in urls.items() if re.search(r"home|website", k, re.I)]
-    norm = re.sub(r"[-_.]+", "-", pkg).lower()
-    rtd_guess = [f"https://{norm}.readthedocs.io/en/stable/", f"https://{norm}.readthedocs.io/en/latest/"]
-    listed = " ".join(list(urls.values()) + [info.get("docs_url") or "", info.get("home_page") or ""])
-    if f"{norm}.readthedocs.io" not in listed:
-        GUESSED.add(f"{norm}.readthedocs.io")       # only a guess: another project may live there
-    legacy = [info[k] for k in ("docs_url", "home_page") if info.get(k)]
-    seen, out = set(), []
-    for u in docs + rtd + rtd_guess + home + legacy:
-        if u and u not in seen:
-            seen.add(u)
-            out.append(u)
-    return out
+    PYPI_INFO[name] = info
+    urls = dict(info.get("project_urls") or {})
+    for k in ("docs_url", "home_page"):
+        if info.get(k):
+            urls.setdefault(k, info[k])
+    urls = {k: u if "://" in u else "https://" + u for k, u in urls.items() if isinstance(u, str) and u.strip()}
+    by_kind = sorted(urls.items(), key=lambda kv: not re.search(r"source|repo|code|git", kv[0], re.I))
+    repo = next((r for r in (repo_of(u) for _, u in by_kind if u) if r), None)
+    rest = {k: u for k, u in urls.items() if u and not repo_of(u)
+            and urllib.parse.urlparse(u).netloc.lower() not in SKIP_HOSTS}
+    docs = [u for k, u in rest.items() if re.search(r"doc", k, re.I) or "readthedocs" in u]
+    home = [u for k, u in rest.items() if re.search(r"home|website", k, re.I)]
+    return {"repo": repo, "docs": list(dict.fromkeys(docs)), "home": list(dict.fromkeys(home))}
 
 
-def probe_roots(candidate: str) -> list[str]:
-    """Directories where objects.inv or search/search_index.json may live."""
+def release_info(name: str, version: str) -> dict:
+    """PyPI's record of one release of a package ({} if it has none)."""
+    try:
+        return json.loads(http_get(RELEASE.format(name, version))[0]).get("info") or {}
+    except Failed as e:
+        if e.kind == "not-found":
+            return {}
+        raise
+
+
+def repo_facts(repo: str) -> dict | None:
+    """What a repository says of itself: its name now (after a rename), and the website it
+    names. One question to its host, once a run; None if it names none (GitLab) or could
+    not be asked."""
+    if repo.lower() in REPO_FACTS:
+        return REPO_FACTS[repo.lower()]
+    host, _, path = repo.partition("/")
+    facts, api = None, CODE_HOSTS.get(host)
+    if api:
+        try:
+            d = json.loads(http_get_once(api.format(path), timeout=15)[0])
+            facts = {"repo": f"{host}/{d.get('full_name') or path}", "website": d.get("homepage") or d.get("website") or ""}
+        except (Failed, ValueError) as e:
+            why = ("it allows a few questions an hour without an account, and they are used up"
+                   if isinstance(e, Failed) and e.kind in ("forbidden", "rate-limited") else
+                   WHY[e.kind].format(detail=e.detail) if isinstance(e, Failed) else f"its answer was not JSON ({e})")
+            say(f"  ({host} could not be asked about {path}: {why}. The docs' own links are checked.)")
+    REPO_FACTS[repo.lower()] = facts
+    return facts
+
+
+def on_site(docs: str, website: str) -> bool:
+    """Are these docs on the site a repository names as its website? The same host, or one
+    under it (docs.scipy.org under scipy.org); on a host many projects share (NAME.github.io),
+    also in the same folder."""
+    d, w = (urllib.parse.urlparse(x if "//" in x else "https://" + x) for x in (docs, website))
+    dh, wh = d.netloc.lower().removeprefix("www."), w.netloc.lower().removeprefix("www.")
+    if not wh or wh in SKIP_HOSTS or not (dh == wh or dh.endswith("." + wh)):
+        return False
+    first = lambda path: path.strip("/").split("/")[0].lower()    # noqa: E731
+    return not wh.endswith(SHARED_HOSTS) or first(d.path) == first(w.path)
+
+
+def linked_repos(html: str) -> list[str]:
+    """The repositories a page links to, the most linked first."""
+    found = collections.Counter(r for r in map(repo_of, re.findall(r"""href=["']([^"']+)""", html)) if r)
+    return [r for r, _ in found.most_common()]
+
+
+def checked(root: str, page: str, repo: str | None, start: str = "") -> str:
+    """How docs are known to be a repository's, in words ("" if they are not): their page
+    links to it, or it names their site as its website (or the address they were reached
+    from, which led there: wsproto.readthedocs.io to python-hyper.org/projects/wsproto/)."""
+    if not repo:
+        return ""
+    for html in (page, None):                        # the page at the address; then the docs' own
+        if html is None:                             # first page, if that was another one
+            try:
+                html = http_get(root, timeout=15)[0].decode("utf-8", "replace")
+            except Exception:  # noqa: BLE001
+                continue
+        if repo.lower() in {r.lower() for r in linked_repos(html)}:
+            return f"they link to {repo}"
+    facts = repo_facts(repo)                         # (last: GitHub answers a few an hour)
+    if facts and facts["website"] and (on_site(root, facts["website"]) or (start and on_site(start, facts["website"]))):
+        return f"{facts['repo']} names this site"
+    return ""
+
+
+# Where a docs page says its docs begin: Sphinx (data-content_root; before 7.2 data-url_root),
+# MkDocs Material and Zensical ("base" in their settings), MkDocs' own themes (base_url)
+ROOT_HINT = re.compile(r'data-content_root="([^"]*)"|data-url_root="([^"]*)"|"base":\s*"([^"]*)"'
+                       r"""|base_url\s*=\s*['"]([^'"]*)['"]""")     # (and MkDocs' own themes)
+
+
+def landing(url: str) -> tuple[str, str]:
+    """The page at an address, and where it is. A page that only says "go to ..." is followed
+    when it leads further into its own folder (triton-lang.org: to /main/); one that leads
+    elsewhere stays as it is (PyTorch's /stable/ to /2.14/: stable stays the docs' address)."""
+    for _ in range(3):
+        body, final = http_get(url, timeout=10)
+        m = REFRESH.search(body[:4096]) if len(body) < 20_000 else None
+        nxt = urllib.parse.urljoin(final, m.group(1).decode("utf-8", "replace")) if m else ""
+        folder = urllib.parse.urlparse(final).path.rsplit("/", 1)[0] + "/"
+        if not (nxt and same_site(final, nxt) and urllib.parse.urlparse(nxt).path.startswith(folder)):
+            return final, body.decode("utf-8", "replace")
+        url = nxt
+    return final, body.decode("utf-8", "replace")
+
+
+def probe_roots(candidate: str) -> tuple[list[str], str, bool]:
+    """Folders where the docs at an address may begin; the page at the address ("" if it could
+    not be read); and whether the page said where (a Sphinx, MkDocs or Zensical page: then that
+    one folder). Else the address's own folder, folders where docs often are under it, and its
+    parents."""
     if candidate.startswith("http://") and not ALLOW_HTTP:
         candidate = "https://" + candidate[len("http://"):]     # PyPI often lists http links
-    try:
-        final = http_get(candidate, timeout=10)[1]
-    except Exception:  # noqa: BLE001
-        final = candidate
+    if candidate not in PAGES_SEEN:                  # (one question per page in a run)
+        try:
+            PAGES_SEEN[candidate] = (*landing(candidate), None)
+        except Exception as e:  # noqa: BLE001
+            PAGES_SEEN[candidate] = candidate, "", e if isinstance(e, Failed) else Failed("other", candidate, str(e))
+    final, page, failed = PAGES_SEEN[candidate]
+    if failed is not None and failed.kind not in ABSENT:
+        UNREACHED[candidate] = failed                # (did not answer: the docs may be there; asking
+        return [], "", False                         # more of that site now only makes a limit worse)
     u = urllib.parse.urlparse(final)
     if u.netloc.lower() in SKIP_HOSTS or not u.scheme.startswith("http"):
-        return []
+        return [], "", False
+    m = ROOT_HINT.search(page[:300_000])
+    if m:
+        rel = next(g for g in m.groups() if g is not None) or "."
+        root = urllib.parse.urljoin(final, rel.rstrip("/") + "/")
+        if same_site(final, root):
+            return [root], page, True
     base = f"{u.scheme}://{u.netloc}"
-    path = u.path if u.path.endswith("/") else u.path.rsplit("/", 1)[0] + "/"
+    last = u.path.rsplit("/", 1)[-1]
+    path = (u.path if u.path.endswith("/") else u.path + "/" if "." not in last   # /bigquery: a folder
+            else u.path.rsplit("/", 1)[0] + "/")                                  # /x/index.html: in /x/
     parents, p = [], path
     while True:
         parents.append(base + p)
@@ -1324,39 +1488,188 @@ def probe_roots(candidate: str) -> list[str]:
         p = p.rstrip("/").rsplit("/", 1)[0] + "/"
     here = parents[0]
     suffixes = ["stable/", "en/stable/", "en/latest/", "latest/", "docs/", "docs/stable/", "doc/stable/"]
-    roots = [here] + [here + s for s in suffixes] + parents[1:]
-    return list(dict.fromkeys(roots))
+    return list(dict.fromkeys([here] + [here + s for s in suffixes] + parents[1:])), page, False
 
 
-def find_docs(candidates: list[str]) -> tuple[str, str, bytes] | None:
-    tried: set[str] = set()
-    for cand in candidates:
-        say(f"  looking at {cand}")
-        for root in probe_roots(cand):
-            if root in tried:
+def docs_index(kind: str, data: bytes) -> bool:
+    """Is this file a docs site's index (SITE_INDEXES)?"""
+    if kind == "sphinx":
+        return data.startswith(b"# Sphinx inventory version 2")
+    try:
+        d = json.loads(data)
+    except ValueError:
+        return False
+    return isinstance(d, dict) and isinstance(d.get("docs", d.get("items")), list)
+
+
+def index_in(roots: list[str], files=SITE_INDEXES) -> tuple[str, str, bytes | None] | None:
+    """The first docs index in these folders: ("sphinx", root, its inventory) where an
+    objects.inv is, ("website", root, None) where an MkDocs or Zensical search index is."""
+    for root in roots:
+        for fname, kind in files:
+            try:                                 # (a guess: one refused says nothing of the site)
+                data, final = http_get(root + fname, timeout=10, guess=True)
+            except Failed as e:
+                if e.kind not in ABSENT | {"forbidden", "bot-check"}:   # (a refused guess: nothing there)
+                    UNREACHED[root + fname] = e
                 continue
-            tried.add(root)
-            for fname, kind in (("objects.inv", "sphinx"), ("search/search_index.json", "mkdocs")):
-                try:
-                    data, final = http_get(root + fname, timeout=10, guess=True)
-                except Exception:  # noqa: BLE001
-                    continue
-                real_root = final[: -len(fname)] if final.endswith(fname) else root
-                if kind == "sphinx" and data.startswith(b"# Sphinx inventory version 2"):
-                    return kind, real_root, data
-                if kind == "mkdocs":
-                    try:
-                        if isinstance(json.loads(data).get("docs"), list):
-                            return kind, real_root, data
-                    except Exception:  # noqa: BLE001
-                        pass
+            except Exception:  # noqa: BLE001
+                continue
+            if docs_index(kind, data):
+                real = final[: -len(fname)] if final.endswith(fname) else root
+                return kind, real, (data if kind == "sphinx" else None)
     return None
+
+
+def find_docs(candidate: str, fallback: bool = False) -> tuple[str, str, bytes | None, str] | None:
+    """The docs at or under an address, and the page at the address (its links say whose docs
+    they are): ("sphinx", root, inventory) where an objects.inv is; ("website", root, None) for
+    other docs, a page that says it is MkDocs or Zensical, or their search index. A page that
+    says where its docs begin costs one question. fallback: an address of docs (PyPI's docs
+    link), whose pages are read even if nothing says what they are. None: no docs there."""
+    under, page, said = probe_roots(candidate)
+    if said:                                      # its root is known: an inventory there, or pages
+        hit = index_in(under, SITE_INDEXES[:1])  # (unless the inventory did not answer: a limit)
+        hit = hit or (None if under[0] + SITE_INDEXES[0][0] in UNREACHED else ("website", under[0], None))
+    elif page or fallback:                        # (an address that does not answer: not searched)
+        hit = index_in(under, SITE_INDEXES[:1])  # (a page of MkDocs or Zensical says where: above)
+        hit = hit or (("website", under[0], None) if fallback and under and page else None)
+    else:
+        hit = None
+    return (*hit, page) if hit else None
+
+
+def docs_links(page: str, url: str, name: str) -> list[tuple[str, bool]]:
+    """A project's home page's links to docs on its own site (sympy.org: docs.sympy.org), the
+    ones that name the package first, and whether they do (a site many packages share:
+    Google's, /python/docs/reference/bigquery/ for google-cloud-bigquery)."""
+    host = urllib.parse.urlparse(url).netloc.lower()
+    section = urllib.parse.urlparse(url).path.rstrip("/").rsplit("/", 1)[0] + "/"     # (where it is)
+    words = [w for w in re.split(r"[-_.]+", name.lower()) if len(w) > 2 and w not in host]
+    out: dict[str, bool] = {}
+    for href, text in re.findall(r"""<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)</a>""", page, re.S | re.I):
+        link = urllib.parse.urljoin(url, href).split("#")[0]
+        u = urllib.parse.urlparse(link)
+        if on_site(link, url) and link.rstrip("/") != url.rstrip("/") and (
+                u.netloc.startswith("docs.") or re.search(r"/docs?(/|\.html?$|$)", u.path)
+                or re.search(r"\bdoc(s|umentation)\b", re.sub(r"<[^>]+>", " ", text), re.I)):
+            out[link] = out.get(link, False) or (u.path.startswith(section) and any(
+                re.search(rf"(^|/){re.escape(w)}(/|$)", u.path.lower()) for w in words))
+    return sorted(out.items(), key=lambda kv: not kv[1])[:3]
+
+
+def package_docs(name: str, yes: bool) -> tuple[str, str, bytes | None, dict] | None:
+    """A PyPI package's docs, checked against its source code: (kind, root, inventory, how
+    they were checked). Tried in turn: PyPI's docs links, the website its repository names,
+    PyPI's homepage (and, from a home page, its links to docs on its site), and
+    NAME.readthedocs.io (a guess, used only if checked). The first whose docs and repository
+    point at each other is taken. If none does, you are asked about the first found (--yes:
+    taken). None: no docs, or not taken."""
+    p = project_of(name)
+    repo = p["repo"]
+    summary = (PYPI_INFO.get(name) or {}).get("summary") or ""
+    norm = re.sub(r"[-_.]+", "-", name).lower()
+    UNREACHED.clear()
+    dead_before = set(DEAD_HOSTS)
+    later = [lambda: [(w, "website") for w in [(repo_facts(repo) or {}).get("website") if repo else None] if w],
+             lambda: [(u, "home") for u in p["home"]],      # (the repository is asked only if PyPI's
+             lambda: [(f"https://{norm}.readthedocs.io/", "guess")]]          # docs links were not it)
+    queue = [(u, "docs") for u in p["docs"]]
+    tried: set[str] = set()                           # addresses looked at
+    roots: set[str] = set()                           # docs found (several addresses may lead there)
+    first = None                                      # the first docs found that could not be checked
+    while queue or later:
+        if not queue:
+            queue = later.pop(0)()
+            continue
+        url, how = queue.pop(0)
+        if url in tried:
+            continue
+        tried.add(url)
+        say(f"  looking at {url}" + (" (a guess)" if how == "guess" else ""))
+        found = find_docs(url, fallback=how == "docs")
+        if found is None:
+            if how in ("website", "home"):           # a project's home page: its links to its docs
+                page = probe_roots(url)[1]           # (one that names the package: its docs address)
+                queue[:0] = [(link, "docs" if named else "home") for link, named in docs_links(page, url, name)]
+            continue
+        if found[1] in roots:
+            continue
+        roots.add(found[1])
+        why = checked(found[1], found[3], repo, url if how == "website" else "")
+        if why:
+            say(f"  found {found[0]} docs at {found[1]} ({why})")
+            return *found[:3], {"repo": repo, "verified": why, "about": summary}
+        if first is None and how != "guess":
+            first = found
+    unreached = {**{u: e for u, e in UNREACHED.items()},
+                 **{h: e for h, e in DEAD_HOSTS.items() if h not in dead_before}}
+    if unreached:                                    # the checked docs may be there: never the README
+        if first is not None:                        # or unchecked docs instead (not even --yes)
+            say(f"  found {first[0]} docs at {first[1]}, which could not be checked against the source")
+        say(f"  Could not reach every place the docs of '{name}' may be; nothing indexed:")
+        by_host = {urllib.parse.urlparse(w).netloc or w: e for w, e in unreached.items()}
+        for host, e in list(by_host.items())[:4]:
+            say(f"  {host}: {WHY[e.kind].format(detail=e.detail)}")
+        kind = next(iter(unreached.values())).kind
+        say(f"  {NEXT.get(kind) or 'Try again later.'}")
+        return None
+    if first is None and (PYPI_INFO.get(name) or {}).get("description"):
+        say(f"  {name} names no docs site (PyPI, its repository): its README is its documentation")
+        return "readme", f"https://pypi.org/project/{name}/", None, {"repo": repo, "about": summary,
+                                                                     "verified": "PyPI's record of the package"}
+    if first is None:
+        from docsearch import sources
+        say(f"  Could not find docs for '{name}'.")
+        for host, why in DEAD_HOSTS.items():
+            say(f"  {host}: {WHY[why.kind].format(detail=why.detail)}")
+            say(f"  {NEXT.get(why.kind, '')}".rstrip())
+        say(f"  If you know the docs URL, run: search add {name}=https://.../")
+        say(f"  Languages and toolkits that need no PyPI package: {', '.join(sorted(sources.KNOWN))}")
+        return None
+    kind, root, inv, _ = first
+    say(f"  found {kind} docs at {root}")
+    say("  They could not be checked against the source: " + (
+        f"they do not link to {repo}, and it does not name their site." if repo else
+        f"PyPI names no source repository for '{name}'."))
+    say(f"  PyPI describes '{name}' as: {summary or '(no description)'}")
+    if not confirm(f"Index the docs at {root} as '{name}'?", yes):
+        say(f"  Skipped. For other docs: search add {name}=https://...")
+        return None
+    return kind, root, inv, {"repo": repo, "verified": "you said yes", "about": summary}
+
+
+def address_repo(page: str, root: str) -> str | None:
+    """The repository of docs added by their address (for the link to their source): of the
+    ones their page links to, the first that names their site as its website."""
+    for repo in linked_repos(page)[:3]:
+        facts = repo_facts(repo)
+        if facts and facts["website"] and on_site(root, facts["website"]):
+            return facts["repo"]
+    return None
+
+
+def docs_plan(kind: str, root: str, inv: bytes | None) -> dict:
+    """How to read docs found by their address (build_known): a Sphinx inventory lists every
+    page (std:doc). One without pages (mkdocstrings: FastAPI, pydantic) lists only the API:
+    its pages are read from it, then the rest of the site page by page. No inventory: the
+    site page by page."""
+    site = {"kind": "website", "start": root, "prefix": root}
+    if kind != "sphinx":
+        return {"found": "website", "root": root, **site}
+    objs = parse_objects_inv(inv)[2]
+    if any(o["domain"] == "std" and o["role"] == "doc" for o in objs):
+        return {"found": "sphinx", "kind": "sphinx", "url": root, "root": root}
+    api = sorted({urllib.parse.urljoin(root, o["uri"].split("#")[0]) for o in objs})
+    return {"found": "sphinx", "root": root, "parts": [
+        {"kind": "sphinx", "url": root},
+        {**site, "exclude": "^(?:" + "|".join(map(re.escape, api)) + r")(?:index\.html)?$"}]}
 
 
 VERSION_SEGMENT = re.compile(r"^(stable|latest|dev|devdocs|main|master|current|v?\d+(\.\d+)*\w*)$")
 
 
-def find_version(root: str, want: str) -> tuple[str, str, bytes] | None:
+def find_version(root: str, want: str) -> tuple[str, str, bytes | None] | None:
     """Docs of another version, or of a release not out yet (nightly, beta, alpha: see
     sources.CHANNELS), of the docs at `root`. First where the site's own list of its versions
     says (switcher_urls: numpy, pandas, scipy...); else where they usually sit, next to the
@@ -1379,15 +1692,13 @@ def find_version(root: str, want: str) -> tuple[str, str, bytes] | None:
                 path = "/".join(segs[:k] + [var] + segs[k + 1:])
                 roots.append(f"{u.scheme}://{u.netloc}/{path}/")
     for r in dict.fromkeys(roots):
-        for fname, kind in (("objects.inv", "sphinx"), ("search/search_index.json", "mkdocs")):
+        for fname, kind in SITE_INDEXES:
             try:                                 # (once: a guessed address that is refused does
                 data, final = http_get_once(r + fname, timeout=10)     # not mean the site is)
             except Exception:  # noqa: BLE001
                 continue
-            if kind == "sphinx" and data.startswith(b"# Sphinx inventory version 2"):
-                return kind, final[: -len(fname)], data
-            if kind == "mkdocs" and data.lstrip().startswith(b"{"):
-                return kind, final[: -len(fname)], data
+            if docs_index(kind, data):
+                return kind, final[: -len(fname)], (data if kind == "sphinx" else None)
     return None
 
 
@@ -2566,25 +2877,6 @@ class Index:
         return e.kind in PAGE_KINDS and api_name(e.title).lower() in self.full_names
 
 
-def same_project(asked: str, found: str) -> bool:
-    """Is a docs site titled `found` about `asked`? numpy / "NumPy": yes; torch / "PyTorch":
-    yes; click / "Welcome to Click — Click Documentation (8.1.x)": yes; mojo / "Mojo Django
-    toolkit": no; max / "Maxima": no."""
-    from rapidfuzz import fuzz
-
-    def norm(s: str) -> str:
-        s = re.sub(r"\b(documentation|docs|welcome to|the|user guide|manual|reference|api|stable|"
-                   r"latest|v?\d+(\.\d+)*\w*)\b", " ", s.lower())
-        return re.sub(r"[^a-z0-9]", "", s)
-    a = norm(asked)
-    for piece in [found, *re.split(r"[—–|:·()]| - ", found)]:
-        f = norm(piece)
-        if f and (a == f or f in (f"py{a}", f"python{a}", f"{a}py") or a in (f"py{f}", f"{f}py")
-                  or fuzz.ratio(a, f) >= 88):
-            return True
-    return False
-
-
 def confirm(question: str, assume_yes: bool) -> bool:
     if assume_yes:
         return True
@@ -2617,6 +2909,8 @@ def build_known(name: str, sid: str, plan: dict, workers: int, max_pages: int | 
             found, extra = importers.build_website(name, sid, part, store, workers, max_pages, folder)
         elif kind == "rustdoc":
             found, extra = importers.build_rustdoc(name, sid, part, store, workers, max_pages, folder)
+        elif kind == "readme":
+            found, extra = importers.build_readme(name, sid, part, store)
         else:
             die(f"unknown kind of docs: {kind}")
         entries += found
@@ -2666,6 +2960,92 @@ def cmd_add(args) -> None:
         CONTINUE_WITH = outer
 
 
+def web_docs(name: str, spec: str, want: str, override: str, args, check_copy: bool) -> dict | None:
+    """How to read the docs of a package (found through its source code: package_docs), or
+    the docs at an address you gave (an inventory's objects, else page by page): a plan for
+    build_known, with their repository. None: none found, not taken, or a version you have."""
+    from docsearch import sources
+    if override:
+        kind, root, inv, page = find_docs(override, fallback=True) or ("website", override, None, "")
+        source = {"repo": address_repo(page, root)} if page else {}
+    else:
+        got = package_docs(name, args.yes)
+        if got is None:
+            return None
+        kind, root, inv, source = got
+    if kind == "readme":                             # the README of a release: the newest, or the one asked
+        version = want or (PYPI_INFO.get(name) or {}).get("version") or ""
+        if not version or (want and not release_info(name, want)):
+            say(f"  {name}: PyPI has no release {want}." if want else f"  {name}: PyPI names no release.")
+            return None
+        if check_copy and have_copy(spec, name, want, version, args):
+            return None
+        url = f"{root}{version}/"
+        return {"found": "readme", "kind": "readme", "root": url, "url": url, "package": name, "version": version,
+                **{k: v for k, v in source.items() if v}}
+    if not want and "/latest/" in root and not override:     # Read the Docs: latest is its
+        kind, root, inv = find_version(root, "stable") or (kind, root, inv)    # development branch
+    if want:
+        got = find_version(root, want)
+        if not got:
+            say(f"  Could not find docs for {name} {want} next to the current ones.")
+            hosted = hosted_versions(root)
+            if hosted:
+                say(f"  Versions with docs there: {', '.join(hosted)}")
+            say(f"  Find the docs URL of that version and run: search add {name}=https://.../")
+            return None
+        kind, root, inv = got
+        if kind == "sphinx" and not sources.channel(want):
+            have = parse_objects_inv(inv)[1]
+            if have and not have.startswith(want.lstrip("v")):
+                say(f"  Note: you asked for {want}, these docs say version {have}.")
+    if check_copy and have_copy(spec, name, want, parse_objects_inv(inv)[1] if inv else "", args):
+        return None
+    return {**docs_plan(kind, root, inv), **{k: v for k, v in source.items() if v}}   # (repo, about)
+
+
+RELEASE_REF = re.compile(r"[A-Za-z_.-]*?v?(\d+(?:\.\d+)+[\w.+-]*)")      # v2.5.0, py-2.0.0, go1.27.1
+DEV_SEGMENTS = {"main", "master", "trunk", "dev", "devdocs", "develop", "nightly"}
+
+
+def release_of(ref: str) -> str:
+    """The version a source ref names: v2.5.0 -> 2.5.0, py-2.0.0 -> 2.0.0; "" for a branch or a
+    commit."""
+    m = RELEASE_REF.fullmatch(ref or "")
+    return m.group(1) if m and not re.fullmatch(r"[0-9a-f]{7,40}", ref) else ""
+
+
+def menu_version(root: str) -> str:
+    """The version the docs' own version menu gives them (PyData's: polars '2 (stable)': "2")."""
+    try:
+        page = http_get_once(root, timeout=15)[0].decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001
+        return ""
+    m = re.search(r"""theme_switcher_version_match\s*=\s*['"]v?(\d+(?:\.\d+)*)['"]""", page)
+    return m.group(1) if m else ""
+
+
+def found_version(name: str, meta: dict) -> dict:
+    """The version of docs found by their address that state no number, from their own
+    evidence: the release their source links name (polars: py-2.0.0 -> 2.0.0); a development
+    branch (their links name main, or their address is one: triton's /main/, Read the Docs'
+    /latest/) -> a nightly, "after" PyPI's newest release; their version menu, made exact by
+    PyPI's newest release when that starts with it. Else none (the day shows), and PyPI's
+    newest release then is kept to say so."""
+    newest = (PYPI_INFO.get(name) or {}).get("version") or ""
+    ref = (meta.get("source") or {}).get("ref") or ""
+    if release_of(ref):
+        return {"version": release_of(ref)}
+    path = urllib.parse.urlparse(meta.get("root") or "").path.strip("/").split("/")
+    if (ref and not re.search(r"\d", ref)) or DEV_SEGMENTS & set(path) or (
+            ".readthedocs.io" in str(meta.get("root")) and "latest" in path):
+        return {"version": "nightly", **({"after": newest} if newest else {})}
+    menu = menu_version(meta["root"]) if str(meta.get("root", "")).startswith("http") else ""
+    if menu:
+        return {"version": newest if newest == menu or newest.startswith(menu + ".") else menu}
+    return {"release": newest} if newest else {}
+
+
 def add_each(args, outer: str) -> None:
     from docsearch import sources
     global CONTINUE_WITH
@@ -2701,6 +3081,7 @@ def add_each(args, outer: str) -> None:
         if not staged and stopped is None and old is not None:
             if copy_label(old, want) and not old.get("partial") and not getattr(args, "force", False):
                 say(f"  {sid}: you have this version already; nothing to download")
+                complete_sources(sid, args.workers)
                 if getattr(args, "record", True):
                     remember(spec)
                 continue                                 # (one copy per version; --force: again)
@@ -2728,26 +3109,22 @@ def add_each(args, outer: str) -> None:
             if have_copy(spec, name, want, version, args):
                 continue
         try:
+            read = None                                  # docs read by build_known: their plan
             if stopped is not None:                      # go on where it stopped
                 say("  going on where it stopped")
                 how, plan_ = stopped.get("how"), stopped["plan"]
-                if how == "sphinx":                      # the Sphinx docs found for a name
-                    entries, extra = sphinx_docs(name, sid, plan_["url"], None, args, spec)
-                    meta.update(kind="sphinx", root=plan_["url"], **extra)
-                elif how == "local":                     # docs you downloaded yourself
+                if how == "local":                       # docs you downloaded yourself
                     entries, extra = importers.build_local(name, sid, Path(plan_["src"]), args.workers, spec,
                                                            args.max_pages)
                     meta.update(extra)
-                else:                                    # docs we know, or a website
-                    entries, extra = build_known(name, sid, plan_, args.workers, args.max_pages, True, spec)
-                    meta.update(extra)
+                else:                                    # docs we know, or found (an earlier docsearch
+                    read = {"found": "sphinx", **plan_} if how == "sphinx" else plan_     # kept "sphinx")
             elif override and LOCAL_PATH.match(override):  # docs you downloaded yourself
                 entries, extra = importers.build_local(name, sid, Path(override), args.workers, spec, args.max_pages)
                 meta.update(extra)
             elif plan is not None:                       # a language or toolkit we know
                 say(f"  {plan.get('about', name)}")
-                entries, extra = build_known(name, sid, plan, args.workers, args.max_pages, True, spec)
-                meta.update(extra)
+                read = plan
             elif spec == "git-man":                      # the git manual pages on this Mac
                 entries = build_git(args.workers)
                 meta.update(kind="man", root="man pages")
@@ -2760,75 +3137,23 @@ def add_each(args, outer: str) -> None:
                     continue
                 entries = build_man(spec[4:], spec)
                 meta.update(kind="man", root=f"man {spec[4:]}")
-            else:
+            else:                                        # a package's docs, or the docs at an address
                 if not override and not forced_pypi and name in sys.stdlib_module_names:
                     say(f"  '{name}' is part of Python's standard library; its docs are in the "
                         f"Python docs: search add python")
                     say(f"  (For a PyPI package of that name: search add pypi:{name})")
                     continue
-                found = find_docs([override] if override else pypi_candidates(name))
-                if found and not want and "/latest/" in found[1] and not override:
-                    found = find_version(found[1], "stable") or found     # (Read the Docs: latest is
-                if found and want:                                          # its development branch)
-                    current_root = found[1]
-                    found = find_version(current_root, want)
-                    if not found:
-                        say(f"  Could not find docs for {name} {want} next to the current ones.")
-                        hosted = hosted_versions(current_root)
-                        if hosted:
-                            say(f"  Versions with docs there: {', '.join(hosted)}")
-                        say(f"  Find the docs URL of that version and run: search add {name}=https://.../")
-                        continue
-                if not found and override:               # any other docs site: read it as a website
-                    if not confirm(f"No Sphinx or MkDocs index at {override}. Read it as a website "
-                                   f"(pages under that address)?", args.yes):
-                        continue
-                    plan = {"kind": "website", "root": override, "start": override, "prefix": override}
-                    entries, extra = build_known(name, sid, plan, args.workers, args.max_pages, True, spec)
-                    meta.update(extra)
-                    found = None
-                elif not found:
-                    say(f"  Could not find Sphinx or MkDocs docs for '{name}'.")
-                    for host, why in DEAD_HOSTS.items():
-                        say(f"  {host}: {WHY[why.kind].format(detail=why.detail)}")
-                        say(f"  {NEXT.get(why.kind, '')}".rstrip())
-                    say(f"  If you know the docs URL, run: search add {name}=https://.../")
-                    known = ", ".join(sorted(sources.KNOWN))
-                    say(f"  Languages and toolkits that need no PyPI package: {known}")
+                read = web_docs(name, spec, want, override, args,
+                                check_copy=not staged and not getattr(args, "force", False))
+                if read is None:
                     continue
-                if found:
-                    kind, root, data = found
-                    project = parse_objects_inv(data)[0] if kind == "sphinx" else page_title(root)
-                    say(f"  found the {kind} docs of “{project}” at {root}" if project else
-                        f"  found {kind} docs at {root} (they do not say of which project)")
-                    # the guards against name overlap: docs of another project with a similar
-                    # name, or a docs address we only guessed (NAME.readthedocs.io). Docs that
-                    # do not say their name, at an address PyPI lists: the package's.
-                    guessed = urllib.parse.urlparse(root).netloc in GUESSED
-                    if not override and (guessed or (project and not same_project(name, project))):
-                        summary = (PYPI_INFO.get(name) or {}).get("summary") or "(no description)"
-                        say(f"  PyPI describes '{name}' as: {summary}")
-                        if guessed:
-                            say(f"  PyPI does not list these docs; {root} was only a guess, and "
-                                f"another project may live there.")
-                        else:
-                            say(f"  These docs are titled “{project}”, which does not look like '{name}'.")
-                        if not confirm(f"Index {f'“{project}”' if project else 'the docs'} at {root} as '{name}'?", args.yes):
-                            say(f"  Skipped. For other docs: search add {name}=https://...  "
-                                f"(or see: search known)")
-                            continue
-                    if want and kind == "sphinx" and not sources.channel(want):
-                        got = parse_objects_inv(data)[1]
-                        if got and not got.startswith(want.lstrip("v")):
-                            say(f"  Note: you asked for {want}, these docs say version {got}.")
-                    if (stopped is None and not staged and not getattr(args, "force", False)
-                            and have_copy(spec, name, want, parse_objects_inv(data)[1] if kind == "sphinx" else "", args)):
-                        continue
-                    if kind == "sphinx":
-                        entries, extra = sphinx_docs(name, sid, root, data, args, spec)
-                    else:
-                        entries, extra = build_mkdocs(name, root, data)
-                    meta.update(kind=kind, root=root, **extra)
+            if read is not None:
+                entries, extra = build_known(name, sid, read, args.workers, args.max_pages, True, spec)
+                meta.update(extra, **{k: read[k] for k in ("repo", "verified") if read.get(k)})
+                if read.get("found"):                    # (docs found by their address: what they are)
+                    meta["kind"] = read["found"]
+                    if not re.search(r"\d", meta.get("version") or "") and not meta.get("partial"):
+                        meta.update(found_version(name, meta))
         except urllib.error.URLError as e:
             kind = e.kind if isinstance(e, Failed) else "other"
             say(f"  Could not download: {getattr(e, 'reason', e)}")
@@ -2857,7 +3182,7 @@ def add_each(args, outer: str) -> None:
             for e in entries:
                 e.source = sid
         meta["count"] = len(entries)
-        if str(meta.get("root", "")).startswith("http") and meta.get("kind") != "local":
+        if str(meta.get("root", "")).startswith("http") and meta.get("kind") not in ("local", "readme"):
             from docsearch import order
             meta["nav"] = order.fetch_nav(meta)        # the docs' sidebar: their reading order
         save(sid, entries, meta)
@@ -2968,15 +3293,6 @@ def known_site(url: str) -> str | None:
 def organization(host: str) -> str:
     """platform.openai.com -> openai.com: who runs a site (the last two parts of its name)."""
     return ".".join(host.lower().split(":")[0].split(".")[-2:])
-
-
-def page_title(url: str) -> str:
-    """The <title> of a page (how a docs site names itself)."""
-    try:
-        soup = make_soup(get_page(url))
-        return (soup.title.get_text(" ", strip=True) if soup.title else "") or url
-    except Exception:  # noqa: BLE001
-        return url
 
 
 def forget(sid: str) -> bool:
@@ -3172,6 +3488,8 @@ def partial_text(p: dict) -> str:
         return "every page read, its vectors not made yet"
     if p.get("step") == "images":
         return "every page read, some images not stored yet"
+    if p.get("step") == "source":
+        return "every page read, some of their source code not stored yet"
     text = f"{p['pages']:,} of about {p['about']:,} pages" if p.get("about") else f"{p['pages']:,} pages so far"
     if p.get("parts"):
         text += f" in part {p['part']} of {p['parts']}"
@@ -3202,7 +3520,7 @@ def cmd_list(args) -> None:
                 vec += f", {m['failed_pages']} pages missing"
             if m.get("partial"):
                 vec += f", partial: {partial_text(m['partial'])} (search add {m.get('name', d.name)} continues)"
-            ver = m.get("version") or "-"
+            ver = (m.get("version") or "-") + (f" (after {m['after']})" if m.get("after") else "")
             print(f"{d.name:<14} {ver:<10} {m.get('count', 0):>7} entries   {m.get('kind', ''):<7} "
                   f"{vec:<14} {m.get('root', '')}   (indexed {m.get('created', '?')}){marks.get(d.name, '')}")
 
@@ -3285,6 +3603,11 @@ def current_version(meta: dict) -> str:
     plan = sources.resolve(meta.get("name", "")) if meta.get("kind") == "known" else None
     if plan and plan.get("version_from"):
         return published_version(plan)
+    if meta.get("kind") == "readme":                 # a README: of PyPI's newest release
+        try:
+            return json.loads(http_get(REGISTRY.format(meta.get("name", "")), timeout=15)[0])["info"]["version"]
+        except Exception:  # noqa: BLE001
+            return ""
     inv = meta.get("root") if meta.get("kind") == "sphinx" else \
         plan.get("url") if plan and plan.get("kind") == "sphinx" else None
     if not inv:
@@ -3473,6 +3796,26 @@ def copy_hint(group: str, new: str) -> None:
         say(f"  search still uses {now} (to switch: search list {group})")
 
 
+def complete_sources(sid: str, workers: int) -> None:
+    """A copy made before docsearch kept the source code its entries link to: that code, now
+    (the pages are not read again). Stopped, it goes on the next time."""
+    f = HOME / sid / "meta.json"
+    try:
+        meta = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if "source" in meta or meta.get("partial") or not (HOME / sid / "pages").is_dir():
+        return
+    stop: dict = {"why": None}
+    with stoppable(stop, True):
+        code = download_sources(sid, workers, stop)
+    if code is None:
+        say(f"  stopped; the rest of the source code next time: {continue_with(sid.split('@')[0])}")
+        return
+    meta["source"] = code
+    write_atomic(f, json.dumps(meta, indent=2).encode())
+
+
 def have_copy(spec: str, name: str, want: str, version: str, args) -> str | None:
     """The copy you have of the version about to be pulled: said so, and not downloaded again."""
     label = copy_label({"spec": spec, "version": version}, want, day=time.strftime("%Y-%m-%d"))
@@ -3483,6 +3826,7 @@ def have_copy(spec: str, name: str, want: str, version: str, args) -> str | None
     except (OSError, ValueError):
         return None
     say(f"  {sid}: you have this version already; nothing to download")
+    complete_sources(sid, args.workers)
     if getattr(args, "record", True):
         remember(spec)
     copy_hint(sid.split("@")[0], sid)
@@ -3664,7 +4008,7 @@ def build_staged(spec: str, args) -> Path | None:
         shutil.rmtree(d)                                 # an old new copy, not a stopped one
     real, HOME = HOME, STAGING
     try:
-        # yes: docs you have, so you said yes to them ("read it as a website?") when you added them
+        # yes: docs you have, so you took them (or they were checked) when you added them
         cmd_add(argparse.Namespace(sources=[spec], workers=args.workers, max_pages=None,
                                    no_embed=False, yes=True, record=False, staged=True))
     finally:
@@ -3825,10 +4169,13 @@ def cmd_upgrade(args) -> None:
     named = bool(args.sources)
     specs = list(args.sources)
     for group, have in ([] if named else groups().items()):
-        if any(is_channel(s) for s in have) and args.cmd == "upgrade":       # nightly, beta: when asked for
-            for ch in dict.fromkeys(channel_of(s) for s in have if is_channel(s)):
+        asked = [s for s in have if is_channel(s) and "==" in str(json.loads(
+            (HOME / s / "meta.json").read_text(encoding="utf-8")).get("spec", ""))]
+        if asked and args.cmd == "upgrade":              # nightly, beta: pulled when asked for
+            for ch in dict.fromkeys(map(channel_of, asked)):
                 say(f"{group}: {ch} docs change often; to pull a new copy: search upgrade {group}=={ch}")
-        stable = [s for s in have if not is_channel(s)]
+        stable = [s for s in have if s not in asked]     # (docs that only come as development docs,
+        #                                                   jax's: a nightly of their day, pulled anew)
         if stable:
             meta = json.loads((HOME / stable[0] / "meta.json").read_text(encoding="utf-8"))
             spec = str(meta.get("spec") or group)
@@ -4123,7 +4470,7 @@ def main(argv: list[str] | None = None) -> None:
     a.add_argument("--workers", type=int, default=16, help="parallel downloads (default 16)")
     a.add_argument("--max-pages", type=int, help=argparse.SUPPRESS)    # tests: stop after N pages, as ctrl+c
     a.add_argument("--no-embed", action="store_true", help="skip vectors (spell search only)")
-    a.add_argument("--yes", action="store_true", help="accept docs whose title does not match the name")
+    a.add_argument("--yes", action="store_true", help="take docs that cannot be checked against their source code")
     a.add_argument("--accept-partial", action="store_true",
                    help="replace docs you have even if the new download looks incomplete")
     a.set_defaults(func=cmd_add)
@@ -4165,7 +4512,7 @@ def main(argv: list[str] | None = None) -> None:
         u = sub.add_parser(cmd, help=text)
         u.add_argument("sources", nargs="*" if cmd == "upgrade" else "+", metavar="NAME[==VERSION]")
         u.add_argument("--force", action="store_true", help="download again even if up to date")
-        u.add_argument("--yes", action="store_true", help="accept docs whose title does not match the name")
+        u.add_argument("--yes", action="store_true", help="take docs that cannot be checked against their source code")
         u.add_argument("--workers", type=int, default=16, help="parallel downloads (default 16)")
         u.add_argument("--accept-partial", action="store_true",
                        help="replace docs you have even if the new download looks incomplete")

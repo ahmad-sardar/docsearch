@@ -187,6 +187,16 @@ kbd {
   overflow-x: auto; white-space: pre; tab-size: 4;
 }
 body.wrap-code .content pre { white-space: pre-wrap; }
+/* An entry's source code (stored with its docs), under its header */
+.source { margin: -8px 0 26px; }
+.source-head { font: 12.5px var(--mono); color: var(--soft); margin-bottom: 8px; overflow-wrap: anywhere; }
+.source-code pre {
+  margin: 0; background: var(--code-bg) !important; border: 1px solid var(--code-border);
+  border-radius: 9px; padding: 13px 16px; font: 13px/1.55 var(--mono);
+  overflow-x: auto; white-space: pre; tab-size: 4; max-height: 70vh;
+}
+body.wrap-code .source-code pre { white-space: pre-wrap; }
+.source-code .linenos { color: var(--faint); padding-right: 14px; user-select: none; }
 .highlight .go { color: var(--soft) !important; }        /* example output */
 .highlight .gp { color: var(--accent) !important; user-select: none; }   /* >>> prompts: not copied */
 .copy-btn {

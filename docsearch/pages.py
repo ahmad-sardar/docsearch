@@ -243,3 +243,94 @@ def image_type(data: bytes) -> str | None:
     if head.startswith(b"<svg") or (head.startswith(b"<?xml") and b"<svg" in head):
         return "image/svg+xml"
     return None
+
+
+# --------------------------------------------------------------------------- source code
+
+# A link to a file of code at a version: GitHub, GitLab, Codeberg, Go's source browser
+CODE_LINK = re.compile(r"https://(?:(?:www\.)?github\.com/[^/]+/[^/]+/(?:blob|tree)/|gitlab\.com/.+?/-/blob/"
+                       r"|codeberg\.org/[^/]+/[^/]+/src/(?:branch|tag|commit)/|cs\.opensource\.google/go/go/\+/)")
+DOC_FILE = re.compile(r"\.(md|markdown|rst|txt|ipynb|html?)$", re.I)     # the docs' own sources: not code
+# An entry's signature: its <dt> (with a multi-line one's parameters, a <dl> that the parser
+# moves out of it, up to its description: polars), Go's source link, Python's "Source code:"
+SIGNATURE = re.compile(r"<dt\b[^>]*>.*?</dt>(?:\s*<dl>(?:(?!<dt\b).)*?</dl>(?:(?!<dd\b).)*)?"
+                       r"|<a\b[^>]*class=\"[^\"]*Documentation-source[^\"]*\"[^>]*>"
+                       r"|<p\b[^>]*>\s*<strong>Source code:</strong>.*?</p>", re.S)
+HREF = re.compile(r'href="([^"]+)"')
+
+
+def code_link(href: str) -> bool:
+    return bool(CODE_LINK.match(href)) and not DOC_FILE.search(re.split(r"[#;?]", href)[0])
+
+
+def source_link(fragment_html: str, api: bool) -> str | None:
+    """The code an entry documents, as its docs link to it: the link in its signature (Sphinx's
+    [source] at the end of its <dt>; Go's "View Source"), or for a page, its "Source code:"
+    line (Python's modules). None: the docs do not say."""
+    soup = BeautifulSoup(fragment_html, "lxml")
+    if api:
+        dt = soup.find("dt")
+        places = [dt, *signature_rest(dt), soup.find(class_="Documentation-source")]
+        heading = soup.find(re.compile(r"^h[1-6]$"))
+        if heading is not None:
+            places += [heading, heading.find_next_sibling()]
+    else:
+        places = [p for p in soup.find_all("p", limit=8) if p.get_text(" ", strip=True).startswith("Source code:")]
+    for place in places:
+        if place is None:
+            continue
+        for a in [place] if place.name == "a" else place.find_all("a", href=True):
+            if code_link(a.get("href", "")):
+                return a["href"]
+    return None
+
+
+def signature_rest(dt) -> list:
+    """What follows a <dt> up to its description: a multi-line signature's parameters and its
+    end, which the parser moves out of the <dt> (Sphinx's nested <dl>: polars)."""
+    out = []
+    for sib in dt.find_next_siblings() if dt is not None else []:
+        if sib.name in ("dd", "dt"):
+            break
+        out.append(sib)
+    return out
+
+
+def signature_links(page_html: str) -> list[str]:
+    """Every entry's source link on a stored page (see source_link), each once."""
+    out = []
+    for block in SIGNATURE.findall(page_html):
+        out += [h for h in HREF.findall(block) if code_link(h)]
+    return list(dict.fromkeys(out))
+
+
+def raw_source(link: str) -> tuple[str, str, str, str] | None:
+    """Where a linked file's plain text is, and its repository, ref and path:
+    github.com/numpy/numpy/blob/v2.5.0/numpy/x.py#L10 -> (raw.githubusercontent.com/...,
+    "github.com/numpy/numpy", "v2.5.0", "numpy/x.py"). (A ref with "/" in it reads as its
+    first part here; GitHub itself resolves the address the same way.)"""
+    u = urllib.parse.urlparse(link)
+    host, path = u.netloc.lower().removeprefix("www."), u.path
+    if host == "github.com" and (m := re.match(r"/([^/]+)/([^/]+)/(?:blob|tree)/([^/]+)/(.+)", path)):
+        return f"https://raw.githubusercontent.com/{m[1]}/{m[2]}/{m[3]}/{m[4]}", f"github.com/{m[1]}/{m[2]}", m[3], m[4]
+    if host == "gitlab.com" and (m := re.match(r"/(.+?)/-/blob/([^/]+)/(.+)", path)):
+        return f"https://gitlab.com/{m[1]}/-/raw/{m[2]}/{m[3]}", f"gitlab.com/{m[1]}", m[2], m[3]
+    if host == "codeberg.org" and (m := re.match(r"/([^/]+)/([^/]+)/src/(branch|tag|commit)/([^/]+)/(.+)", path)):
+        return (f"https://codeberg.org/{m[1]}/{m[2]}/raw/{m[3]}/{m[4]}/{m[5]}", f"codeberg.org/{m[1]}/{m[2]}",
+                m[4], m[5])
+    if host == "cs.opensource.google" and (m := re.match(r"/go/go/\+/([^:]+):([^;]+)", path)):
+        return f"https://go.googlesource.com/go/+/{m[1]}/{m[2]}?format=TEXT", "go.googlesource.com/go", m[1], m[2]
+    return None
+
+
+def source_lines(link: str) -> tuple[int, int | None] | None:
+    """The lines a source link points at: #L293-L325 -> (293, 325); #L28 or Go's ;l=77 -> one
+    line, (28, None): its block is shown. None: the whole file."""
+    m = re.search(r"#L(\d+)(?:-L?(\d+))?$", link) or re.search(r";l=(\d+)", link)
+    if not m:
+        return None
+    return int(m[1]), (int(m[2]) if m.lastindex and m.lastindex > 1 and m[2] else None)
+
+
+def source_file(folder: Path, raw: str) -> Path:
+    return folder / (hashlib.sha1(raw.encode()).hexdigest() + ".gz")

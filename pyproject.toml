@@ -20,6 +20,7 @@ dependencies = [
     "tokenizers>=0.20",
     "huggingface-hub>=0.30",      # downloads the model once (search add / embed)
     "jellyfish>=1.2",
+    "docutils>=0.21",             # READMEs in reStructuredText (a package with no docs site)
 ]
 
 [project.scripts]

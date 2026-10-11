@@ -19,6 +19,7 @@ DNS-rebinding tricks from web pages.
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import os
 import re
@@ -118,13 +119,21 @@ class Library:
     def info(self) -> dict:
         return {"app": "docsearch", "mode": self.index.mode,
                 "sources": [{"id": s, "name": m.get("name", s), "version": self.label(s),
-                             "dated": not m.get("version"), "count": m.get("count", 0),
+                             "note": self.note(s), "count": m.get("count", 0),
                              "offline": bool(m.get("pages")),
                              "about": m.get("about") or m.get("project") or "", "root": m.get("root", ""),
                              "group": s.split("@")[0], "default": s in self.default,
                              "choose": s.split("@")[0] in self.choose, "channel": cli.is_channel(s),
-                             "kind": m.get("kind", ""), "added": m.get("created", "")}
+                             "kind": m.get("kind", ""), "added": m.get("created", ""), "repo": self.repo(s)}
                             for s, m in self.meta.items()]}
+
+    def repo(self, sid: str) -> str:
+        """Where a docs' source code is: as found when they were added; for docs we know, their
+        profile; else the repository their entries' source links name."""
+        from docsearch import sources
+        m = self.meta[sid]
+        plan = sources.KNOWN.get(m.get("name", "")) if m.get("kind") == "known" else None
+        return m.get("repo") or (plan or {}).get("repo") or (m.get("source") or {}).get("repo") or ""
 
     def label(self, sid: str) -> str:
         """The docs version to show next to the name: a nightly by its day (nightly-2026-10-09);
@@ -132,7 +141,22 @@ class Library:
         m = self.meta[sid]
         if cli.is_channel(sid):
             return sid.partition("@")[2]
-        return m.get("version") or sid.partition("@")[2] or str(m.get("created", ""))[:10]
+        return (m.get("version") or sid.partition("@")[2] or cli.release_of((m.get("source") or {}).get("ref", ""))
+                or str(m.get("created", ""))[:10])     # (a copy from before: the release its source links name)
+
+    def note(self, sid: str) -> str:
+        """What the version shown means, when it is not a number the docs state."""
+        m, day = self.meta[sid], str(self.meta[sid].get("created", ""))[:10]
+        if m.get("after"):
+            return f"Development docs as of {day}, after release {m['after']}"
+        if cli.is_channel(sid):
+            return ""
+        if not m.get("version") and cli.release_of((m.get("source") or {}).get("ref", "")):
+            return "The release their source links name"
+        if not m.get("version") and not sid.partition("@")[2]:
+            return (f"No version number published: the docs as downloaded on {day}"
+                    + (f"; the newest release then: {m['release']}" if m.get("release") else ""))
+        return ""
 
     def item(self, i: int, q: str) -> dict:
         e = self.index.entries[i]
@@ -200,7 +224,7 @@ class Library:
         sid = self.sid_of[i]
         is_api = e.kind not in cli.PAGE_KINDS
         name = cli.api_name(e.title) if is_api else e.title
-        html_text, page = None, None
+        html_text, page, code = None, None, None
         site = self.sites.get(sid)
         if site and e.location.startswith(site[0]):
             rel, _, anchor = e.location[len(site[0]):].partition("#")
@@ -209,14 +233,52 @@ class Library:
             if stored is not None:
                 html_text = fragment(stored, anchor, e.kind)
                 page = {"path": f"{sid}/{rel}", "at": anchor}
+                code = self.code_of(sid, html_text, is_api)
         if html_text is None:                        # no offline page: draw the indexed text
             base = e.location if cli.safe_url(e.location) else "https://invalid.invalid/"
             html_text = offline.sanitize(MD.render(self.full_text(i)), base)
         return {"id": i, "name": name, "kind": e.kind, "source": sid, "api": is_api,
-                "version": self.label(sid),
+                "version": self.label(sid), "code": code, "repo": self.repo(sid),
                 "html": offline.localize_links(html_text, self.sites), "page": page,
                 "web": e.location if cli.safe_url(e.location) else None,
                 "import": import_line(name, e.kind) if is_api else None}
+
+    def code_of(self, sid: str, html_text: str, api: bool) -> dict | None:
+        """An entry's source link (from its docs), and whether its code is stored with them."""
+        link = offline.source_link(html_text, api)
+        got = offline.raw_source(link) if link else None
+        if got is None:
+            return None
+        span = offline.source_lines(link)
+        return {"url": link, "repo": got[1], "ref": got[2], "path": got[3],
+                "lines": (f"{span[0]}–{span[1]}" if span[1] else str(span[0])) if span else "",
+                "stored": offline.source_file(cli.HOME / sid / "source", got[0]).exists()}
+
+    def source(self, i: int) -> dict | None:
+        """The code an entry documents, from the copy stored with its docs: its lines (a range;
+        from one line, its block; else the whole file), highlighted."""
+        entry = self.entry(i)
+        code = entry.get("code")
+        if not code or not code["stored"]:
+            return None
+        raw = offline.raw_source(code["url"])[0]
+        text = gzip.decompress(offline.source_file(cli.HOME / entry["source"] / "source", raw).read_bytes())
+        lines = text.decode("utf-8", "replace").splitlines()
+        start, end = code_span(lines, offline.source_lines(code["url"]))
+        from pygments import highlight
+        from pygments.formatters import HtmlFormatter
+        from pygments.lexers import TextLexer, get_lexer_for_filename
+        from pygments.util import ClassNotFound
+        try:
+            lexer = get_lexer_for_filename(code["path"], stripnl=False)
+        except ClassNotFound:
+            lexer = TextLexer(stripnl=False)
+        html = highlight("\n".join(lines[start - 1:end]), lexer,
+                         HtmlFormatter(linenos="inline", linenostart=start, cssclass="highlight"))
+        ref = code["ref"]                         # a branch (main; 3.14, CPython's): the code of that day
+        branch = not re.search(r"\d", ref) or re.fullmatch(r"v?\d+\.\d+", ref) is not None
+        day = str(self.meta[entry["source"]].get("created", ""))[:10]
+        return {**code, "start": start, "end": end, "of": len(lines), "html": html, "asof": day if branch else ""}
 
     def asset(self, sid: str, name: str) -> tuple[bytes, str] | None:
         """A stored image of a docs page, and its type."""
@@ -252,6 +314,37 @@ class Library:
 
 
 HEADINGS = ("h1", "h2", "h3", "h4", "h5", "h6")
+MAX_CODE_LINES = 600
+
+
+def code_span(lines: list[str], span: tuple[int, int | None] | None) -> tuple[int, int]:
+    """The lines to show (1-based, inclusive): a range as linked; from one line, its block
+    (what follows it more indented, and the line that closes it); else the whole file."""
+    if not span or not lines:
+        return 1, min(len(lines), MAX_CODE_LINES * 5)
+    start = max(1, min(span[0], len(lines)))
+    if span[1]:
+        return start, max(start, min(span[1], len(lines), start + MAX_CODE_LINES))
+
+    def indent(line: str) -> int:
+        return len(line) - len(line.lstrip())
+    first, end = lines[start - 1], start
+    while first.lstrip().startswith("@") and end < len(lines):    # decorators: on to their def
+        end += 1
+        first = lines[end - 1]
+    for k in range(end, min(len(lines), start + MAX_CODE_LINES)):
+        line = lines[k]
+        if line.strip() and indent(line) <= indent(first):
+            if line.strip()[0] not in ")]}":
+                break
+            end = k + 1                                              # the line that closes it, and
+            if not line.rstrip().endswith((":", "{")):               # on if it opens the body
+                break                                                # (def f(\n a,\n) -> int:)
+            continue
+        end = k + 1
+    while end > start and not lines[end - 1].strip():             # no blank lines at the end
+        end -= 1
+    return start, end
 
 
 def fragment(page_html: str, anchor: str, kind: str) -> str:
@@ -384,6 +477,11 @@ class Handler(BaseHTTPRequestHandler):
                 offset = max(0, int(qs.get("offset", "0") or 0))
                 limit = min(200, max(1, int(qs.get("limit", "60") or 60)))
                 return self.json(lib.search(qs.get("q", "")[:300], srcs, offset, limit, qs.get("ai") == "1"))
+            m = re.fullmatch(r"/api/source/(\d+)", url.path)
+            if m:
+                i = int(m.group(1))
+                data = lib.source(i) if 0 <= i < len(lib.index.entries) else None
+                return self.json(data) if data else self.json({"error": "no stored source"}, 404)
             m = re.fullmatch(r"/api/entry/(\d+)", url.path)
             if m:
                 i = int(m.group(1))

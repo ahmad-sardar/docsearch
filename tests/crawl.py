@@ -30,8 +30,8 @@ was seen on a real one): no models, no internet, a few seconds.
 - ctrl+c pressed in a terminal (to every process of the download): no worker prints a traceback
 - finding a package's docs: a bot check on an address only guessed (docs.pytorch.org shows one
   for a missing objects.inv) does not stop the next guess; "too many requests" with a bot check
-  (Read the Docs) is a rate limit, said so, and not asked again; an inventory whose name or
-  version is a placeholder (filelock's "Project name not set", FastAPI's 0.0.0) says neither
+  (Read the Docs) is a rate limit, said so, and not asked again; an inventory whose version
+  is a placeholder (FastAPI's 0.0.0) says none
 """
 from __future__ import annotations
 
@@ -325,12 +325,12 @@ def finding_docs(site: str) -> None:
     host = site.split("//")[1]
     cli.DEAD_HOSTS.clear()
     cli.PACE.clear()
-    found = cli.find_docs([f"{site}/guess/"])
+    found = cli.find_docs(f"{site}/guess/")
     check(found is not None and found[1] == f"{site}/guess/stable/" and host not in cli.DEAD_HOSTS,
           "a bot check on a guessed address (objects.inv): the next guess is still tried, and found")
     waits, cli.RETRY_WAITS = cli.RETRY_WAITS, (0, 0, 0)
     t0 = time.monotonic()
-    found = cli.find_docs([f"{site}/limited/"])
+    found = cli.find_docs(f"{site}/limited/")
     took = time.monotonic() - t0
     cli.RETRY_WAITS = waits
     dead = cli.DEAD_HOSTS.get(host)
@@ -341,9 +341,8 @@ def finding_docs(site: str) -> None:
     cli.PACE.clear()
     inv = (b"# Sphinx inventory version 2\n# Project: Project name not set\n# Version: 0.0.0\n"
            b"# The remainder of this file is compressed using zlib.\n" + zlib.compress(INVENTORY))
-    project, version, objs = cli.parse_objects_inv(inv)
-    check(project == "" and version == "" and len(objs) == 6,
-          "an inventory's placeholder name and version (Sphinx's, mkdocstrings') are unknown, not a name or version")
+    version, objs = cli.parse_objects_inv(inv)[1:]
+    check(version == "" and len(objs) == 6, "an inventory's placeholder version (mkdocstrings' 0.0.0) is no version")
 
 
 def entries_of(sid: str) -> list:
@@ -427,8 +426,9 @@ def every_kind(site: str) -> None:
     time.sleep(4)
     os.killpg(child.pid, signal.SIGINT)              # as a terminal does: to every process
     out, _ = child.communicate(timeout=120)
-    check("stopped:" in out and "Traceback" not in out and child.returncode == 0,
-          "ctrl+c to every process of a download: it stops and keeps what it read; no traceback")
+    ok = "stopped:" in out and "Traceback" not in out and child.returncode == 0
+    check(ok, "ctrl+c to every process of a download: it stops and keeps what it read; no traceback"
+          + ("" if ok else f" (exit {child.returncode}; it said:\n{out[-2000:]})"))
 
 
 def child(url: str) -> None:

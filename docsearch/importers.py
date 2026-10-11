@@ -26,6 +26,7 @@ import shutil
 import time
 import urllib.parse
 import urllib.robotparser
+from html import escape as html_escape
 from pathlib import Path
 
 from docsearch import article, cli
@@ -981,6 +982,42 @@ def build_local(name: str, sid: str, src: Path, workers: int, spec: str = "",
         return entries, {**extra, "partial": cli.images_stopped(name)}
     shutil.rmtree(crawl_dir(sid), ignore_errors=True)    # complete: no place to keep
     return entries, extra
+
+
+# --------------------------------------------------------------------------- a README as the docs
+
+RST = {"raw_enabled": False, "file_insertion_enabled": False, "_disable_config": True, "report_level": 5,
+       "halt_level": 5, "embed_stylesheet": False, "syntax_highlight": "short", "warning_stream": False}
+# (reStructuredText: no raw HTML, no files read from this computer, no error messages in the page)
+
+
+def readme_html(text: str, kind: str) -> str:
+    """A README made into a page: reStructuredText (docutils, and PyPI's default when a package
+    does not say) or plain text. (Markdown: markdown_page.)"""
+    if "plain" in kind:
+        return f"<pre>{html_escape(text)}</pre>"
+    try:
+        from docutils.core import publish_parts
+        return publish_parts(text, writer_name="html5", settings_overrides=RST)["html_body"]
+    except Exception:  # noqa: BLE001 - text docutils cannot read: shown as it is
+        return f"<pre>{html_escape(text)}</pre>"
+
+
+def build_readme(name: str, sid: str, part: dict, store: Store) -> tuple[list[Entry], dict]:
+    """A package's README of one release, as its docs (a package that names no docs site):
+    from PyPI's record of that release, made into a page and cut into entries by its headings,
+    as any page."""
+    info = cli.release_info(part["package"], part["version"])
+    text, kind = info.get("description") or "", (info.get("description_content_type") or "").lower()
+    url = part["url"]
+    say(f"  the README of {part['package']} {part['version']} (PyPI's record of that release), as its docs")
+    if "markdown" in kind:
+        entries, images, _ = markdown_page(sid, name, store.root, store.dir, url, text.encode(), {})
+    else:
+        page = f"<html><head><title>{html_escape(part['package'])}</title></head><body><main>{readme_html(text, kind)}</main></body></html>"
+        entries, images, _ = website_page(sid, name, store.root, store.dir, url, page.encode(), url, {})
+    store.add_images(images)
+    return entries, {"version": part["version"], "pages": True}
 
 
 # --------------------------------------------------------------------------- Rust (rustdoc)

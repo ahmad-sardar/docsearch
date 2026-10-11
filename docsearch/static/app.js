@@ -1,7 +1,8 @@
 // docsearch: search as you type, read the docs, never leave the page.
 // Everything comes from the docsearch server on this computer; nothing here goes online.
 // All text from the server is inserted with textContent, except the docs HTML itself,
-// which the server allowlist-filtered; the Content-Security-Policy blocks any script in it.
+// which the server allowlist-filtered, and source code the server highlighted (Pygments,
+// from the file's text); the Content-Security-Policy blocks any script in either.
 "use strict";
 
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -76,7 +77,7 @@ function renderSources() {
       sel.title = "Docs version";
       for (const v of versions) {
         const o = el("option", null, v.version || v.id.split("@")[1] || "latest");
-        if (v.dated) o.title = `No version number published: the docs as downloaded on ${v.version}`;
+        if (v.note) o.title = v.note;
         o.value = v.id;
         o.selected = v.id === active.id;
         sel.append(o);
@@ -90,7 +91,7 @@ function renderSources() {
       b.append(sel);
     } else if (active.version) {
       const v = el("span", "v", active.version);
-      if (active.dated) v.title = `No version number published: the docs as downloaded on ${active.version}`;
+      if (active.note) v.title = active.note;
       b.append(v);
     }
     nav.append(b);
@@ -251,6 +252,8 @@ async function openEntry(id, push = true) {
       d.page && { label: "Full page", primary: true, key: "Enter", run: () => openPage(d.page.path, d.page.at) },
       { label: "Copy name", run: () => copy(d.name, "name") },
       d.import && { label: "Copy import", run: () => copy(d.import, "import") },
+      d.code?.stored && { label: "Source", key: "s", source: true, run: (b) => toggleSource(id, b) },
+      d.code && { label: "Copy source address", title: d.code.url, run: () => copy(d.code.url, "source address") },
     ],
   });
   syncURL(push);
@@ -271,6 +274,24 @@ async function openPage(path, at, push = true) {
   syncURL(push);
 }
 
+// The code an entry documents, stored with its docs (search add), under its header.
+async function toggleSource(id, button) {
+  const open = $("#source");
+  if (open) { open.remove(); button.textContent = "Source"; return; }
+  let d;
+  try { d = await getJSON(`/api/source/${id}`); } catch (e) { toast(e.message); return; }
+  if (state.view?.type !== "entry" || state.view.id !== id) return;   // (another entry opened meanwhile)
+  const box = el("section", "source");
+  box.id = "source";
+  const span = d.start === 1 && d.end === d.of ? `${d.of} lines` : `lines ${d.start}–${d.end} of ${d.of}`;
+  box.append(el("div", "source-head", `${d.repo} at ${d.ref}${d.asof ? `, as of ${d.asof}` : ""} · ${d.path}, ${span}`));
+  const code = el("div", "source-code");
+  code.innerHTML = d.html;                          // Pygments' markup of the file's text (see top)
+  box.append(code);
+  $("#doc .doc-head").after(box);
+  button.textContent = "Hide source";
+}
+
 function renderDoc(d, at) {
   const doc = $("#doc");
   doc.textContent = "";
@@ -287,7 +308,9 @@ function renderDoc(d, at) {
   for (const a of d.actions.filter(Boolean)) {
     const b = el("button", a.primary ? "primary" : null, a.label);
     if (a.key) b.title = `Shortcut: ${a.key}`;
-    b.addEventListener("click", a.run);
+    if (a.title) b.title = a.title;
+    if (a.source) b.dataset.source = "1";
+    b.addEventListener("click", () => a.run(b));
     actions.append(b);
   }
   const wrap = el("button", null, document.body.classList.contains("wrap-code") ? "Code: wrap" : "Code: scroll");
@@ -469,6 +492,7 @@ function openPanel() {
     name.append(el("strong", null, s.name), el("div", "about", s.version ? `version ${s.version}` : ""));
     const what = el("td");
     what.append(el("div", null, s.about || ""), el("div", "root", s.root || ""),
+                el("div", "root", s.repo ? `source: ${s.repo}` : ""),
                 el("div", "about", `${s.count} entries${s.offline ? ", readable offline" : ""} · added ${s.added}`));
     const act = el("td");
     const b = el("button", "remove", "Remove");
@@ -587,6 +611,8 @@ function bindEvents() {
       toggleWrap($$(".actions button").find((b) => b.textContent.startsWith("Code:")));
     } else if (!inInput && ev.key === "c" && state.view?.type === "entry") {
       $$(".actions button").find((b) => b.textContent === "Copy name")?.click();
+    } else if (!inInput && ev.key === "s" && state.view?.type === "entry") {
+      $$(".actions button").find((b) => b.dataset.source)?.click();
     } else if (ev.key === "PageDown" || ev.key === "PageUp") {
       ev.preventDefault();
       const pane = $("#doc-pane");

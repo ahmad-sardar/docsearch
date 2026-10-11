@@ -18,6 +18,12 @@ which may be `version_now`: where to read which version is in that state now (py
 beta: the one in pre-release), then filled in as "{version}".
 
 `repo`: where the source code is (the docs link to it). None for docs without public source.
+
+What docs describe (see versions.py): a release, unless `standards`: a site of every standard
+of a language at once (cppreference: C++98 to C++29, each entry marked), kept as one copy per
+standard (`editions`; see standards.py), the current one read from the site's own page about it
+(`edition_page`: "C++23 is the current revision"; `current` until it is read); or `living`: not
+versioned (MDN), with what to say instead.
 """
 from __future__ import annotations
 
@@ -71,6 +77,8 @@ KNOWN: dict[str, dict] = {
     },
     "cpp": {
         "about": "C++: the language and standard library (cppreference.com)",
+        "standards": "C++", "since": "C++98", "current": "23", "edition_page": "cpp/{}",
+        "editions": ["98", "03", "11", "14", "17", "20", "23", "26", "29"],
         "kind": "website", "root": "https://en.cppreference.com/",
         "start": "https://en.cppreference.com/cpp", "prefix": "https://en.cppreference.com/cpp/",
         "main": "#mw-content-text", "api": r"std::[\w:~<>, ]+(::operator(\(\)|\[\]|\s\w+(\[\])?|[^\w\s,()\[\]]+))?(\(\))?",
@@ -78,6 +86,8 @@ KNOWN: dict[str, dict] = {
     },
     "c": {
         "about": "C: the language and standard library (cppreference.com)",
+        "standards": "C", "since": "C89", "current": "23", "edition_page": "c/{}",
+        "editions": ["89", "95", "99", "11", "17", "23"],
         "kind": "website", "root": "https://en.cppreference.com/",
         "start": "https://en.cppreference.com/c", "prefix": "https://en.cppreference.com/c/",
         "main": "#mw-content-text",
@@ -145,6 +155,7 @@ KNOWN: dict[str, dict] = {
     },
     "javascript": {
         "about": "JavaScript: the language reference and guide (MDN)",
+        "living": "MDN describes JavaScript as browsers support it now; it has no versions",
         "repo": "github.com/mdn/content",
         "kind": "website", "root": "https://developer.mozilla.org/",
         "sitemap": "https://developer.mozilla.org/sitemaps/en-us/sitemap.xml.gz",
@@ -160,6 +171,8 @@ def offers(name: str, version: str) -> bool:
     entry = KNOWN[name]
     if not version or version in ("latest", "stable"):
         return True
+    if entry.get("editions"):                    # cpp==17, c==C11: a standard of the language
+        return edition(name, version) is not None
     ch = channel(version)
     if ch:
         return ch in entry.get("channels", {})
@@ -169,10 +182,30 @@ def offers(name: str, version: str) -> bool:
 def versions(name: str) -> str:
     """What a known name's docs come in, for a message: "stable (the default), nightly"."""
     entry = KNOWN[name]
+    if entry.get("editions"):
+        cur = entry["current"]
+        later = [e for e in entry["editions"] if entry["editions"].index(e) > entry["editions"].index(cur)]
+        return (f"one copy per {entry['standards']} standard: {', '.join(e for e in entry['editions'] if e not in later)} "
+                f"({cur}, the current one, is the default)" + (f"; drafts: {', '.join(later)}" if later else ""))
     out = ["stable (the default)"] + list(entry.get("channels", {}))
     if "{version}" in repr(entry):
         out.insert(1, "a version number")
     return ", ".join(out)
+
+
+# How builds and people name a standard: c++2a is C++20, gnu17 is C17
+ALIASES = {"0x": "11", "1y": "14", "1z": "17", "2a": "20", "2b": "23", "2c": "26", "1x": "11", "2x": "23",
+           "18": "17", "9x": "99", "90": "89"}
+
+
+def edition(name: str, version: str) -> str | None:
+    """A standard of a language with `editions`, as its copy is named: "C++17", "c++17", "17",
+    "gnu++2a" -> "17"/"20"; None if it is not one."""
+    entry = KNOWN.get(name) or {}
+    prefix = r"c\+\+|cpp|gnu\+\+" if entry.get("standards") == "C++" else r"c|gnu"
+    m = re.fullmatch(rf"(?:{prefix})?(\w\w)", version.strip().lower())
+    ed = ALIASES.get(m.group(1), m.group(1)) if m else None
+    return ed if ed in entry.get("editions", []) else None
 
 
 def resolve(name: str, version: str = "") -> dict | None:

@@ -31,12 +31,18 @@ process (httpx's MockTransport: real-looking addresses, nothing goes online), a 
 - docs that state no version: the release their source links name (polars: py-2.0.0);
   development docs (links to main, or an address at /main/: jax, triton) are a nightly of
   their day, "after" PyPI's newest release, and `search upgrade` pulls them anew; a version
-  menu ("2 (stable)") made exact by PyPI's newest release; else the day, with that release
+  menu ("2 (stable)") made exact by PyPI's newest release; else the day, with that release; a
+  version a build tool made up for an untagged checkout (fsspec's 0.0.post50+g0f76baaae) is
+  no version; docs a major version behind PyPI's newest are said to be (pytz's 2014.10)
 - a package that names no docs site: the README of its release (PyPI's record of it), in
   Markdown or reStructuredText, cut into entries by its headings; raw HTML and files from
   this computer never get in; NAME==VERSION: that release's README; never when a place the
   docs may be did not answer (a rate limit): said so, nothing indexed; a home page behind a
-  login, or listed without https://, is not such a place
+  login, or listed without https://, is not such a place; "UNKNOWN" (old tools' word for no
+  README) is no README
+- odd cases: a source repository or a PyPI page given as the docs' address (said so, nothing
+  read); a download stopped by an earlier docsearch (kept as "sphinx") goes on; a whole page's
+  entry (Go's package) does not take the source link of an entry on it
 """
 from __future__ import annotations
 
@@ -266,9 +272,59 @@ def shared_sites() -> None:
             "description_content_type": "text/markdown", "home_page": home}}).encode(), {})
         SITES["pypi.org"][f"/pypi/{name}/1.0/json"] = SITES["pypi.org"][f"/pypi/{name}/json"]
     SITES["login.example"] = {"/zone": (401, b"log in", {})}
+    SITES["pypi.org"]["/pypi/unknownreadme/json"] = (200, json.dumps({"info": {
+        "name": "unknownreadme", "summary": "UNKNOWN", "version": "0.1", "description": "UNKNOWN",
+        "home_page": "https://gone.example/"}}).encode(), {})
+
+
+def odd_version_sites() -> None:
+    pypi("scmdev", {"Documentation": "https://scmdev.readthedocs.io/en/latest/", "Source": "https://github.com/s/scmdev"})
+    sphinx_site("scmdev.readthedocs.io", "/en/latest/", "github.com/s/scmdev", "Scmdev", version="0.0.post50+g0f76baaae.d20260923")
+    SITES["pypi.org"]["/pypi/olddocs/json"] = (200, json.dumps({"info": {
+        "name": "olddocs", "summary": "", "version": "2025.2", "project_urls": {
+            "Documentation": "https://olddocs.example/", "Source": "https://github.com/o/olddocs"}}}).encode(), {})
+    sphinx_site("olddocs.example", "/", "github.com/o/olddocs", "Olddocs", version="2014.10")
+    # PyPI points at docs pinned to an old version; the newest sit next to them
+    SITES["pypi.org"]["/pypi/pinned/json"] = (200, json.dumps({"info": {
+        "name": "pinned", "summary": "", "version": "2.1", "project_urls": {
+            "Documentation": "https://pinned.example/en/1.0/", "Source": "https://github.com/p/pinned"}}}).encode(), {})
+    sphinx_site("pinned.example", "/en/1.0/", "github.com/p/pinned", "Pinned", version="1.0")
+    sphinx_site("pinned.example", "/en/2.1/", "github.com/p/pinned", "Pinned", version="2.1")
+    # code on a host whose robots.txt asks programs not to fetch it
+    pypi("labbed", {"Documentation": "https://labbed.example/", "Source": "https://gitlab.com/l/labbed"})
+    SITES["labbed.example"] = {
+        "/objects.inv": inventory("Labbed", ["index std:doc -1 index.html Home", "labbed.f py:function 1 index.html#labbed.f -"]),
+        "/": page("Labbed", "<dl class='py function'><dt id='labbed.f'>labbed.f()<a class='reference external' "
+                            "href='https://gitlab.com/l/labbed/-/blob/v1.0/labbed.py#L1'></a></dt><dd><p>F.</p></dd></dl>",
+                  "gitlab.com/l/labbed"),
+        "/index.html": page("Labbed", "<dl class='py function'><dt id='labbed.f'>labbed.f()<a class='reference external' "
+                                      "href='https://gitlab.com/l/labbed/-/blob/v1.0/labbed.py#L1'></a></dt><dd><p>F.</p></dd></dl>",
+                            "gitlab.com/l/labbed")}
+    SITES["gitlab.com"] = {"/robots.txt": (200, b"User-agent: *\nDisallow: /l/labbed/-/raw/\n", {}),
+                           "/l/labbed/-/raw/v1.0/labbed.py": (200, b"def f():\n    pass\n", {})}
+
+
+def cppreference() -> None:
+    """A tiny cppreference: every C++ standard on one site, C++23 its current one."""
+    prose = "<p>" + "This page describes part of the C++ language and its standard library. " * 6 + "</p>"
+    wiki = lambda title, body: (200, (f"<html><head><title>{title}</title></head><body><h1>{title}</h1>"   # noqa: E731
+                                      f"<div id='mw-content-text'>{body}{prose}</div></body></html>").encode(), {})
+    SITES["en.cppreference.com"] = {
+        "/cpp": wiki("C++ reference", '<a href="/cpp/23">C++23</a> <a href="/cpp/26">C++26</a> '
+                                      '<a href="/cpp/utility/format/format">std::format</a> '
+                                      '<a href="/cpp/memory/auto_ptr">std::auto_ptr</a>'),
+        "/cpp/23": wiki("C++23", "<p>The current revision of the C++ standard.</p>"),
+        "/cpp/26": wiki("C++26", "<p>The next generation of the C++ standard.</p>"),
+        "/cpp/utility/format/format": wiki("std::format", "<table><tr class='t-dcl t-since-cxx20'><td><pre>std::string "
+                                                          "format(fmt);</pre></td><td>(since C++20)</td></tr></table>"
+                                                          "<p>Formats things.</p>"),
+        "/cpp/memory/auto_ptr": wiki("std::auto_ptr", "<table><tr class='t-dcl t-until-cxx17'><td><pre>class auto_ptr;"
+                                                      "</pre></td><td>(removed in C++17)</td></tr></table><p>Old.</p>")}
 
 
 def setup_sites() -> None:
+    cppreference()
+    odd_version_sites()
     shared_sites()
     busy_site()
     readme_sites()
@@ -445,6 +501,7 @@ def main() -> None:
     source_code()
     versions()
     readmes()
+    standards_download()
     said = run("add", "busy", "--no-embed")
     check(not cli.copies("busy") and "Could not reach" in said and "nothing indexed" in said and "README" not in said,
           "a place the docs may be did not answer (a rate limit): said so, nothing indexed, not the README instead")
@@ -458,7 +515,34 @@ def main() -> None:
     said = run("add", "busy3", "--no-embed", "--yes")
     check(not cli.copies("busy3") and "Could not reach" in said and "could not be checked" in said,
           "unchecked docs, while the site the repository names did not answer: not taken, not even with --yes")
+    odd_cases()
     print("all good")
+
+
+def odd_cases() -> None:
+    said = run("add", "unknownreadme", "--no-embed")
+    check(not cli.copies("unknownreadme") and "Could not find docs" in said,
+          "a README of 'UNKNOWN' (old tools' word for none): no README, said so")
+    for addr, what in (("https://github.com/alpha-org/alpha", "a source repository"),
+                       ("https://pypi.org/project/alpha/", "a PyPI page"), ("https://bitbucket.org/", "a page of bitbucket.org")):
+        ASKED.clear()
+        said = run("add", f"wrongaddr={addr}", "--no-embed")
+        check(not meta("wrongaddr") and f"{what}, not docs" in said and not ASKED,
+              f"a repository, a PyPI page or a code host's page as the docs' address: said what it is, nothing read ({addr})")
+    crawl = cli.HOME / "oldsx" / "crawl"                 # a download an earlier docsearch stopped
+    crawl.mkdir(parents=True, exist_ok=True)
+    (crawl / "plan.json").write_text(json.dumps({"plan": {"kind": "sphinx", "url": "https://alpha.readthedocs.io/en/stable/"},
+                                                 "spec": "oldsx", "how": "sphinx"}), encoding="utf-8")
+    said = run("add", "oldsx", "--no-embed")
+    m = meta("oldsx") or meta("oldsx@1.0")
+    check("going on where it stopped" in said and m.get("kind") == "sphinx" and m.get("count", 0) > 0,
+          f"a download stopped by an earlier docsearch (kept as 'sphinx') goes on ({m.get('kind')}, {m.get('count')} entries)")
+    from docsearch import pages
+    package = "<h1>tar</h1><p>Package tar.</p>"
+    member = ("<h3 id='Reader'>type <a class='Documentation-source' "
+              "href='https://cs.opensource.google/go/go/+/go1.0:src/tar/reader.go;l=10'>Reader</a></h3><p>Reads.</p>")
+    check(pages.source_link(package + member, True) is None and pages.source_link(member, True).endswith(";l=10"),
+          "a whole page's entry (Go's package) does not take the source link of an entry on it; the entry does")
 
 
 def readmes() -> None:
@@ -494,6 +578,21 @@ def versions() -> None:
     check(meta("menu@2.0.3").get("version") == "2.0.3", "a version menu's '2', made exact by PyPI's newest release, 2.0.3")
     check(meta("zen").get("release") == "1.0" and "version" not in {k for k, v in meta("zen").items() if v},
           "nothing says: the day shows, and PyPI's newest release then is kept to say so")
+    run("add", "scmdev", "--no-embed")
+    m = meta(f"scmdev@nightly-{day}")
+    check(m.get("version") == "nightly" and not cli.copies("scmdev") == [],
+          f"a build tool's made-up version (0.0.post50+g...) is no version: development docs here, a nightly ({cli.copies('scmdev')})")
+    said = run("add", "pinned", "--no-embed")
+    check(cli.copies("pinned") == ["pinned@2.1"] and "its docs are at https://pinned.example/en/2.1/" in said,
+          "PyPI points at docs of an old version: the newest release's docs next to them, said so")
+    ASKED.clear()
+    said = run("add", "labbed", "--no-embed")
+    check(meta("labbed@1.0").get("source", {}).get("stored") == 0 and "robots.txt" in said
+          and not any("/-/raw/" in u for u in ASKED),
+          "code on a host that asks programs not to fetch it (robots.txt): its link only, nothing fetched")
+    said = run("add", "olddocs", "--no-embed")
+    check(cli.copies("olddocs") == ["olddocs@2014.10"] and "PyPI's newest release is 2025.2" in said,
+          "docs a major version behind PyPI's newest: kept as what they are, and said so")
     said = run("upgrade")
     check("jaxy: you have" in said and "jaxy: nightly docs change often" not in said,
           "search upgrade pulls development-only docs anew (not only a note)")
@@ -542,6 +641,22 @@ def source_code() -> None:
     check("you have this version already" in said and meta("coded@1.0").get("source", {}).get("stored") == 3
           and not any(u.endswith("api.html") for u in ASKED),
           "a copy from before: search add NAME stores its code, without reading its pages again")
+
+
+def standards_download() -> None:
+    from docsearch import standards
+    ASKED.clear()
+    said = run("add", "cpp", "--no-embed")
+    read = [u for u in ASKED if "cppreference" in u and not u.endswith((".txt", ".xml"))]
+    check(cli.copies("cpp") == ["cpp@23"] and standards.have_base("cpp") and not (cli.HOME / "cpp").exists()
+          and "downloaded once" in said and len(read) >= 5,
+          f"search add cpp: the site of every standard downloaded once, kept aside; C++23's copy made ({cli.copies('cpp')})")
+    ASKED.clear()
+    run("add", "cpp==17", "--no-embed")
+    names = sorted(e.title for e in cli.iter_entries("cpp@17"))
+    check(cli.copies("cpp") == ["cpp@23", "cpp@17"] and not any("cppreference" in u for u in ASKED)
+          and not any("format" in t for t in names) and not any("auto_ptr" in t for t in names),
+          f"search add cpp==17: made from it, nothing downloaded; C++17 has no std::format nor std::auto_ptr ({names})")
 
 
 if __name__ == "__main__":

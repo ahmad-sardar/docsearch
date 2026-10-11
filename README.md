@@ -186,14 +186,14 @@ search list numpy              # numpy's copies: choose the one search uses
 search remove numpy@1.26       # remove one copy
 ```
 
-a version you have is not downloaded again. docs without a version number (cppreference, MDN)
-and docs you added by address or from a folder are one copy, downloaded again in place.
+a version you have is not downloaded again. docs without a version number (MDN) and docs you
+added by address or from a folder are one copy, downloaded again in place.
 
 which copy a search uses:
 
 - in a project folder: the version the project uses, when you have it (from its `.venv`,
-  `uv.lock`, `poetry.lock`, `requirements.txt`, `.python-version`, `go.mod`,
-  `rust-toolchain.toml`)
+  `uv.lock`, `poetry.lock`, `requirements.txt`, `.python-version` or `requires-python`,
+  `go.mod`, `rust-toolchain.toml` or `rust-version`)
 - else the one you chose with `search list numpy`
 - else the only one; with several and none chosen, search asks once
 
@@ -213,9 +213,35 @@ search upgrade max==nightly         # a new nightly copy (each one is named by i
 
 `search known` shows which ones each built-in site has.
 
-docs that publish no version number are named by what they show: the release their source
-links name (polars: 2.0.0), or, built from a development branch (jax, triton: main), a nightly
-of the day they were downloaded. else the day, with the newest release at the time.
+### what docs correspond to
+
+each copy says which version of the software it describes, never when it was downloaded:
+
+- a release: numpy 2.5, python 3.14. docs that don't print their number are known by the
+  release their source links name (polars: 2.0.0)
+- development docs, of the release to come: `in development, after 3.8.0` (triton and jax
+  build theirs from main)
+- one standard of a language: C and C++ come one copy per standard (below)
+- the language as it is now: MDN has no versions
+- docs that say nothing show no version
+
+c and c++ (cppreference) are one site for every standard, each page marking what came with
+which one. it is downloaded once and kept aside, and each standard you ask for becomes a copy of
+its own, made from it in seconds: what that standard has, nothing added later, nothing removed
+before, the pages showing only its rows.
+
+```bash
+search add cpp                 # C++23: the current standard, as cppreference says
+search add cpp==17 c==11       # C++17 and C11, made from the same download
+search add cpp==26             # a draft standard (cpp@26-draft), when you ask for it
+```
+
+entries carry their own marks too: cppreference's standards, and the `added in 3.13` of
+python's docs and most python libraries. in a project folder, search compares them with the
+project: results newer than its version or standard are marked (`std::format` in a C++17
+project; `itertools.batched` in a project on python 3.11), and so are ones removed in it.
+the standard comes from its `CMakeLists.txt`, `meson.build`, `Makefile` or
+`compile_commands.json`.
 
 ## saving tutorials
 

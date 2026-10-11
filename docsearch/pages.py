@@ -198,10 +198,13 @@ def load_page(pages_dir: Path, rel: str) -> str | None:
 
 # --------------------------------------------------------------------------- links
 
-def localize_links(html_text: str, sites: dict[str, tuple[str, Path]]) -> str:
+def localize_links(html_text: str, sites: dict[str, tuple[str, Path]], own: str = "") -> str:
     """Links into an indexed docs site whose page is stored become in-app links
-    (/?page=<source>/<path>&at=<anchor>). Every other web link becomes plain text that
-    shows its address: nothing in a page can open the internet."""
+    (/?page=<source>/<path>&at=<anchor>), to the page's own copy first (cpp@17 stays in C++17,
+    though cpp@23 has the same pages). Every other web link becomes plain text that shows its
+    address: nothing in a page can open the internet."""
+    if own in sites:
+        sites = {own: sites[own], **{k: v for k, v in sites.items() if k != own}}
     soup = BeautifulSoup(html_text, "lxml")
     for a in soup.find_all("a", href=True):
         url = a["href"]
@@ -268,9 +271,9 @@ def source_link(fragment_html: str, api: bool) -> str | None:
     [source] at the end of its <dt>; Go's "View Source"), or for a page, its "Source code:"
     line (Python's modules). None: the docs do not say."""
     soup = BeautifulSoup(fragment_html, "lxml")
-    if api:
-        dt = soup.find("dt")
-        places = [dt, *signature_rest(dt), soup.find(class_="Documentation-source")]
+    if api:                                       # (its own: in its signature or heading, never
+        dt = soup.find("dt")                      # the first of a whole page's: Go's package pages)
+        places = [dt, *signature_rest(dt)]
         heading = soup.find(re.compile(r"^h[1-6]$"))
         if heading is not None:
             places += [heading, heading.find_next_sibling()]
@@ -334,3 +337,37 @@ def source_lines(link: str) -> tuple[int, int | None] | None:
 
 def source_file(folder: Path, raw: str) -> Path:
     return folder / (hashlib.sha1(raw.encode()).hexdigest() + ".gz")
+
+
+# --------------------------------------------------------------------------- one standard (cppreference)
+
+REV_CLASS = re.compile(r"\bt-(since|until)-(cxx|c)(\d\d)\b")    # cppreference: t-since-cxx20, t-until-c23
+
+
+def for_standard(html_text: str, lang: str, year: int) -> str:
+    """A cppreference page as one standard has it: rows and passages marked for other
+    standards (their classes say t-since-cxx20, t-until-cxx11) left out. A table row with no
+    mark of its own takes its member's (the "(C++11)" next to its name)."""
+    soup = BeautifulSoup(html_text, "lxml")
+    want = "cxx" if lang == "C++" else "c"
+
+    def outside(classes) -> bool:
+        since, until = [], []
+        for kind, l, yy in REV_CLASS.findall(" ".join(classes or [])):
+            if l == want:
+                y = 1900 + int(yy) if int(yy) >= 80 else 2000 + int(yy)
+                (since if kind == "since" else until).append(y)
+        return bool(since and min(since) > year) or bool(until and max(until) <= year)
+    for el in soup.find_all(class_=REV_CLASS):
+        if el.decomposed or "t-mark" in " ".join(el.get("class") or []):
+            continue                                  # (a mark's label: its row decides)
+        if outside(el.get("class")):
+            el.decompose()
+    for row in soup.find_all("tr"):
+        if row.decomposed or REV_CLASS.search(" ".join(row.get("class") or [])):
+            continue
+        mark = row.find(class_=REV_CLASS)
+        if mark is not None and outside(mark.get("class")):
+            row.decompose()
+    body = soup.body if soup.body is not None else soup
+    return "".join(str(c) for c in body.contents)

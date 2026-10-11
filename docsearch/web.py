@@ -84,6 +84,8 @@ class Library:
         self.order: list[str] = []                   # the copies loaded, in the order they came
         self._browse_pos: tuple = (None, {})         # (index, entry -> place in index.browse)
         self.summaries: dict[int, str] = {}
+        self._covers: dict[str, dict] = {}          # copy -> what it describes
+        self._marks: dict[int, dict] = {}           # entry -> its version marks
         self.load(sorted(self.default | (set(extra) & set(sids))))
         self.sites = {s: (m["root"], cli.HOME / s / "pages") for s, m in self.meta.items()
                       if str(m.get("root", "")).startswith("http")}
@@ -135,30 +137,40 @@ class Library:
         plan = sources.KNOWN.get(m.get("name", "")) if m.get("kind") == "known" else None
         return m.get("repo") or (plan or {}).get("repo") or (m.get("source") or {}).get("repo") or ""
 
+    def covers(self, sid: str) -> dict[str, str]:
+        """What a copy describes (versions.covers): kept, it is asked once."""
+        if sid not in self._covers:
+            self._covers[sid] = cli.copy_covers(sid, self.meta[sid])
+        return self._covers[sid]
+
     def label(self, sid: str) -> str:
-        """The docs version to show next to the name: a nightly by its day (nightly-2026-10-09);
-        for docs that publish no version number (cppreference, MDN), the day they were downloaded."""
-        m = self.meta[sid]
-        if cli.is_channel(sid):
-            return sid.partition("@")[2]
-        return (m.get("version") or sid.partition("@")[2] or cli.release_of((m.get("source") or {}).get("ref", ""))
-                or str(m.get("created", ""))[:10])     # (a copy from before: the release its source links name)
+        """The version shown next to the name: what the docs describe (2.5; C++98–C++26; in
+        development, after 3.8.0); "" when they do not say."""
+        return self.covers(sid)["label"]
 
     def note(self, sid: str) -> str:
-        """What the version shown means, when it is not a number the docs state."""
-        m, day = self.meta[sid], str(self.meta[sid].get("created", ""))[:10]
-        if m.get("after"):
-            return f"Development docs as of {day}, after release {m['after']}"
-        if cli.is_channel(sid):
-            return ""
-        if not m.get("version") and cli.release_of((m.get("source") or {}).get("ref", "")):
-            return "The release their source links name"
-        if not m.get("version") and not sid.partition("@")[2]:
-            return (f"No version number published: the docs as downloaded on {day}"
-                    + (f"; the newest release then: {m['release']}" if m.get("release") else ""))
-        return ""
+        return self.covers(sid)["note"]
 
-    def item(self, i: int, q: str) -> dict:
+    def marks(self, i: int, sid: str) -> dict[str, str]:
+        """What an entry says of its versions (versions.entry_marks): since C++20, added in 3.13."""
+        from docsearch import sources, versions
+        if i not in self._marks:
+            m = self.meta[sid]
+            lang = (sources.KNOWN.get(m.get("name", "")) or {}).get("standards", "") if m.get("kind") == "known" else ""
+            e = self.index.entries[i]
+            text = e.text if lang or i not in self.index.cut else self.full_text(i)
+            self._marks[i] = versions.entry_marks(text, lang, page=e.kind in cli.PAGE_KINDS or e.kind == "module")
+        return self._marks[i]
+
+    def versioned(self, i: int, sid: str, project: dict[str, str] | None) -> dict:
+        """An entry's marks, and what the project's version of its package (or language
+        standard) should know: newer than it, removed in it, deprecated."""
+        from docsearch import versions
+        marks = self.marks(i, sid)
+        mine = (project or {}).get(sid.split("@")[0], "")
+        return {"marks": marks, "flags": versions.flags(marks, mine), "project": mine}
+
+    def item(self, i: int, q: str, project: dict[str, str] | None = None) -> dict:
         e = self.index.entries[i]
         is_api = e.kind not in cli.PAGE_KINDS
         if is_api or not q:
@@ -168,9 +180,11 @@ class Library:
         else:                                        # a page's snippet is the query's: made each time
             text = cli.snippet(e, q)
         return {"id": i, "name": cli.api_name(e.title) if is_api else e.title, "kind": e.kind,
-                "source": self.sid_of[i], "api": is_api, "summary": text}
+                "source": self.sid_of[i], "api": is_api, "summary": text,
+                **self.versioned(i, self.sid_of[i], project)}
 
-    def search(self, q: str, srcs: set[str], offset: int, limit: int, ai: bool = False) -> dict:
+    def search(self, q: str, srcs: set[str], offset: int, limit: int, ai: bool = False,
+               project: dict[str, str] | None = None) -> dict:
         q = q.strip()
         srcs = srcs or self.default                  # never two versions of one package at once
         with self.lock:
@@ -213,13 +227,13 @@ class Library:
         with self.lock:
             fixed = index.correction(plain_q) if plain_q else None
         return {"q": q, "total": len(ids), "ai": state, "corrected": fixed,
-                "items": [self.item(i, q) for i in ids[offset:offset + limit]]}
+                "items": [self.item(i, q, project) for i in ids[offset:offset + limit]]}
 
     def rerank_text(self, i: int) -> str:
         e = self.index.entries[i]
         return f"{cli.api_name(e.title)} ({e.kind}, {e.source})\n{cli.plain(e.text)[:1200]}"
 
-    def entry(self, i: int) -> dict:
+    def entry(self, i: int, project: dict[str, str] | None = None) -> dict:
         e = self.index.entries[i]
         sid = self.sid_of[i]
         is_api = e.kind not in cli.PAGE_KINDS
@@ -229,7 +243,7 @@ class Library:
         if site and e.location.startswith(site[0]):
             rel, _, anchor = e.location[len(site[0]):].partition("#")
             rel = rel or "index.html"
-            stored = offline.load_page(site[1], rel)
+            stored = self.as_standard(sid, offline.load_page(site[1], rel))
             if stored is not None:
                 html_text = fragment(stored, anchor, e.kind)
                 page = {"path": f"{sid}/{rel}", "at": anchor}
@@ -238,10 +252,18 @@ class Library:
             base = e.location if cli.safe_url(e.location) else "https://invalid.invalid/"
             html_text = offline.sanitize(MD.render(self.full_text(i)), base)
         return {"id": i, "name": name, "kind": e.kind, "source": sid, "api": is_api,
-                "version": self.label(sid), "code": code, "repo": self.repo(sid),
-                "html": offline.localize_links(html_text, self.sites), "page": page,
+                "version": self.label(sid), "code": code, "repo": self.repo(sid), **self.versioned(i, sid, project),
+                "html": offline.localize_links(html_text, self.sites, sid), "page": page,
                 "web": e.location if cli.safe_url(e.location) else None,
                 "import": import_line(name, e.kind) if is_api else None}
+
+    def as_standard(self, sid: str, html: str | None) -> str | None:
+        """A stored page as a copy of one standard shows it (cpp@17: C++17's rows only)."""
+        from docsearch import versions
+        std = self.meta[sid].get("standard") or {}
+        if not html or not std:
+            return html
+        return offline.for_standard(html, std["lang"], versions.standard_year(std["lang"] + std["edition"]))
 
     def code_of(self, sid: str, html_text: str, api: bool) -> dict | None:
         """An entry's source link (from its docs), and whether its code is stored with them."""
@@ -304,13 +326,23 @@ class Library:
         site = self.sites.get(sid)
         if site is None:
             return None
-        stored = offline.load_page(site[1], rel)
+        stored = self.as_standard(sid, offline.load_page(site[1], rel))
         if stored is None:
             return None
         title = BeautifulSoup(stored, "lxml").find("h1")
         return {"path": path, "source": sid, "version": self.label(sid),
                 "title": title.get_text(" ", strip=True) if title else rel,
-                "html": offline.localize_links(stored, self.sites), "web": site[0] + rel}
+                "html": offline.localize_links(stored, self.sites, sid), "web": site[0] + rel}
+
+
+def project_of(text: str) -> dict[str, str]:
+    """A project's versions as the page passes them: "cpp:C++17;python:3.12"."""
+    out = {}
+    for part in text.split(";")[:200]:
+        name, _, version = part.partition(":")
+        if re.fullmatch(r"[\w.+-]{1,100}", name) and re.fullmatch(r"[\w.+-]{1,40}", version):
+            out[name] = version
+    return out
 
 
 HEADINGS = ("h1", "h2", "h3", "h4", "h5", "h6")
@@ -476,7 +508,8 @@ class Handler(BaseHTTPRequestHandler):
                 srcs = {s for s in qs.get("src", "").split(",") if s}
                 offset = max(0, int(qs.get("offset", "0") or 0))
                 limit = min(200, max(1, int(qs.get("limit", "60") or 60)))
-                return self.json(lib.search(qs.get("q", "")[:300], srcs, offset, limit, qs.get("ai") == "1"))
+                return self.json(lib.search(qs.get("q", "")[:300], srcs, offset, limit, qs.get("ai") == "1",
+                                            project_of(qs.get("proj", ""))))
             m = re.fullmatch(r"/api/source/(\d+)", url.path)
             if m:
                 i = int(m.group(1))
@@ -487,7 +520,7 @@ class Handler(BaseHTTPRequestHandler):
                 i = int(m.group(1))
                 if not 0 <= i < len(lib.index.entries):
                     return self.json({"error": "no such entry"}, 404)
-                return self.json(lib.entry(i))
+                return self.json(lib.entry(i, project_of(qs.get("proj", ""))))
             if url.path == "/api/page":
                 data = lib.page(qs.get("path", ""))
                 return self.json(data) if data else self.json({"error": "page not stored"}, 404)

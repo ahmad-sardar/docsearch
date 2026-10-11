@@ -135,6 +135,9 @@ kbd {
 .r .name mark { background: transparent; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 .r .meta { grid-column: 2; display: flex; gap: 8px; align-items: baseline; min-width: 0; font-size: 13px; }
 .r .kind { color: var(--type); flex: none; }
+.vm { flex: none; font: 12px var(--mono); color: var(--faint); }   /* since C++20, 3.13 */
+.vm.warn { color: var(--warn); font-weight: 600; }                 /* newer than your project */
+.pill.vm.warn { border-color: var(--warn); }
 .r .src { color: var(--faint); flex: none; }
 .r .sum { color: var(--soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .r:hover .sum, .r[aria-selected="true"] .sum { white-space: normal; }

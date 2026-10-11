@@ -1009,6 +1009,7 @@ def build_readme(name: str, sid: str, part: dict, store: Store) -> tuple[list[En
     as any page."""
     info = cli.release_info(part["package"], part["version"])
     text, kind = info.get("description") or "", (info.get("description_content_type") or "").lower()
+    text = "" if text.strip() == "UNKNOWN" else text
     url = part["url"]
     say(f"  the README of {part['package']} {part['version']} (PyPI's record of that release), as its docs")
     if "markdown" in kind:

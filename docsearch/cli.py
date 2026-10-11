@@ -967,6 +967,9 @@ INV_LINE = re.compile(r"(?x)(.+?)\s+(\S+)\s+(-?\d+)\s+?(\S*)\s+(.*)")  # Sphinx'
 
 
 NO_VERSION = {"0.0.0"}         # what mkdocstrings writes when a project sets no version (FastAPI)
+# a build of an untagged checkout (setuptools-scm, versioneer): 0.0.post50+g0f76baaae.d20260923
+# (fsspec's), 2.6.dev0: development docs, not a release's version
+DEV_BUILD = re.compile(r"\.dev\d*|[+-]g[0-9a-f]{6,}|\.d20\d{6}")
 
 
 def parse_objects_inv(data: bytes) -> tuple[str, str, list[dict]]:
@@ -977,7 +980,7 @@ def parse_objects_inv(data: bytes) -> tuple[str, str, list[dict]]:
         raise ValueError("not a Sphinx version 2 inventory")
     project = head[1].decode("utf-8", "replace").removeprefix("# Project:").strip()
     version = head[2].decode("utf-8", "replace").removeprefix("# Version:").strip()
-    version = "" if version in NO_VERSION else version
+    version = "" if version in NO_VERSION or DEV_BUILD.search(version) else version
     z = zlib.decompressobj()
     body = z.decompress(head[4], MAX_INVENTORY)
     if z.unconsumed_tail:
@@ -1235,6 +1238,14 @@ def download_sources(sid: str, workers: int, stop: dict | None = None) -> dict |
         return {"files": 0, "stored": 0}
     folder.mkdir(parents=True, exist_ok=True)
     todo = [raw for raw in files if not offline.source_file(folder, raw).exists()]
+    if todo:                                         # what each code host asks of programs (robots.txt,
+        from docsearch import importers              # and the pause between files it wants)
+        rules = {h: importers.robots(f"https://{h}/") for h in {urllib.parse.urlparse(r).netloc for r in todo}}
+        refused = [r for r in todo if not rules[urllib.parse.urlparse(r).netloc].can_fetch(USER_AGENT, r)]
+        if refused:
+            say(f"  source code: {len(refused)} files their site asks programs not to read (robots.txt): "
+                f"their links only")
+        todo = [r for r in todo if r not in refused]
 
     def one(raw: str) -> bool:
         try:
@@ -1249,8 +1260,8 @@ def download_sources(sid: str, workers: int, stop: dict | None = None) -> dict |
         return True
 
     stopped = False
-    ex = cf.ThreadPoolExecutor(max_workers=max(1, min(workers, 8)))
-    try:
+    ex = cf.ThreadPoolExecutor(max_workers=max(1, min(workers, 4)))    # (a code host is not a docs site:
+    try:                                                                  # asked a few files at a time)
         with Progress("  source code", len(files), quiet=not todo, start=len(files) - len(todo)) as bar:
             futures = collections.deque(ex.submit(one, raw) for raw in todo)
             until = None
@@ -1359,6 +1370,11 @@ def project_of(name: str) -> dict:
     docs = [u for k, u in rest.items() if re.search(r"doc", k, re.I) or "readthedocs" in u]
     home = [u for k, u in rest.items() if re.search(r"home|website", k, re.I)]
     return {"repo": repo, "docs": list(dict.fromkeys(docs)), "home": list(dict.fromkeys(home))}
+
+
+def has_readme(info: dict) -> bool:
+    """Does PyPI's record carry a README (old tools wrote "UNKNOWN" when there was none)?"""
+    return str(info.get("description") or "").strip() not in ("", "UNKNOWN")
 
 
 def release_info(name: str, version: str) -> dict:
@@ -1614,7 +1630,7 @@ def package_docs(name: str, yes: bool) -> tuple[str, str, bytes | None, dict] | 
         kind = next(iter(unreached.values())).kind
         say(f"  {NEXT.get(kind) or 'Try again later.'}")
         return None
-    if first is None and (PYPI_INFO.get(name) or {}).get("description"):
+    if first is None and has_readme(PYPI_INFO.get(name) or {}):
         say(f"  {name} names no docs site (PyPI, its repository): its README is its documentation")
         return "readme", f"https://pypi.org/project/{name}/", None, {"repo": repo, "about": summary,
                                                                      "verified": "PyPI's record of the package"}
@@ -2475,6 +2491,8 @@ def summary(e: Entry) -> str:
     """First line of prose after the signature: what a result list shows under the name."""
     text = re.sub(r"```.*?```", " ", e.text, flags=re.S)
     for line in text.splitlines():
+        if line.lstrip().startswith("|"):            # a table (cppreference's declarations)
+            continue
         line = plain(line)
         if len(line) > 3 and not line.endswith(":"):
             return line[:200]
@@ -2966,6 +2984,14 @@ def web_docs(name: str, spec: str, want: str, override: str, args, check_copy: b
     build_known, with their repository. None: none found, not taken, or a version you have."""
     from docsearch import sources
     if override:
+        host = urllib.parse.urlparse(override).netloc.lower().removeprefix("www.")
+        if repo_of(override) or host in SKIP_HOSTS:   # a repository or a PyPI page: not docs to read
+            what = ("a source repository" if repo_of(override) else "a PyPI page" if host == "pypi.org"
+                    else f"a page of {host}")
+            say(f"  {override} is {what}, not docs.")
+            say(f"  For a PyPI package: search add {name} (its docs are found and checked through its "
+                f"source). For docs you downloaded: search add {name}=/path/to/folder")
+            return None
         kind, root, inv, page = find_docs(override, fallback=True) or ("website", override, None, "")
         source = {"repo": address_repo(page, root)} if page else {}
     else:
@@ -2999,20 +3025,24 @@ def web_docs(name: str, spec: str, want: str, override: str, args, check_copy: b
             have = parse_objects_inv(inv)[1]
             if have and not have.startswith(want.lstrip("v")):
                 say(f"  Note: you asked for {want}, these docs say version {have}.")
-    if check_copy and have_copy(spec, name, want, parse_objects_inv(inv)[1] if inv else "", args):
+    newest = (PYPI_INFO.get(name) or {}).get("version") or ""
+    have = parse_objects_inv(inv)[1] if inv else ""
+    if not want and not override and older_major(have, newest):     # PyPI points at old docs (pinned):
+        got = find_version(root, newest)                             # its newest, next to them
+        if got:
+            say(f"  these docs are of version {have}, PyPI's newest release is {newest}: its docs are at {got[1]}")
+            kind, root, inv = got
+            have = parse_objects_inv(inv)[1] if inv else ""
+        else:
+            say(f"  Note: these docs are of version {have}; PyPI's newest release is {newest}, and no docs of "
+                f"{newest} were found next to them")
+            source = {**source, "older": have}
+    if check_copy and have_copy(spec, name, want, have, args):
         return None
     return {**docs_plan(kind, root, inv), **{k: v for k, v in source.items() if v}}   # (repo, about)
 
 
-RELEASE_REF = re.compile(r"[A-Za-z_.-]*?v?(\d+(?:\.\d+)+[\w.+-]*)")      # v2.5.0, py-2.0.0, go1.27.1
 DEV_SEGMENTS = {"main", "master", "trunk", "dev", "devdocs", "develop", "nightly"}
-
-
-def release_of(ref: str) -> str:
-    """The version a source ref names: v2.5.0 -> 2.5.0, py-2.0.0 -> 2.0.0; "" for a branch or a
-    commit."""
-    m = RELEASE_REF.fullmatch(ref or "")
-    return m.group(1) if m and not re.fullmatch(r"[0-9a-f]{7,40}", ref) else ""
 
 
 def menu_version(root: str) -> str:
@@ -3025,6 +3055,12 @@ def menu_version(root: str) -> str:
     return m.group(1) if m else ""
 
 
+def older_major(docs: str, newest: str) -> bool:
+    """Are docs of version `docs` a major version behind `newest` (pytz: 2014.10, 2025.2)?"""
+    a, b = re.match(r"\d+", docs), re.match(r"\d+", newest)
+    return bool(a and b and int(a.group()) < int(b.group()))
+
+
 def found_version(name: str, meta: dict) -> dict:
     """The version of docs found by their address that state no number, from their own
     evidence: the release their source links name (polars: py-2.0.0 -> 2.0.0); a development
@@ -3032,10 +3068,11 @@ def found_version(name: str, meta: dict) -> dict:
     /latest/) -> a nightly, "after" PyPI's newest release; their version menu, made exact by
     PyPI's newest release when that starts with it. Else none (the day shows), and PyPI's
     newest release then is kept to say so."""
+    from docsearch import versions
     newest = (PYPI_INFO.get(name) or {}).get("version") or ""
     ref = (meta.get("source") or {}).get("ref") or ""
-    if release_of(ref):
-        return {"version": release_of(ref)}
+    if versions.release_of(ref):
+        return {"version": versions.release_of(ref)}
     path = urllib.parse.urlparse(meta.get("root") or "").path.strip("/").split("/")
     if (ref and not re.search(r"\d", ref)) or DEV_SEGMENTS & set(path) or (
             ".readthedocs.io" in str(meta.get("root")) and "latest" in path):
@@ -3057,6 +3094,11 @@ def add_each(args, outer: str) -> None:
         spec_ = spec[len("pypi:"):] if forced_pypi else spec
         name, want = spec_.split("==", 1) if "==" in spec_ else (spec_, "")
         name, _, override = name.partition("=")
+        if not override and not forced_pypi and not getattr(args, "standards_base", False):
+            from docsearch import standards
+            if standards.profile(name):                  # cpp==17: one copy per standard (standards.py)
+                standards.add(name, want, spec, args)
+                continue
         if want and not forced_pypi and not override and name in sources.KNOWN and not sources.offers(name, want):
             say(f"  {name}: there are no {want} docs. They come in: {sources.versions(name)}")
             continue
@@ -3154,6 +3196,9 @@ def add_each(args, outer: str) -> None:
                     meta["kind"] = read["found"]
                     if not re.search(r"\d", meta.get("version") or "") and not meta.get("partial"):
                         meta.update(found_version(name, meta))
+                    newest = (PYPI_INFO.get(name) or {}).get("version") or ""   # (docs whose version shows
+                    if not want and not read.get("older") and older_major(meta.get("version") or "", newest):  # only now)
+                        say(f"  Note: these docs are of version {meta['version']}; PyPI's newest release is {newest}")
         except urllib.error.URLError as e:
             kind = e.kind if isinstance(e, Failed) else "other"
             say(f"  Could not download: {getattr(e, 'reason', e)}")
@@ -3520,7 +3565,7 @@ def cmd_list(args) -> None:
                 vec += f", {m['failed_pages']} pages missing"
             if m.get("partial"):
                 vec += f", partial: {partial_text(m['partial'])} (search add {m.get('name', d.name)} continues)"
-            ver = (m.get("version") or "-") + (f" (after {m['after']})" if m.get("after") else "")
+            ver = copy_covers(d.name, m)["label"] or "-"
             print(f"{d.name:<14} {ver:<10} {m.get('count', 0):>7} entries   {m.get('kind', ''):<7} "
                   f"{vec:<14} {m.get('root', '')}   (indexed {m.get('created', '?')}){marks.get(d.name, '')}")
 
@@ -3568,6 +3613,8 @@ def cmd_remove(args) -> None:
             hits = have or [target]
         for sid in hits or [target]:
             print(f"removed {sid} (index and packages.toml)" if forget(sid) else f"'{spec}' is not indexed")
+        from docsearch import standards
+        standards.drop_base(group)
 
 
 def cmd_embed(args) -> None:
@@ -3654,7 +3701,7 @@ def copy_label(meta: dict, want: str = "", day: str = "") -> str | None:
     return number or None
 
 
-CHANNEL_COPY = re.compile(r"(nightly|beta|alpha)-\d{4}-\d\d-\d\d|.+-(beta|alpha)")
+CHANNEL_COPY = re.compile(r"(nightly|beta|alpha)-\d{4}-\d\d-\d\d|.+-(beta|alpha|draft)")      # (cpp@26-draft)
 
 
 def channel_of(sid: str) -> str | None:
@@ -3669,8 +3716,15 @@ def is_channel(sid: str) -> bool:
 
 
 def version_key(sid: str) -> tuple:
-    """For newest first: released versions by their numbers, then the others by day."""
-    return (not is_channel(sid), tuple(int(n) for n in re.findall(r"\d+", sid.partition("@")[2])))
+    """For newest first: released versions by their numbers, then the others by day; a
+    language's standards by their year (C++98 before C++11)."""
+    from docsearch import sources, versions
+    group, _, label = sid.partition("@")
+    lang = (sources.KNOWN.get(group) or {}).get("standards")
+    m = re.match(r"(\d\d)(?:-draft)?$", label)
+    if lang and m:
+        return (not is_channel(sid), (versions.standard_year(lang + m.group(1)) or 0,))
+    return (not is_channel(sid), tuple(int(n) for n in re.findall(r"\d+", label)))
 
 
 def copies(group: str) -> list[str]:
@@ -3736,6 +3790,9 @@ def choose(sid: str) -> None:
     config_set(sid.split("@")[0], sid.partition("@")[2], table="use")
 
 
+STANDARD_NAME = re.compile(r"^C(\+\+)?\d\d$")
+
+
 def match_version(have: list[str], version: str) -> str | None:
     """The copy for a version a project uses: numpy@2.5 for 2.5.1 (the closest one), never a
     nightly or a beta."""
@@ -3757,6 +3814,15 @@ def in_use(group: str, project: dict[str, str] | None = None) -> tuple[str | Non
         return None, ""
     note = ""
     wanted = (project or {}).get(group)
+    if wanted and STANDARD_NAME.match(wanted):       # C++17: the copy of that standard (cpp@17)
+        from docsearch import sources, standards
+        ed = sources.edition(group, wanted)
+        hit = next((s for s in have if ed and standards.edition_of(s) == ed), None)
+        if hit or not ed:
+            return hit or (chosen(group) or (have[0] if len(have) == 1 else None)), ""
+        return (chosen(group) or (have[0] if len(have) == 1 else None),
+                f"{group}: your project uses {wanted}; you have {', '.join(s.partition('@')[2] for s in have)} "
+                f"(to get it: search add {group}=={ed})")
     if wanted:
         hit = match_version(have, wanted)
         if hit:
@@ -3891,7 +3957,9 @@ def project_versions(start: Path) -> dict[str, str]:
     """The versions a project uses, read from its files in this folder or the ones above it,
     up to the project's root (.git) or your home folder (the nearest wins): Python packages from its .venv (what is
     installed), else uv.lock, poetry.lock, requirements*.txt; Python from .python-version or
-    the .venv; Rust from rust-toolchain(.toml); Go from go.mod. Names as PyPI has them, lower case."""
+    the .venv, else the oldest its pyproject.toml supports; Rust from rust-toolchain(.toml), else
+    Cargo.toml's rust-version; Go from go.mod; the C and C++ standards it is built with
+    (language_standards). Names as PyPI has them, lower case."""
     import tomllib
     found: dict[str, str] = {}
 
@@ -3932,6 +4000,16 @@ def project_versions(start: Path) -> dict[str, str]:
                     m = re.search(r'(?m)^(?:channel\s*=\s*"([^"]+)"|([\w.-]+)\s*$)', (d / f).read_text(encoding="utf-8", errors="replace"))
                     if m and re.match(r"\d", m.group(1) or m.group(2) or ""):
                         put("rust", m.group(1) or m.group(2))
+            if (d / "Cargo.toml").exists():                # the oldest Rust it supports
+                m = re.search(r'(?m)^rust-version\s*=\s*"(\d[\w.]*)"', (d / "Cargo.toml").read_text(encoding="utf-8", errors="replace"))
+                if m:
+                    put("rust", m.group(1))
+            if (d / "pyproject.toml").exists():            # the oldest Python it supports
+                m = re.search(r'(?m)^requires-python\s*=\s*"[^"]*?>=\s*(\d+\.\d+)', (d / "pyproject.toml").read_text(encoding="utf-8", errors="replace"))
+                if m:
+                    put("python", m.group(1))
+            for lang, std in language_standards(d).items():
+                put(lang, std)
             if (d / "go.mod").exists():
                 text = (d / "go.mod").read_text(encoding="utf-8", errors="replace")
                 m = re.search(r"(?m)^toolchain\s+go(\d[\w.]*)", text) or re.search(r"(?m)^go\s+(\d[\w.]*)", text)
@@ -3942,6 +4020,64 @@ def project_versions(start: Path) -> dict[str, str]:
         if d == home or (d / ".git").exists():       # the project's root (or your home folder)
             break
     return found
+
+
+def language_standards(d: Path) -> dict[str, str]:
+    """The C and C++ standards a project in folder `d` is built with: CMakeLists.txt
+    (CMAKE_CXX_STANDARD 20, cxx_std_20), meson.build (cpp_std=c++20), a Makefile's or
+    compile_commands.json's -std=c++20 (in the folder or its build/). {"cpp": "C++20", "c": "C11"}"""
+    from docsearch import sources
+    out: dict[str, str] = {}
+
+    def std(lang: str, value: str) -> None:
+        value = sources.ALIASES.get(value.lower(), value)       # -std=c++2a: C++20
+        if re.fullmatch(r"\d\d", value) and lang not in out:
+            out[lang] = ("C++" if lang == "cpp" else "C") + value
+    for f in ("CMakeLists.txt", "meson.build", "Makefile", "makefile", "compile_commands.json",
+              "build/compile_commands.json"):
+        try:
+            if not (d / f).is_file() or (d / f).stat().st_size > 20 * 2**20:
+                continue
+            text = (d / f).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for m in re.finditer(r"CMAKE_CXX_STANDARD\s+(\d\d)|\bCXX_STANDARD\s+(\d\d)|cxx_std_(\d\d)"
+                             r"|cpp_std\s*=\s*['\"]?(?:c|gnu)\+\+(\w\w)|-std=(?:c|gnu)\+\+(\w\w)", text):
+            std("cpp", next(g for g in m.groups() if g))
+        for m in re.finditer(r"CMAKE_C_STANDARD\s+(\d\d)|\bC_STANDARD\s+(\d\d)|\bc_std_(\d\d)"
+                             r"|\bc_std\s*=\s*['\"]?(?:c|gnu)(\w\w)|-std=(?:c|gnu)(\d\w)\b", text):
+            std("c", next(g for g in m.groups() if g))
+    return out
+
+
+def copy_covers(sid: str, meta: dict | None = None) -> dict[str, str]:
+    """What a copy of docs describes (versions.covers): a release, the standards of a language,
+    development docs, the language now, or not stated. Docs of a language's standards: the
+    span its entries name (C++98 to C++26), read from them once and kept in its meta.json."""
+    from docsearch import sources, versions
+    f = HOME / sid / "meta.json"
+    if meta is None:
+        try:
+            meta = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {"style": "unknown", "label": "", "note": ""}
+    profile = sources.KNOWN.get(meta.get("name", "")) if meta.get("kind") == "known" else None
+    if profile and profile.get("standards") and "standards" not in meta and "standard" not in meta \
+            and not meta.get("partial"):
+        lang, years = profile["standards"], set()
+        try:
+            for e in iter_entries(sid, keep=KEEP_CHARS):
+                years.update(s for _, s in versions.CPP_MARK.findall(e.text) if s[len(lang):].isdigit()
+                             and s.startswith(lang))
+        except OSError:
+            years = set()
+        if years:
+            meta["standards"] = {"from": profile.get("since", ""), "to": max(years, key=versions.standard_year)}
+            try:
+                write_atomic(f, json.dumps(meta, indent=2).encode())
+            except OSError:
+                pass
+    return versions.covers(meta, sid, profile)
 
 
 def stored_pages(sid: str) -> int:
@@ -4169,8 +4305,8 @@ def cmd_upgrade(args) -> None:
     named = bool(args.sources)
     specs = list(args.sources)
     for group, have in ([] if named else groups().items()):
-        asked = [s for s in have if is_channel(s) and "==" in str(json.loads(
-            (HOME / s / "meta.json").read_text(encoding="utf-8")).get("spec", ""))]
+        asked = [s for s in have if is_channel(s) and not channel_of(s) == "draft" and "==" in str(json.loads(
+            (HOME / s / "meta.json").read_text(encoding="utf-8")).get("spec", ""))]     # (a draft standard: below)
         if asked and args.cmd == "upgrade":              # nightly, beta: pulled when asked for
             for ch in dict.fromkeys(map(channel_of, asked)):
                 say(f"{group}: {ch} docs change often; to pull a new copy: search upgrade {group}=={ch}")
@@ -4181,8 +4317,16 @@ def cmd_upgrade(args) -> None:
             spec = str(meta.get("spec") or group)
             one = copy_label(meta) is None and "@" not in stable[0]
             specs.append(spec if one else ("pypi:" if spec.startswith("pypi:") else "") + group)
+    from docsearch import standards
     for spec in specs:
         forced = spec.startswith("pypi:")
+        if standards.profile(spec.removeprefix("pypi:").partition("==")[0]) and not forced:
+            group = spec.partition("==")[0]
+            if named:                                # cppreference: downloaded again, each standard remade
+                standards.upgrade(group, args)
+            else:
+                say(f"{group}: the site does not publish a version number. To download it again: search upgrade {group}")
+            continue
         head, _, want = spec.removeprefix("pypi:").partition("==")
         name = head.partition("=")[0]
         if args.cmd == "downgrade" and not want:
@@ -4416,8 +4560,11 @@ def quick_search(words: list[str], ai: bool = False) -> None:
         say("The AI model is not downloaded yet; showing the normal results. Get it with: search setup")
         ai = False
     sources, q = split_sources(words)
-    src, use = search_copies(sources, project_versions(Path.cwd()))
-    web.open_browser({"q": q, "src": ",".join(src), "use": ",".join(use), "ai": "1" if ai else "0"})
+    project = project_versions(Path.cwd())
+    src, use = search_copies(sources, project)
+    mine = groups()                                  # (the project's versions of docs you have:
+    web.open_browser({"q": q, "src": ",".join(src), "use": ",".join(use), "ai": "1" if ai else "0",
+                      "proj": ";".join(f"{g}:{v}" for g, v in project.items() if g in mine)})   # what is newer is marked)
 
 
 def search_copies(sources: list[str], project: dict[str, str]) -> tuple[list[str], list[str]]:
@@ -4462,6 +4609,8 @@ def main(argv: list[str] | None = None) -> None:
                 stream.reconfigure(encoding="utf-8", errors="replace")
     if not (argv or sys.argv[1:])[:1] == ["serve"]:
         migrate_copies()                    # docs from before copies were kept by version: once
+        from docsearch import standards
+        standards.migrate()                 # cppreference: one copy per standard (once)
     p = argparse.ArgumentParser(prog="search", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)

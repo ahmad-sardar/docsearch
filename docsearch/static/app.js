@@ -43,6 +43,7 @@ async function init() {
     if (s) { state.srcs.add(s.group); state.active[s.group] = s.id; }
   }
   try { if (localStorage.getItem("wrapCode") === "1") document.body.classList.add("wrap-code"); } catch (_) {}
+  state.proj = p.get("proj") || "";           // your project's versions (cpp:C++17;python:3.12)
   state.ai = p.get("ai") === "1";            // "search ai IDEA" turns AI on; plain "search", off
   $("#ai").setAttribute("aria-pressed", state.ai ? "true" : "false");
   $("#q").value = state.q;
@@ -75,8 +76,10 @@ function renderSources() {
     if (versions.length > 1) {                       // choose the version to search
       const sel = el("select", "ver");
       sel.title = "Docs version";
-      for (const v of versions) {
-        const o = el("option", null, v.version || v.id.split("@")[1] || "latest");
+      const said = versions.map((v) => v.version);
+      for (const v of versions) {                    // (two alike: development docs of two days)
+        const twice = v.version && said.indexOf(v.version) !== said.lastIndexOf(v.version);
+        const o = el("option", null, twice ? `${v.version} · ${v.id.split("@")[1]}` : v.version || v.id.split("@")[1] || "latest");
         if (v.note) o.title = v.note;
         o.value = v.id;
         o.selected = v.id === active.id;
@@ -150,6 +153,7 @@ async function search({ openFirst = true, append = false, ai = false } = {}) {
   const ctl = (state.searchCtl = new AbortController());
   const params = new URLSearchParams({ q: state.q, src: searchedSources().join(","),
                                        offset: append ? state.items.length : 0, limit: 80 });
+  if (state.proj) params.set("proj", state.proj);
   if (ai) { params.set("ai", "1"); status(`Ranking with AI… (“${state.q}”)`); }
   let data;
   try { data = await getJSON(`/api/search?${params}`, ctl); } catch (e) { if (e.name !== "AbortError") status(e.message); return; }
@@ -198,12 +202,30 @@ function renderResults(items, start) {
     li.append(name);
     const meta = el("div", "meta");
     meta.append(el("span", "kind", it.kind));
+    const mark = versionMark(it);
+    if (mark) meta.append(mark);
     if (state.sources.length > 1 && !state.srcs.size) meta.append(el("span", "src", sourceLabel(it.source)));
     if (it.summary) meta.append(el("span", "sum", it.summary));
     li.append(meta);
     ol.append(li);
   });
   if (state.items.length < state.total) ol.append(el("li", "more", "Scroll for more"));
+}
+
+// What an entry says of its versions (since C++20, added in 3.13, removed in C++17), marked
+// when your project's version or standard is older (or the entry is gone in it).
+function versionMark(it, long = false) {
+  const m = it.marks || {};
+  const flags = it.flags || [];
+  const v = m.removed || m.since;
+  if (!v) return null;
+  const words = m.removed ? `removed in ${m.removed}` : /^C/.test(v) ? `since ${v}` : `added in ${v}`;
+  const span = el("span", "vm" + (long ? " pill" : "") + (flags.length ? " warn" : ""), long ? words : v);
+  const yours = it.project ? `; your project uses ${it.project}` : "";
+  span.title = flags.includes("newer") ? `${words}: newer than your project (${it.project})`
+             : flags.includes("removed") ? `${words}: gone in your project's version (${it.project})`
+             : flags.includes("deprecated") ? `deprecated in ${m.deprecated}${yours}` : words + yours;
+  return span;
 }
 
 // The parts of a name that match the query words, underlined.
@@ -242,12 +264,13 @@ async function openEntry(id, push = true) {
   if (state.docCtl) state.docCtl.abort();
   const ctl = (state.docCtl = new AbortController());
   let d;
-  try { d = await getJSON(`/api/entry/${id}`, ctl); } catch (e) { if (e.name !== "AbortError") toast(e.message); return; }
+  const proj = state.proj ? `?${new URLSearchParams({ proj: state.proj })}` : "";
+  try { d = await getJSON(`/api/entry/${id}${proj}`, ctl); } catch (e) { if (e.name !== "AbortError") toast(e.message); return; }
   state.view = { type: "entry", id };
   renderDoc({
     crumbs: d.api && d.name.includes(".") ? d.name.split(".").slice(0, -1) : [d.source],
     title: d.api ? d.name.split(".").pop() : d.name, kind: d.kind,
-    meta: [`${d.source} ${d.version}`.trim()], html: d.html, web: d.web,
+    meta: [`${d.source} ${d.version}`.trim()], mark: versionMark(d, true), html: d.html, web: d.web,
     actions: [
       d.page && { label: "Full page", primary: true, key: "Enter", run: () => openPage(d.page.path, d.page.at) },
       { label: "Copy name", run: () => copy(d.name, "name") },
@@ -303,6 +326,7 @@ function renderDoc(d, at) {
   row.append(el("h1", null, d.title));
   if (d.kind) row.append(el("span", "pill kind", d.kind));
   d.meta.filter(Boolean).forEach((m) => row.append(el("span", "pill", m)));
+  if (d.mark) row.append(d.mark);
   head.append(row);
   const actions = el("div", "actions");
   for (const a of d.actions.filter(Boolean)) {
@@ -473,6 +497,7 @@ function syncURL(push) {
   const p = new URLSearchParams();
   if (state.q) p.set("q", state.q);
   if (state.ai) p.set("ai", "1");
+  if (state.proj) p.set("proj", state.proj);
   if (state.srcs.size) p.set("src", searchedSources().join(","));
   if (state.view?.type === "entry") p.set("id", state.view.id);
   if (state.view?.type === "page") { p.set("page", state.view.path); if (state.view.at) p.set("at", state.view.at); }

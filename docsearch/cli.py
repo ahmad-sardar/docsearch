@@ -416,11 +416,14 @@ def bot_check(r, head: bytes) -> str | None:
     return None
 
 
-def http_get(url: str, timeout: float = 20) -> tuple[bytes, str]:
+def http_get(url: str, timeout: float = 20, guess: bool = False) -> tuple[bytes, str]:
     """Return (body, final URL after redirects). HTTPS only, certificate checked, at most
     MAX_DOWNLOAD bytes, at most 5 redirects and only to other HTTPS addresses. Failures are
     Failed, with their kind; the transient ones are tried again (RETRY_WAITS), and a host
-    that failed for good (no such name, bad certificate, bot check) is not tried again."""
+    that failed for good (no such name, bad certificate, bot check) is not tried again.
+    guess: an address that may not exist (where objects.inv may be). A bot check there says
+    nothing of the site's real pages (docs.pytorch.org shows one for a missing file), so the
+    host is tried again."""
     host = urllib.parse.urlparse(url).netloc
     if host in DEAD_HOSTS:
         old = DEAD_HOSTS[host]
@@ -429,8 +432,10 @@ def http_get(url: str, timeout: float = 20) -> tuple[bytes, str]:
         try:
             return http_get_once(url, timeout)
         except Failed as e:
-            if e.kind in ("dns", "certificate", "bot-check", "offline"):
+            if e.kind in ("dns", "certificate", "offline") or (e.kind == "bot-check" and not guess):
                 DEAD_HOSTS[host] = e
+            if e.kind == "rate-limited" and e.detail != "429" and wait is None:   # a limit with a bot
+                DEAD_HOSTS[host] = e       # check (Read the Docs): it lasts, so no more asking this run
             if e.kind not in TRANSIENT or wait is None or STOPPING:
                 raise
             time.sleep(min(30.0, e.wait if e.wait is not None else wait))
@@ -462,9 +467,11 @@ def http_get_once(url: str, timeout: float = 20) -> tuple[bytes, str]:
                         if len(head) > 65536:
                             break
                     who = bot_check(r, head)
+                    code = r.status_code
+                    if who and code == 429:             # too many requests, with a check to pass meanwhile
+                        raise Failed("rate-limited", url, f"{who} check", float(after) if after.isdigit() else None)
                     if who:
                         raise Failed("bot-check", url, who)
-                    code = r.status_code
                     if code in RETRY_STATUS:
                         raise Failed("rate-limited" if code == 429 else "server-error", url, str(code),
                                      float(after) if after.isdigit() else None)
@@ -958,13 +965,21 @@ def same_site(root: str, url: str) -> bool:
 INV_LINE = re.compile(r"(?x)(.+?)\s+(\S+)\s+(-?\d+)\s+?(\S*)\s+(.*)")  # Sphinx's own pattern
 
 
+# What a docs tool writes when a project sets no name or version: "" (unknown) for docsearch
+NO_PROJECT = {"Project name not set"}      # Sphinx's (py-filelock)
+NO_VERSION = {"0.0.0"}                     # mkdocstrings' (FastAPI)
+
+
 def parse_objects_inv(data: bytes) -> tuple[str, str, list[dict]]:
-    """Decode a Sphinx inventory (version 2): 4 text header lines, then zlib data."""
+    """Decode a Sphinx inventory (version 2): 4 text header lines, then zlib data. Its
+    project's name and version ("" where the inventory has a placeholder), and its objects."""
     head = data.split(b"\n", 4)
     if len(head) < 5 or not head[0].startswith(b"# Sphinx inventory version 2"):
         raise ValueError("not a Sphinx version 2 inventory")
     project = head[1].decode("utf-8", "replace").removeprefix("# Project:").strip()
     version = head[2].decode("utf-8", "replace").removeprefix("# Version:").strip()
+    project = "" if project in NO_PROJECT else project
+    version = "" if version in NO_VERSION else version
     z = zlib.decompressobj()
     body = z.decompress(head[4], MAX_INVENTORY)
     if z.unconsumed_tail:
@@ -1069,7 +1084,7 @@ def build_sphinx(name: str, root: str, inv: bytes | None, workers: int, max_page
         page, _, anchor = o["uri"].partition("#")
         pages.setdefault(page, []).append((o, anchor))
     page_list = list(pages)[:max_pages] if max_pages and folder is None else list(pages)
-    say(f"  {project} {version}: {len(best)} documented objects on {len(page_list)} pages")
+    say(f"  {project or name} {version}".rstrip() + f": {len(best)} documented objects on {len(page_list)} pages")
     if len(page_list) > 1500 and not (folder is not None and (folder / "state.json").exists()):
         say("  This is a large site. The first download can take several minutes.")
     page_list = [p for p in page_list if same_site(root, urllib.parse.urljoin(root, p))]
@@ -1323,7 +1338,7 @@ def find_docs(candidates: list[str]) -> tuple[str, str, bytes] | None:
             tried.add(root)
             for fname, kind in (("objects.inv", "sphinx"), ("search/search_index.json", "mkdocs")):
                 try:
-                    data, final = http_get(root + fname, timeout=10)
+                    data, final = http_get(root + fname, timeout=10, guess=True)
                 except Exception:  # noqa: BLE001
                     continue
                 real_root = final[: -len(fname)] if final.endswith(fname) else root
@@ -2784,11 +2799,13 @@ def add_each(args, outer: str) -> None:
                 if found:
                     kind, root, data = found
                     project = parse_objects_inv(data)[0] if kind == "sphinx" else page_title(root)
-                    say(f"  found the {kind} docs of “{project}” at {root}")
+                    say(f"  found the {kind} docs of “{project}” at {root}" if project else
+                        f"  found {kind} docs at {root} (they do not say of which project)")
                     # the guards against name overlap: docs of another project with a similar
-                    # name, or a docs address we only guessed (NAME.readthedocs.io)
+                    # name, or a docs address we only guessed (NAME.readthedocs.io). Docs that
+                    # do not say their name, at an address PyPI lists: the package's.
                     guessed = urllib.parse.urlparse(root).netloc in GUESSED
-                    if not override and (guessed or not same_project(name, project)):
+                    if not override and (guessed or (project and not same_project(name, project))):
                         summary = (PYPI_INFO.get(name) or {}).get("summary") or "(no description)"
                         say(f"  PyPI describes '{name}' as: {summary}")
                         if guessed:
@@ -2796,13 +2813,13 @@ def add_each(args, outer: str) -> None:
                                 f"another project may live there.")
                         else:
                             say(f"  These docs are titled “{project}”, which does not look like '{name}'.")
-                        if not confirm(f"Index “{project}” at {root} as '{name}'?", args.yes):
+                        if not confirm(f"Index {f'“{project}”' if project else 'the docs'} at {root} as '{name}'?", args.yes):
                             say(f"  Skipped. For other docs: search add {name}=https://...  "
                                 f"(or see: search known)")
                             continue
                     if want and kind == "sphinx" and not sources.channel(want):
                         got = parse_objects_inv(data)[1]
-                        if not got.startswith(want.lstrip("v")):
+                        if got and not got.startswith(want.lstrip("v")):
                             say(f"  Note: you asked for {want}, these docs say version {got}.")
                     if (stopped is None and not staged and not getattr(args, "force", False)
                             and have_copy(spec, name, want, parse_objects_inv(data)[1] if kind == "sphinx" else "", args)):

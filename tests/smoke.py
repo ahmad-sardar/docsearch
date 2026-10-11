@@ -189,9 +189,9 @@ def versions() -> None:
               "a search names a package (its copy in use) or a copy; a project's version wins")
 
         lib = web.Library()
-        first = "testdocs@1.0" in lib.loaded and "testdocs@1.1" not in lib.loaded
+        first = "testdocs@1.0" in lib.order and "testdocs@1.1" not in lib.order
         hits = lib.search("", {"testdocs@1.1"}, 0, 50)["items"]
-        check(first and "testdocs@1.1" in lib.loaded and hits and {h["source"] for h in hits} == {"testdocs@1.1"},
+        check(first and "testdocs@1.1" in lib.order and hits and {h["source"] for h in hits} == {"testdocs@1.1"},
               "the search page loads the copy in use, and another one when a search asks for it")
         port = web.start()
         req = urllib.request.Request(f"http://127.0.0.1:{port}/api/use", data=b'{"source": "testdocs@1.1"}',
@@ -210,6 +210,7 @@ def versions() -> None:
         check(nightly in cli.copies("testdocs") and "you have this version already" in said and pages_read() == 0
               and cli.match_version(cli.copies("testdocs"), "nightly") is None,
               "a nightly is a copy of its day; the same day's again is not downloaded; never chosen for you")
+        copies_at_once(nightly)
 
         os.replace(cli.HOME / "testdocs@1.1", cli.HOME / "testdocs")       # as before copies had versions
         cli.migrate_copies()
@@ -227,6 +228,38 @@ def versions() -> None:
     finally:
         del sources.KNOWN["testdocs"]
         server.shutdown()
+
+
+def copies_at_once(nightly: str) -> None:
+    """The search page with three copies, one in use: the other two asked for in turn (the
+    version menu), and at once."""
+    was = cli.in_use("testdocs")[0]
+    cli.choose("testdocs@1.0")
+    lib = web.Library()
+    before = lib.search("testdocs page", {"testdocs@1.1"}, 0, 50)["items"]
+    lib.search("testdocs page", {nightly}, 0, 50)
+    check(before and all(lib.entry(h["id"])["name"] == h["name"] and lib.entry(h["id"])["source"] == "testdocs@1.1"
+                         for h in before), "a result listed before another copy loaded still opens the same entry")
+    wrong, errors = [], []
+
+    def switch(k: int) -> None:
+        for j in range(6):
+            want = {"testdocs@1.1"} if (k + j) % 2 else {nightly}
+            try:
+                got = shared.search("" if j % 3 == 0 else "testdocs page", want, 0, 50)["items"]
+                wrong.extend(h for h in got if h["source"] not in want)
+            except Exception as e:  # noqa: BLE001
+                errors.append(repr(e))
+    for _ in range(3):
+        shared = web.Library()
+        threads = [threading.Thread(target=switch, args=(k,)) for k in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    check(not wrong and not errors, f"8 searches at once, in two copies not in use: each answered from its own "
+          f"({len(wrong)} from another, errors: {errors[:2]})")
+    cli.choose(was)
 
 
 def project_files() -> None:
@@ -368,6 +401,23 @@ def main() -> None:
             answered.append(isinstance(get(port, "/api/search", q=q, src="mini").get("items"), list))
         check(all(kept) and all(answered), f"{len(SYMBOLS)} queries with symbols: each is the query, and answered "
               f"({[q for q, k, a in zip(SYMBOLS, kept, answered) if not (k and a)]} not)")
+        said = [get(port, "/api/search", q=q, src="mini")["items"] for q in ("prints console", "device name windows")]
+        snips = [next((it["summary"] for it in items if it["name"] == "Console output"), "") for items in said]
+        check("console" in snips[0] and "device name" in snips[1],
+              f"a page's snippet is the one for each query ({snips})")
+        failed: list[str] = []
+
+        def ask(k: int) -> None:
+            try:
+                get(port, "/api/search", q=f"matrix {k}", src="mini")
+            except Exception as e:  # noqa: BLE001
+                failed.append(repr(e))
+        asks = [threading.Thread(target=ask, args=(k,)) for k in range(32)]
+        for t in asks:
+            t.start()
+        for t in asks:
+            t.join()
+        check(not failed, f"32 requests at once, as a page with many images makes: all answered ({failed[:2]})")
         for q in ("Console output", "Notes"):
             hit = get(port, "/api/search", q=q, src="mini")["items"][0]
             entry = get(port, f"/api/entry/{hit['id']}")

@@ -65,7 +65,7 @@ def pygments_css() -> str:
 class Library:
     """Everything that is indexed, searchable, with its offline pages. Of each package the copy
     search uses is loaded (cli.in_use; with several and none chosen, the newest until you choose
-    one), and another copy when a search asks for it (the page's version menu)."""
+    one), and another copy when a search first asks for it (the page's version menu)."""
 
     def __init__(self, extra: frozenset[str] = frozenset()) -> None:
         sids = [s for have in cli.groups().values() for s in have]      # (each package's newest first)
@@ -79,30 +79,34 @@ class Library:
             if now is None:
                 self.choose.add(group)
             self.default.add(now or have[0])
-        self.lock = threading.Lock()                 # one search at a time (the model)
-        self.load(self.default | (set(extra) & set(sids)))
+        self.lock = threading.Lock()                 # one search at a time (the model), one load
+        self.order: list[str] = []                   # the copies loaded, in the order they came
+        self._browse_pos: tuple = (None, {})         # (index, entry -> place in index.browse)
+        self.summaries: dict[int, str] = {}
+        self.load(sorted(self.default | (set(extra) & set(sids))))
         self.sites = {s: (m["root"], cli.HOME / s / "pages") for s, m in self.meta.items()
                       if str(m.get("root", "")).startswith("http")}
         self.image_types: dict[str, dict[str, str]] = {}
         self.pygments = pygments_css()
         self.index.search("warm up")                 # load caches before the first request
 
-    def load(self, sids: set[str]) -> None:
-        """Index these copies (the ones in use, and any other asked for)."""
-        vectors = any((cli.HOME / s / "emb.npy").exists() for s in sids) and cli.model_cached()   # (a source
+    def load(self, more: list[str]) -> None:
+        """Index these copies too (the ones in use; later another one a search asks for). A
+        copy stays loaded, and its entries keep their numbers: a new copy's come after them.
+        So a result listed before, or a search still under way, still means the same entry."""
+        order = self.order + [s for s in more if s not in self.order]
+        vectors = any((cli.HOME / s / "emb.npy").exists() for s in order) and cli.model_cached()   # (a source
         # without vectors, embed = false or not made yet, is left out of search by meaning only)
-        self.index = cli.Index(sorted(sids), "hybrid" if vectors else "spell")
-        self.loaded = set(sids)
-        ends = [first for first, _ in self.index.spans[1:]] + [len(self.index.entries)]
-        self.sid_of = [sid for (first, sid), end in zip(self.index.spans, ends) for _ in range(end - first)]
-        self.summaries: dict[int, str] = {}
-        self._browse_pos: dict[int, int] = {}
+        index = cli.Index(order, "hybrid" if vectors else "spell")
+        ends = [first for first, _ in index.spans[1:]] + [len(index.entries)]
+        self.sid_of = [sid for (first, sid), end in zip(index.spans, ends) for _ in range(end - first)]
+        self.index, self.order = index, order       # (sid_of first: it covers the entries of both)
 
     def ensure(self, srcs: set[str]) -> None:
-        """Copies a search asks for that are not loaded (another version, from the menu):
-        loaded now, in place of other ones asked for before."""
-        if any(s in self.meta and s not in self.loaded for s in srcs):
-            self.load(self.default | {s for s in srcs if s in self.meta})
+        """Copies a search asks for that are not loaded yet (another version, from the menu)."""
+        new = sorted(s for s in srcs if s in self.meta and s not in self.order)
+        if new:
+            self.load(new)
 
     def use(self, sid: str) -> None:
         """The copy you chose for search, where several were and none was chosen (the page)."""
@@ -133,38 +137,43 @@ class Library:
     def item(self, i: int, q: str) -> dict:
         e = self.index.entries[i]
         is_api = e.kind not in cli.PAGE_KINDS
-        if i not in self.summaries:
-            self.summaries[i] = cli.summary(e) if is_api or not q else cli.snippet(e, q)
+        if is_api or not q:
+            if i not in self.summaries:
+                self.summaries[i] = cli.summary(e)
+            text = self.summaries[i]
+        else:                                        # a page's snippet is the query's: made each time
+            text = cli.snippet(e, q)
         return {"id": i, "name": cli.api_name(e.title) if is_api else e.title, "kind": e.kind,
-                "source": self.sid_of[i], "api": is_api, "summary": self.summaries[i]}
+                "source": self.sid_of[i], "api": is_api, "summary": text}
 
     def search(self, q: str, srcs: set[str], offset: int, limit: int, ai: bool = False) -> dict:
         q = q.strip()
         srcs = srcs or self.default                  # never two versions of one package at once
         with self.lock:
             self.ensure(srcs)
+            index, sid_of = self.index, self.sid_of     # this search's, even if another loads more
         rest, phrases, patterns = cli.parse_strict(q)
         plain_q = " ".join([rest] + phrases).strip()     # what ranks the results (and the AI reads)
         if not q:                                    # no query: all the docs, in reading order
-            ids = [i for i in self.index.browse if not srcs or self.sid_of[i] in srcs]
+            ids = [i for i in index.browse if not srcs or sid_of[i] in srcs]
         elif phrases or patterns:                    # strict: every match, the best first
             with self.lock:
                 try:
-                    found = self.index.strict(phrases, patterns, self.full_text)
+                    found = index.strict(phrases, patterns, index.full_text)
                 except ValueError as e:
                     return {"q": q, "total": 0, "ai": None, "items": [], "error": str(e)}
-                hits = self.index.search(plain_q, limit=3000) if plain_q else []
-            allowed = {i for i in found if (not srcs or self.sid_of[i] in srcs) and not self.index.duplicate(i)}
+                hits = index.search(plain_q, limit=3000) if plain_q else []
+            allowed = {i for i in found if (not srcs or sid_of[i] in srcs) and not index.duplicate(i)}
             ranked = [i for i, _, _ in hits if i in allowed]
-            if not self._browse_pos:
-                self._browse_pos = {i: k for k, i in enumerate(self.index.browse)}
+            if self._browse_pos[0] is not index:
+                self._browse_pos = (index, {i: k for k, i in enumerate(index.browse)})
+            pos = self._browse_pos[1]
             seen = set(ranked)
-            ids = ranked + sorted((i for i in allowed if i not in seen),
-                                  key=lambda i: self._browse_pos.get(i, len(self._browse_pos)))
+            ids = ranked + sorted((i for i in allowed if i not in seen), key=lambda i: pos.get(i, len(pos)))
         else:
             with self.lock:
-                hits = self.index.search(q, limit=3000 if srcs else cli.SHOW)
-            ids = [i for i, _, _ in hits if not srcs or self.sid_of[i] in srcs][:cli.SHOW]
+                hits = index.search(q, limit=3000 if srcs else cli.SHOW)
+            ids = [i for i, _, _ in hits if not srcs or sid_of[i] in srcs][:cli.SHOW]
         state = None
         if ai and plain_q:                           # the model reorders the top results
             from docsearch import rerank
@@ -174,11 +183,11 @@ class Library:
             else:
                 s = model.scores(plain_q, [self.rerank_text(i) for i in ids[:rerank.TOP]])
                 with self.lock:
-                    exact = set(self.index.rank_name(plain_q)[0])
+                    exact = set(index.rank_name(plain_q)[0])
                 ids = rerank.reorder(ids, s, exact)
                 state = "ranked"
         with self.lock:
-            fixed = self.index.correction(plain_q) if plain_q else None
+            fixed = index.correction(plain_q) if plain_q else None
         return {"q": q, "total": len(ids), "ai": state, "corrected": fixed,
                 "items": [self.item(i, q) for i in ids[offset:offset + limit]]}
 
@@ -428,6 +437,10 @@ def reload_library() -> None:
     threading.Thread(target=run, daemon=True).start()
 
 
+class Server(ThreadingHTTPServer):
+    request_queue_size = 128       # a page asks for its images at once: 5 waiting (the default) drop some
+
+
 def serve(port: int = PORT) -> None:
     """Run the server in this process until it is stopped. It cannot reach the internet."""
     cli.offline_only()
@@ -441,7 +454,7 @@ def serve(port: int = PORT) -> None:
     threading.Thread(target=warm_up, daemon=True).start()
     for p in (port, 0):                              # the usual port, else any free one
         try:
-            httpd = ThreadingHTTPServer(("127.0.0.1", p), Handler)
+            httpd = Server(("127.0.0.1", p), Handler)
             break
         except OSError:
             continue

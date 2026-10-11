@@ -28,6 +28,10 @@ was seen on a real one): no models, no internet, a few seconds.
   never stopped: Sphinx docs (search add), local folders, docs in several parts (the parts
   read are not read again), and the images (those stored are not fetched again)
 - ctrl+c pressed in a terminal (to every process of the download): no worker prints a traceback
+- finding a package's docs: a bot check on an address only guessed (docs.pytorch.org shows one
+  for a missing objects.inv) does not stop the next guess; "too many requests" with a bot check
+  (Read the Docs) is a rate limit, said so, and not asked again; an inventory whose name or
+  version is a placeholder (filelock's "Project name not set", FastAPI's 0.0.0) says neither
 """
 from __future__ import annotations
 
@@ -112,6 +116,10 @@ SITE["/nolist/a.html"] = (200, page("Listed nowhere", ""))
 SITE["/far/"] = (200, page("Far", "".join(f'<a href="p{n}.html">{n}</a> ' for n in range(40))))
 for _n in range(40):
     SITE[f"/far/p{_n}.html"] = (200, page(f"Far {_n}", ""))
+SITE["/guess/"] = (200, page("Guess", ""))
+SITE["/guess/stable/objects.inv"] = SITE["/sphinx/objects.inv"]
+CHALLENGE = {"/guess/objects.inv": 403}           # Cloudflare's bot check instead of the page
+CHALLENGE.update({p: 429 for p in ("/limited/", "/limited/objects.inv", "/limited/search/search_index.json")})
 LOG: list[tuple[float, str]] = []
 BUSY = {"/v26/docs/b.html": 2}                    # answers "too many requests" this many times
 DROP: set[str] = set()                            # no answer at all (the connection drops)
@@ -141,8 +149,13 @@ class Site(http.server.BaseHTTPRequestHandler):
         if BUSY.get(self.path):
             BUSY[self.path] -= 1
             code, body = 429, b"<html><head><title>Too Many Requests</title></head></html>"
+        cloudflare = self.path.startswith("/limited/") or self.path in CHALLENGE
+        if self.path in CHALLENGE:
+            code, body = CHALLENGE[self.path], b"<html><head><title>Just a moment...</title></head></html>"
         self.send_response(code)
-        self.send_header("Server", "AkamaiGHost")
+        self.send_header("Server", "cloudflare" if cloudflare else "AkamaiGHost")
+        if self.path in CHALLENGE:
+            self.send_header("cf-mitigated", "challenge")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -303,8 +316,34 @@ def main() -> None:
     check(bool(meta.get("partial")) and took < 2.0,
           f"ctrl+c while a slow page is awaited: stopped {took:.1f} s later, not when the page came")
     every_kind(site)
+    finding_docs(site)
     server.shutdown()
     print("all good")
+
+
+def finding_docs(site: str) -> None:
+    host = site.split("//")[1]
+    cli.DEAD_HOSTS.clear()
+    cli.PACE.clear()
+    found = cli.find_docs([f"{site}/guess/"])
+    check(found is not None and found[1] == f"{site}/guess/stable/" and host not in cli.DEAD_HOSTS,
+          "a bot check on a guessed address (objects.inv): the next guess is still tried, and found")
+    waits, cli.RETRY_WAITS = cli.RETRY_WAITS, (0, 0, 0)
+    t0 = time.monotonic()
+    found = cli.find_docs([f"{site}/limited/"])
+    took = time.monotonic() - t0
+    cli.RETRY_WAITS = waits
+    dead = cli.DEAD_HOSTS.get(host)
+    check(found is None and dead is not None and dead.kind == "rate-limited" and "429" in str(dead)
+          and "later" in cli.NEXT[dead.kind] and took < 15,
+          f"too many requests, with a bot check: a rate limit (try again later), not asked again ({took:.1f} s)")
+    cli.DEAD_HOSTS.clear()
+    cli.PACE.clear()
+    inv = (b"# Sphinx inventory version 2\n# Project: Project name not set\n# Version: 0.0.0\n"
+           b"# The remainder of this file is compressed using zlib.\n" + zlib.compress(INVENTORY))
+    project, version, objs = cli.parse_objects_inv(inv)
+    check(project == "" and version == "" and len(objs) == 6,
+          "an inventory's placeholder name and version (Sphinx's, mkdocstrings') are unknown, not a name or version")
 
 
 def entries_of(sid: str) -> list:

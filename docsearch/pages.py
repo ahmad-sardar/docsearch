@@ -203,8 +203,9 @@ def localize_links(html_text: str, sites: dict[str, tuple[str, Path]], own: str 
     (/?page=<source>/<path>&at=<anchor>), to the page's own copy first (cpp@17 stays in C++17,
     though cpp@23 has the same pages). Every other web link becomes plain text that shows its
     address: nothing in a page can open the internet."""
-    if own in sites:
-        sites = {own: sites[own], **{k: v for k, v in sites.items() if k != own}}
+    mine = {k: v for k, v in sites.items() if k == own or k.startswith(own + "/")}     # (its guides too)
+    sites = {**dict(sorted(mine.items(), key=lambda kv: -len(kv[1][0]))),
+             **{k: v for k, v in sites.items() if k not in mine}}
     soup = BeautifulSoup(html_text, "lxml")
     for a in soup.find_all("a", href=True):
         url = a["href"]

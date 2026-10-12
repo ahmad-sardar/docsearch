@@ -37,11 +37,13 @@ from docsearch.cli import Entry, say
 
 
 class Store:
-    """Offline pages and images of one source, all under one address prefix (`root`)."""
+    """Offline pages and images of one source, all under one address prefix (`root`). An
+    official guide of the docs (organize.find_guides) keeps its pages in a folder of their own
+    (`folder`: pages/guide/), with its own address; the images of both go in pages/_images."""
 
-    def __init__(self, sid: str, root: str) -> None:
+    def __init__(self, sid: str, root: str, folder: str = "") -> None:
         self.sid, self.root = sid, root
-        self.dir = cli.HOME / sid / "pages"
+        self.dir = cli.HOME / sid / "pages" / folder if folder else cli.HOME / sid / "pages"
         self.images: dict[str, str] = {}
 
     def reset(self) -> None:
@@ -54,7 +56,7 @@ class Store:
 
     def finish(self, workers: int, stop: dict | None = None) -> bool:
         """Store the pages' images: False if it stopped first (the rest come next time)."""
-        return cli.download_images(self.images, self.dir / "_images", workers, stop=stop)
+        return cli.download_images(self.images, cli.HOME / self.sid / "pages" / "_images", workers, stop=stop)
 
 
 def image_namer(sid: str, root: str, images: dict[str, str]):

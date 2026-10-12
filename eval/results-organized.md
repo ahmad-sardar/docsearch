@@ -70,3 +70,67 @@ pandas.Series.head, an exact name too; they were in the other order before.
 |---|---|---|---|---|---|---|---|---|---|---|
 | before | 0.928 [0.844, 1.000] | baseline | 0.928 | 0.88 | 1.00 | 1.00 | 1.00 | 0.946 | 0 / 0 | 0.0 |
 | organized | 0.908 [0.816, 0.980] | -0.020 (p=1.0000) | 0.908 | 0.84 | 1.00 | 1.00 | 1.00 | 0.931 | 0 / 0 | 0.0 |
+
+## Phase 2: official guides added (polars' user guide, numpy's tutorials)
+
+`before`: organized, without guides; `organized`: the same, with the guides their docs link.
+Questions are asked of all packages at once, as plain search does now: the guides' how-to pages
+(polars' "JSON files") come before other packages' reference answers (json.dump). Phase 3 keeps
+guides out of plain search (what) and in `search how`.
+
+
+### All questions  (n = 141 questions)
+
+| System | MRR@10 [95% CI] | Δ MRR vs baseline (p, Holm) | strict MRR | R@1 | R@5 | R@10 | R@50 | nDCG@10 | ms p50 / p95 | GPU GB |
+|---|---|---|---|---|---|---|---|---|---|---|
+| before | 0.357 [0.289, 0.429] | baseline | 0.250 | 0.28 | 0.48 | 0.57 | 0.79 | 0.314 | 0 / 0 | 0.0 |
+| organized | 0.348 [0.280, 0.416] | -0.009 (p=0.2355) | 0.246 | 0.26 | 0.46 | 0.56 | 0.79 | 0.307 | 0 / 0 | 0.0 |
+
+### Stack Overflow questions  (n = 110 questions)
+
+| System | MRR@10 [95% CI] | Δ MRR vs baseline (p, Holm) | strict MRR | R@1 | R@5 | R@10 | R@50 | nDCG@10 | ms p50 / p95 | GPU GB |
+|---|---|---|---|---|---|---|---|---|---|---|
+| before | 0.246 [0.181, 0.316] | baseline | 0.108 | 0.16 | 0.37 | 0.47 | 0.75 | 0.183 | 0 / 0 | 0.0 |
+| organized | 0.231 [0.168, 0.300] | -0.015 (p=0.0051) | 0.101 | 0.15 | 0.35 | 0.45 | 0.74 | 0.171 | 0 / 0 | 0.0 |
+
+### Stack Overflow questions whose answer is learn  (n = 1 questions)
+
+| System | MRR@10 [95% CI] | Δ MRR vs baseline (p, Holm) | strict MRR | R@1 | R@5 | R@10 | R@50 | nDCG@10 | ms p50 / p95 | GPU GB |
+|---|---|---|---|---|---|---|---|---|---|---|
+| before | 0.000 [0.000, 0.000] | baseline | 0.000 | 0.00 | 0.00 | 0.00 | 1.00 | 0.000 | 0 / 0 | 0.0 |
+| organized | 0.000 [0.000, 0.000] | +0.000 (p=1.0000) | 0.000 | 0.00 | 0.00 | 0.00 | 1.00 | 0.000 | 0 / 0 | 0.0 |
+
+### Stack Overflow questions whose answer is do  (n = 13 questions)
+
+| System | MRR@10 [95% CI] | Δ MRR vs baseline (p, Holm) | strict MRR | R@1 | R@5 | R@10 | R@50 | nDCG@10 | ms p50 / p95 | GPU GB |
+|---|---|---|---|---|---|---|---|---|---|---|
+| before | 0.312 [0.138, 0.509] | baseline | 0.040 | 0.15 | 0.46 | 0.69 | 0.77 | 0.130 | 0 / 0 | 0.0 |
+| organized | 0.302 [0.123, 0.508] | -0.010 (p=0.5020) | 0.032 | 0.15 | 0.46 | 0.62 | 0.77 | 0.106 | 0 / 0 | 0.0 |
+
+### Stack Overflow questions whose answer is lookup  (n = 95 questions)
+
+| System | MRR@10 [95% CI] | Δ MRR vs baseline (p, Holm) | strict MRR | R@1 | R@5 | R@10 | R@50 | nDCG@10 | ms p50 / p95 | GPU GB |
+|---|---|---|---|---|---|---|---|---|---|---|
+| before | 0.243 [0.172, 0.319] | baseline | 0.120 | 0.17 | 0.37 | 0.45 | 0.75 | 0.194 | 0 / 0 | 0.0 |
+| organized | 0.226 [0.159, 0.299] | -0.016 (p=0.0164) | 0.112 | 0.15 | 0.34 | 0.44 | 0.74 | 0.184 | 0 / 0 | 0.0 |
+
+### Stack Overflow questions whose answer is understand  (n = 1 questions)
+
+| System | MRR@10 [95% CI] | Δ MRR vs baseline (p, Holm) | strict MRR | R@1 | R@5 | R@10 | R@50 | nDCG@10 | ms p50 / p95 | GPU GB |
+|---|---|---|---|---|---|---|---|---|---|---|
+| before | 0.000 [0.000, 0.000] | baseline | 0.000 | 0.00 | 0.00 | 0.00 | 0.00 | 0.000 | 0 / 0 | 0.0 |
+| organized | 0.000 [0.000, 0.000] | +0.000 (p=1.0000) | 0.000 | 0.00 | 0.00 | 0.00 | 0.00 | 0.000 | 0 / 0 | 0.0 |
+
+### Idea questions  (n = 6 questions)
+
+| System | MRR@10 [95% CI] | Δ MRR vs baseline (p, Holm) | strict MRR | R@1 | R@5 | R@10 | R@50 | nDCG@10 | ms p50 / p95 | GPU GB |
+|---|---|---|---|---|---|---|---|---|---|---|
+| before | 0.099 [0.024, 0.182] | baseline | 0.099 | 0.00 | 0.33 | 0.50 | 0.83 | 0.139 | 0 / 0 | 0.0 |
+| organized | 0.162 [0.037, 0.310] | +0.063 (p=0.5045) | 0.162 | 0.00 | 0.33 | 0.67 | 0.83 | 0.196 | 0 / 0 | 0.0 |
+
+### Name lookups  (n = 25 questions)
+
+| System | MRR@10 [95% CI] | Δ MRR vs baseline (p, Holm) | strict MRR | R@1 | R@5 | R@10 | R@50 | nDCG@10 | ms p50 / p95 | GPU GB |
+|---|---|---|---|---|---|---|---|---|---|---|
+| before | 0.908 [0.816, 0.980] | baseline | 0.908 | 0.84 | 1.00 | 1.00 | 1.00 | 0.931 | 0 / 0 | 0.0 |
+| organized | 0.908 [0.816, 0.980] | +0.000 (p=1.0000) | 0.908 | 0.84 | 1.00 | 1.00 | 1.00 | 0.931 | 0 / 0 | 0.0 |

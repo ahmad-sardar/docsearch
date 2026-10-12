@@ -21,6 +21,14 @@ no internet, a few seconds.
 - search list NAME: how many entries of each purpose, what was left out, the source code
 - docs from before: organized once, with nothing downloaded; their vectors keep the rows of the
   entries kept
+- official guides (guides.py): the docs' header links a "User guide" on their own site (its
+  folder holds the docs: only the guide's pages are read, from its sitemap) and "Tutorials" on
+  a site that links to the package's repository: both read with the docs, as parts of the copy,
+  their pages under pages/guide/ and pages/guide2/, organized with them (its "Getting started":
+  learn; development/: left out); a "Learn more" on a site that is not the package's is not
+  taken; a guide's entries say "as of" the day; links between the docs and the guide stay in
+  the copy; a copy you have gets its guides on search add, without its docs read again;
+  --guide URL: taken when official (kept in packages.toml), refused when not
 """
 from __future__ import annotations
 
@@ -167,6 +175,7 @@ def main() -> None:
           and "source code: github.com/mini/mini" in said,
           f"search list NAME: each purpose's count, what was left out, the source code ({said!r})")
     migrate()
+    guides()
     print("all good")
 
 
@@ -246,6 +255,138 @@ def migrate() -> None:
           f"docs from before: organized once; their vectors keep the kept entries' rows ({kept}, {emb[:, 0]})")
     said = run("list")
     check("organizing" not in said, "and only once")
+
+
+
+# --------------------------------------------------------------------------- official guides
+
+MOCK: dict[str, dict[str, bytes]] = {}           # host -> path -> page (a made-up web, no internet)
+MOCK_ASKED: list[str] = []
+
+
+def answer(request):
+    import httpx
+    MOCK_ASKED.append(str(request.url))
+    body = MOCK.get(request.url.host, {}).get(request.url.raw_path.decode())
+    return httpx.Response(200 if body is not None else 404, content=body if body is not None else b"no")
+
+
+def doc_page(title: str, body: str = "", head: str = "", base: str = "") -> bytes:
+    hint = f'<script id="__config" type="application/json">{{"base": "{base}"}}</script>' if base else ""
+    return (f"<html><head><title>{title}</title>{hint}</head><body><header>{head}</header>"
+            f"<nav><a href='https://github.com/lib-org/lib'>GitHub</a></nav><main><h1>{title}</h1>"
+            f"<p>{WORDS}</p>{body}</main></body></html>").encode()
+
+
+def sitemap(urls: list[str]) -> bytes:
+    return ("<urlset>" + "".join(f"<url><loc>{u}</loc></url>" for u in urls) + "</urlset>").encode()
+
+
+def guide_sites(header: str) -> None:
+    api = "https://docs.lib.example/api/stable/"
+    inv = ("index std:doc -1 index.html Lib API reference\nreference std:doc -1 reference.html Reference\n"
+           "lib.join py:function 1 reference.html#lib.join -\n")
+    MOCK["pypi.org"] = {"/pypi/lib/json": json.dumps({"info": {"name": "lib", "summary": "A lib.", "version": "1.0",
+                        "project_urls": {"Documentation": api, "Source": "https://github.com/lib-org/lib"}}}).encode()}
+    MOCK["docs.lib.example"] = {
+        "/api/stable/objects.inv": (b"# Sphinx inventory version 2\n# Project: Lib\n# Version: 1.0\n"
+                                    b"# The remainder of this file is compressed using zlib.\n" + zlib.compress(inv.encode())),
+        "/api/stable/": doc_page("Lib API reference", "", header),
+        "/api/stable/index.html": doc_page("Lib API reference", "", header),
+        "/api/stable/reference.html": doc_page("Reference", "<dl class='py function'><dt id='lib.join'>lib.join(a, b)"
+                                               "</dt><dd><p>Joins two tables.</p></dd></dl>"),
+        "/": doc_page("Lib", "<a href='user-guide/getting-started/'>Start</a>", base="."),
+        "/sitemap.xml": sitemap([f"https://docs.lib.example/{p}" for p in (
+            "", "user-guide/getting-started/", "user-guide/concepts/", "user-guide/joins/", "development/contributing/")]),
+        "/user-guide/getting-started/": doc_page("Getting started", "<pre><code>import lib</code></pre>"),
+        "/user-guide/concepts/": doc_page("Concepts", "<p>Tables and rows.</p>"),
+        "/user-guide/joins/": doc_page("Joins", "<p>Use <a href='https://docs.lib.example/api/stable/reference.html#lib.join'>"
+                                                "lib.join</a>, as <a href='../concepts/'>Concepts</a> says.</p>"),
+        "/development/contributing/": doc_page("Contributing", ""),
+    }
+    MOCK["learn.lib-tutorials.example"] = {
+        "/": doc_page("Lib tutorials", "<a href='first-steps/'>First steps</a>", base="."),
+        "/sitemap.xml": sitemap(["https://learn.lib-tutorials.example/", "https://learn.lib-tutorials.example/first-steps/"]),
+        "/first-steps/": doc_page("Your first table", "<p>Make a table.</p>"),
+    }
+    MOCK["blog.example"] = {"/": b"<html><body><main><h1>A blog</h1><p>Posts.</p></main></body></html>",
+                            "/sitemap.xml": sitemap(["https://blog.example/"])}
+    MOCK["api.github.com"] = {"/repos/lib-org/lib": json.dumps({"full_name": "lib-org/lib",
+                                                                "homepage": "https://docs.lib.example/"}).encode()}
+
+
+def guides() -> None:
+    import httpx
+    real = cli._CLIENT
+    cli._CLIENT = httpx.Client(transport=httpx.MockTransport(answer), follow_redirects=False)
+    try:
+        guides_found()
+    finally:
+        cli._CLIENT = real
+
+
+def guides_found() -> None:
+    from docsearch import guides as G, pages
+    header = ("<a href='/api/stable/'>API</a> <a href='https://docs.lib.example/'>User guide</a> "
+              "<a href='https://learn.lib-tutorials.example/'>Tutorials</a> <a href='https://blog.example/'>Learn more</a>")
+    guide_sites(header)
+    said = run("add", "lib", "--no-embed")
+    m = cli.load_meta("lib@1.0")
+    got = {g["root"]: (g["dir"], g["title"], g["purpose"]) for g in m.get("guides") or []}
+    check(got == {"https://docs.lib.example/": ("guide", "User guide", "do"),
+                  "https://learn.lib-tutorials.example/": ("guide2", "Tutorials", "learn")}
+          and "blog.example" not in said and "official guide" in said,
+          f"guides the docs' header links: on their site, or linking to their repository; not another site ({got})")
+    es = {e.title: e for e in cli.iter_entries("lib@1.0")}
+    locs = [e.location for e in es.values()]
+    check(len([x for x in locs if x.endswith("#lib.join")]) == 1
+          and pages.page_file(cli.HOME / "lib@1.0" / "pages" / "guide", "user-guide/joins/").exists()
+          and pages.page_file(cli.HOME / "lib@1.0" / "pages" / "guide2", "first-steps/").exists()
+          and not any("/api/stable/" in str(u) for u in [x for x in MOCK_ASKED if "sitemap" in x]),
+          f"the guides' pages, each in its folder; the docs inside the guide's site not read again ({sorted(es)})")
+    purpose = {t: e.purpose for t, e in es.items()}
+    check(purpose.get("Getting started") == "learn" and purpose.get("Concepts") == "understand"
+          and purpose.get("Joins") == "do" and purpose.get("Your first table") == "learn" and "Contributing" not in es,
+          f"a guide's pages, organized with the docs ({purpose})")
+    lib = web.Library()
+    joins = next(i for i, e in enumerate(lib.index.entries) if e.title == "Joins")
+    entry = lib.entry(joins)
+    page = lib.page(entry["page"]["path"])
+    check(entry["version"].startswith("User guide, as of ") and entry["page"]["path"].startswith("lib@1.0/guide/")
+          and page["web"] == "https://docs.lib.example/user-guide/joins/"
+          and "page=lib%401.0%2Freference.html" in page["html"] and "page=lib%401.0%2Fguide%2Fuser-guide%2Fconcepts" in page["html"],
+          f"a guide's entry: of no version, \"as of\" the day; its links to the docs and to itself stay here ({entry['version']})")
+    parts = {g["purpose"]: [p["title"] for p in g["parts"]] for g in lib.contents({"lib@1.0"})[0]["groups"]}
+    check("User guide" in parts.get("do", []) and "Tutorials" in parts.get("learn", []),
+          f"the contents: each guide as a part, by its purpose ({parts})")
+
+    # a copy from before guides: they come with search add, its docs are not read again
+    MOCK["docs.lib.example"]["/api/stable/"] = MOCK["docs.lib.example"]["/api/stable/index.html"] = doc_page(
+        "Lib API reference", "", "<a href='/api/stable/'>API</a>")
+    run("remove", "lib", "--all")
+    run("add", "lib", "--no-embed")
+    check(not cli.load_meta("lib@1.0").get("guides"), "docs whose header links no guide: none")
+    MOCK["docs.lib.example"]["/api/stable/"] = MOCK["docs.lib.example"]["/api/stable/index.html"] = doc_page(
+        "Lib API reference", "", header)
+    MOCK_ASKED.clear()
+    said = run("add", "lib", "--no-embed")
+    roots = [g["root"] for g in cli.load_meta("lib@1.0").get("guides") or []]
+    check(len(roots) == 2 and "Joins" in {e.title for e in cli.iter_entries("lib@1.0")}
+          and not any(u.endswith("/api/stable/reference.html") for u in MOCK_ASKED),
+          f"a copy you have gets the guides its docs link, without its docs read again ({roots})")
+
+    # --guide: taken when official, refused when not
+    said = run("add", "lib", "--no-embed", "--guide", "https://blog.example/")
+    check("not taken as a guide" in said and "blog.example" not in str(cli.load_meta("lib@1.0").get("guides")),
+          f"--guide on a site that is not the package's: refused ({said[-200:]!r})")
+    MOCK["docs.lib.example"]["/api/stable/"] = MOCK["docs.lib.example"]["/api/stable/index.html"] = doc_page(
+        "Lib API reference", "", "<a href='/api/stable/'>API</a>")
+    run("remove", "lib", "--all")
+    said = run("add", "lib", "--no-embed", "--guide", "https://docs.lib.example/")
+    toml = cli.CONFIG.read_text(encoding="utf-8")
+    check([g["root"] for g in cli.load_meta("lib@1.0").get("guides") or []] == ["https://docs.lib.example/"]
+          and "[guides]" in toml and "https://docs.lib.example/" in toml and G.config_guides("lib"),
+          f"--guide on the docs' own site: taken, and kept in packages.toml ({toml!r})")
 
 
 if __name__ == "__main__":

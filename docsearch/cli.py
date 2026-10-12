@@ -967,7 +967,8 @@ def same_site(root: str, url: str) -> bool:
 INV_LINE = re.compile(r"(?x)(.+?)\s+(\S+)\s+(-?\d+)\s+?(\S*)\s+(.*)")  # Sphinx's own pattern
 
 
-NO_VERSION = {"0.0.0"}         # what mkdocstrings writes when a project sets no version (FastAPI)
+NO_VERSION = {"0.0.0", "undefined"}   # what mkdocstrings (FastAPI) and mystmd (numpy's tutorials) write
+                                      # when a project sets no version
 # a build of an untagged checkout (setuptools-scm, versioneer): 0.0.post50+g0f76baaae.d20260923
 # (fsspec's), 2.6.dev0: development docs, not a release's version
 DEV_BUILD = re.compile(r"\.dev\d*|[+-]g[0-9a-f]{6,}|\.d20\d{6}")
@@ -1118,7 +1119,8 @@ def sphinx_page(name: str, root: str, page: str, html: bytes, real_url: str,
                 items: list[tuple[dict, str]], pages_dir: Path, store_root: str) -> tuple[list[Entry], dict[str, str]]:
     """Cut one downloaded page into its entries and store its offline copy. Runs in a
     worker process. Returns the entries and the images the page shows."""
-    sid = pages_dir.parent.name                          # numpy, or numpy@1.26
+    sid = (pages_dir if pages_dir.name == "pages" else pages_dir.parent).parent.name   # numpy, numpy@1.26
+    # (a guide's pages: pages/guide/)
     root_host = urllib.parse.urlparse(root).netloc
     images: dict[str, str] = {}
 
@@ -2931,10 +2933,12 @@ def build_known(name: str, sid: str, plan: dict, workers: int, max_pages: int | 
     for k, part in enumerate(parts):
         kind = part["kind"]
         folder = importers.part_dir(sid, k) if resumable else None
+        guide = part.get("guide")                    # an official guide: its pages in pages/guide/
+        into = importers.Store(sid, guide["root"], guide["dir"]) if guide else store
         if kind == "sphinx":
-            found, extra = build_sphinx(name, part["url"], None, workers, max_pages, store=store, folder=folder)
+            found, extra = build_sphinx(name, part["url"], None, workers, max_pages, store=into, folder=folder)
         elif kind == "website":
-            found, extra = importers.build_website(name, sid, part, store, workers, max_pages, folder)
+            found, extra = importers.build_website(name, sid, part, into, workers, max_pages, folder)
         elif kind == "rustdoc":
             found, extra = importers.build_rustdoc(name, sid, part, store, workers, max_pages, folder)
         elif kind == "readme":
@@ -2942,7 +2946,12 @@ def build_known(name: str, sid: str, plan: dict, workers: int, max_pages: int | 
         else:
             die(f"unknown kind of docs: {kind}")
         entries += found
-        say(f"  {kind}: {len(found)} entries")
+        say(f"  {guide['title'] if guide else kind}: {len(found)} entries")
+        if guide:
+            from docsearch import guides
+            store.add_images(into.images)            # (stored with the docs' images)
+            guides.record(meta, part, len({e.location.split("#")[0] for e in found}))
+            extra = {k_: v for k_, v in extra.items() if k_ != "version"}    # (a guide has no version)
         meta["failed_pages"] = meta.get("failed_pages", 0) + extra.get("failed_pages", 0)
         meta["unread"] = meta.get("unread", []) + extra.get("unread", [])    # (pages about the project)
         for key, v in (extra.get("failures") or {}).items():         # the causes, over all parts
@@ -3050,7 +3059,9 @@ def web_docs(name: str, spec: str, want: str, override: str, args, check_copy: b
             source = {**source, "older": have}
     if check_copy and have_copy(spec, name, want, have, args):
         return None
-    return {**docs_plan(kind, root, inv), **{k: v for k, v in source.items() if v}}   # (repo, about)
+    from docsearch import guides                     # (their official guides: more parts of them)
+    return guides.plan_with({**docs_plan(kind, root, inv), **{k: v for k, v in source.items() if v}},   # (repo,
+                            name, args, newest=not want)                                         # about)
 
 
 DEV_SEGMENTS = {"main", "master", "trunk", "dev", "devdocs", "develop", "nightly"}
@@ -3135,6 +3146,8 @@ def add_each(args, outer: str) -> None:
             if copy_label(old, want) and not old.get("partial") and not getattr(args, "force", False):
                 say(f"  {sid}: you have this version already; nothing to download")
                 complete_sources(sid, args.workers)
+                from docsearch import guides
+                guides.add_to_copy(sid, args)            # (its official guides, if it has none yet)
                 if getattr(args, "record", True):
                     remember(spec)
                 continue                                 # (one copy per version; --force: again)
@@ -3924,6 +3937,8 @@ def have_copy(spec: str, name: str, want: str, version: str, args) -> str | None
         return None
     say(f"  {sid}: you have this version already; nothing to download")
     complete_sources(sid, args.workers)
+    from docsearch import guides
+    guides.add_to_copy(sid, args)                    # (its official guides, if it has none yet)
     if getattr(args, "record", True):
         remember(spec)
     copy_hint(sid.split("@")[0], sid)
@@ -3942,10 +3957,14 @@ def keep_copy(sid: str, want: str, replace: bool = False) -> str:
     if target == sid:
         return sid
     if (HOME / target / "meta.json").exists():
-        if not replace:
+        had = {g["root"] for g in load_meta(target).get("guides") or []}
+        if not replace and {g["root"] for g in meta.get("guides") or []} <= had:
             shutil.rmtree(HOME / sid)
             say(f"  {target}: you have this version already; the copy you had stays")
             return target
+        if not replace:                              # (the same docs, and their official guides too)
+            say(f"  {target}: you have this version; this download has its official guides too, so it "
+                f"takes the place of the copy you had")
         shutil.rmtree(HOME / target)
     move_folder(HOME / sid, HOME / target)
     say(f"  kept as {target}")
@@ -4656,6 +4675,9 @@ def main(argv: list[str] | None = None) -> None:
     a.add_argument("--yes", action="store_true", help="take docs that cannot be checked against their source code")
     a.add_argument("--accept-partial", action="store_true",
                    help="replace docs you have even if the new download looks incomplete")
+    a.add_argument("--guide", action="append", metavar="URL",
+                   help="an official guide of the package to read with its docs (on its docs' site, or "
+                        "linking to its repository)")
     a.set_defaults(func=cmd_add)
     y = sub.add_parser("sync", help=f"index what {CONFIG} lists (creates the file the first time)")
     y.add_argument("--force", action="store_true", help="download again even if up to date")

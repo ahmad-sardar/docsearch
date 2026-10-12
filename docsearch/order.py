@@ -47,6 +47,31 @@ def rel_of(url: str, root: str) -> str | None:
     return url[len(root):].strip("/") or "index.html"
 
 
+def roots(meta: dict) -> list[tuple[str, str]]:
+    """(address, folder of its pages) of each part of a copy with an address of its own: the
+    docs' (pages/), then each official guide's (pages/guide/: meta["guides"]), the longest
+    address first (a guide's may hold the docs': docs.pola.rs/ and docs.pola.rs/api/...)."""
+    out = [(str(meta.get("root") or ""), "")] + [(g["root"], g["dir"] + "/") for g in meta.get("guides") or []]
+    return sorted((r for r in out if r[0]), key=lambda r: -len(r[0]))
+
+
+def rel_in(url: str, meta: dict) -> str | None:
+    """A page's place among a copy's stored pages: reference/index.html; guide/user-guide/x."""
+    for root, folder in roots(meta):
+        rel = rel_of(url, root)
+        if rel is not None:
+            return folder + rel
+    return None
+
+
+def url_in(rel: str, meta: dict) -> str:
+    """The address of a stored page (rel_in, the other way)."""
+    for root, folder in roots(meta):
+        if folder and rel.startswith(folder):
+            return root + rel[len(folder):]
+    return str(meta.get("root") or "") + rel
+
+
 def stored_pages(pages_dir: Path) -> list[str]:
     if not pages_dir.exists():
         return []
@@ -103,14 +128,13 @@ def start_urls(meta: dict) -> list[str]:
     for part in ((plan.get("parts") or [plan]) if plan else []):
         starts = part.get("start") or part.get("url") or part.get("prefix") or part.get("root") or []
         out += [starts] if isinstance(starts, str) else list(starts)
-    return [u for u in out if u.startswith(root)]
+    return [u for u in out if u.startswith(root)] + [g["root"] for g in meta.get("guides") or []]
 
 
 def seeds(meta: dict) -> list[str]:
     """The docs' own starting points, in order: sidebar, contents pages, starts."""
-    root = meta.get("root", "")
     out = ["contents.html"] + list(meta.get("nav") or []) + ["index.html"] + start_urls(meta)
-    return [r for r in (s if not s.startswith("http") else rel_of(s, root) for s in out) if r]
+    return [r for r in (s if not s.startswith("http") else rel_in(s, meta) for s in out) if r]
 
 
 NAV = ("nav, aside, [role=navigation], .sidebar, .bd-sidebar, #sidebar, .sphinxsidebar, .wy-menu, "
@@ -130,7 +154,7 @@ def fetch_nav(meta: dict) -> list[str]:
         for part in (soup.select(selector) if selector else [soup]):
             for a in part.find_all("a", href=True):
                 u = urllib.parse.urljoin(base, a["href"]).split("#")[0]
-                if u.startswith(root) and u not in out:
+                if rel_in(u, meta) is not None and u not in out:
                     out.append(u)
     for start in start_urls(meta):
         try:
@@ -159,7 +183,6 @@ class Contents(NamedTuple):
 def page_order(sid: str, meta: dict) -> Contents:
     """The docs' contents, as their pages list each other (see above)."""
     pages_dir = cli.HOME / sid / "pages"
-    root = meta.get("root", "")
     stored = set(stored_pages(pages_dir))
     found: dict[str, dict[str, int]] = {}
     title: dict[str, str] = {}
@@ -185,7 +208,7 @@ def page_order(sid: str, meta: dict) -> Contents:
     def links(rel: str, hrefs: list[str], only_below: bool) -> list[str]:
         out = []
         for h in hrefs:
-            c = find(rel_of(urllib.parse.urljoin(root + rel, h), root))
+            c = find(rel_in(urllib.parse.urljoin(url_in(rel, meta), h), meta))
             if c and c not in out and c != rel and (not only_below or below(rel, c)):
                 out.append(c)
         return out
@@ -231,13 +254,19 @@ def reading_order(sid: str, count: int | None = None) -> np.ndarray:
     locations = [e.location for e in cli.iter_entries(sid, keep=1)]     # (their addresses only)
     order, anchors, _, _ = page_order(sid, meta)
     rank = {rel: k for k, rel in enumerate(order)}
-    root = meta.get("root", "")
-    others = sorted({r for loc in locations if (r := rel_of(loc, root) or loc) not in rank}, key=natural)
+
+    def page(loc: str) -> str:
+        """The stored page of an address (user-guide/concepts/ -> .../index.html)."""
+        rel = rel_in(loc, meta)
+        if rel is None:
+            return loc
+        return next((c for c in (rel, rel + "/index.html", rel + ".html") if c in rank), rel)
+    others = sorted({r for loc in locations if (r := page(loc)) not in rank}, key=natural)
     rank.update({r: len(order) + k for k, r in enumerate(others)})
 
     def key(i: int):
         loc = locations[i]
-        rel = rel_of(loc, root) or loc
+        rel = page(loc)
         anchor = urllib.parse.unquote(loc.partition("#")[2])
         where = anchors.get(rel, {})
         pos = -1 if not anchor else where.get(anchor, where.get(loc.partition("#")[2], 1 << 30))

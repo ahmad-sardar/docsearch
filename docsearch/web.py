@@ -88,8 +88,12 @@ class Library:
         self._covers: dict[str, dict] = {}          # copy -> what it describes
         self._marks: dict[int, dict] = {}           # entry -> its version marks
         self.load(sorted(self.default | (set(extra) & set(sids))))
-        self.sites = {s: (m["root"], cli.HOME / s / "pages") for s, m in self.meta.items()
-                      if str(m.get("root", "")).startswith("http")}
+        self.sites: dict[str, tuple[str, Path]] = {}     # where each copy's pages are (a guide's: sid/guide)
+        for s, m in self.meta.items():
+            if str(m.get("root", "")).startswith("http"):
+                self.sites[s] = (m["root"], cli.HOME / s / "pages")
+                for g in m.get("guides") or []:
+                    self.sites[f"{s}/{g['dir']}"] = (g["root"], cli.HOME / s / "pages" / g["dir"])
         self.image_types: dict[str, dict[str, str]] = {}
         self.pygments = pygments_css()
         self.index.search("warm up")                 # load caches before the first request
@@ -269,23 +273,41 @@ class Library:
         is_api = e.kind not in cli.PAGE_KINDS
         name = cli.api_name(e.title) if is_api else e.title
         html_text, page, code = None, None, None
-        site = self.sites.get(sid)
-        if site and e.location.startswith(site[0]):
+        key, site = self.site_of(sid, e.location)
+        if site:
             rel, _, anchor = e.location[len(site[0]):].partition("#")
             rel = rel or "index.html"
             stored = self.as_standard(sid, offline.load_page(site[1], rel))
             if stored is not None:
                 html_text = fragment(stored, anchor, e.kind)
-                page = {"path": f"{sid}/{rel}", "at": anchor}
+                page = {"path": f"{key}/{rel}", "at": anchor}
                 code = self.code_of(sid, html_text, is_api)
         if html_text is None:                        # no offline page: draw the indexed text
             base = e.location if cli.safe_url(e.location) else "https://invalid.invalid/"
             html_text = offline.sanitize(MD.render(self.full_text(i)), base)
         return {"id": i, "name": name, "kind": e.kind, "source": sid, "api": is_api,
-                "version": self.label(sid), "code": code, "repo": self.repo(sid), **self.versioned(i, sid, project),
+                "version": self.guide_label(sid, key) or self.label(sid), "code": code, "repo": self.repo(sid), **self.versioned(i, sid, project),
                 "html": offline.localize_links(html_text, self.sites, sid), "page": page,
                 "web": e.location if cli.safe_url(e.location) else None,
                 "import": import_line(name, e.kind) if is_api else None}
+
+    def site_of(self, sid: str, location: str) -> tuple[str, tuple[str, Path] | None]:
+        """Which of a copy's sites an address is in: its docs' (key sid), or one of its guides'
+        (sid/guide), the longest address first; (sid, None) if none."""
+        keys = [k for k in self.sites if k == sid or k.startswith(sid + "/")]
+        for k in sorted(keys, key=lambda k: -len(self.sites[k][0])):
+            if location.startswith(self.sites[k][0]):
+                return k, self.sites[k]
+        return sid, None
+
+    def guide_label(self, sid: str, key: str) -> str:
+        """A guide's entries are of no version: "guide, as of 2026-10-12" (guides.py)."""
+        if key == sid:
+            return ""
+        g = next((g for g in self.meta[sid].get("guides") or [] if f"{sid}/{g['dir']}" == key), None)
+        if g is None:
+            return ""
+        return f"{g['title']}, as of {g['asof']}" if g.get("asof") else g["title"]
 
     def as_standard(self, sid: str, html: str | None) -> str | None:
         """A stored page as a copy of one standard shows it (cpp@17: C++17's rows only)."""
@@ -360,9 +382,11 @@ class Library:
         if stored is None:
             return None
         title = BeautifulSoup(stored, "lxml").find("h1")
-        return {"path": path, "source": sid, "version": self.label(sid),
+        key = f"{sid}/{rel.split('/')[0]}"                       # (a guide's page: sid/guide/...)
+        web = self.sites[key][0] + rel.split("/", 1)[1] if key in self.sites and "/" in rel else site[0] + rel
+        return {"path": path, "source": sid, "version": self.guide_label(sid, key) or self.label(sid),
                 "title": title.get_text(" ", strip=True) if title else rel,
-                "html": offline.localize_links(stored, self.sites, sid), "web": site[0] + rel}
+                "html": offline.localize_links(stored, self.sites, sid), "web": web}
 
 
 def project_of(text: str) -> dict[str, str]:

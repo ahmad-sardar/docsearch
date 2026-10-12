@@ -507,13 +507,17 @@ async function showContents(box) {
           det.open = part.pages.length <= 12;
           const sum = el("summary");
           sum.append(pageLink(part.title, part.path), el("span", "count", ` ${part.pages.length + part.more}`));
+          if (part.note) sum.append(el("span", "count", ` · ${part.note}`));
           det.append(sum);
           const sub = el("ul");
           for (const pg of part.pages) { const x = el("li"); x.append(pageLink(pg.title, pg.path)); sub.append(x); }
           if (part.more) sub.append(el("li", "count", `and ${part.more} more`));
           det.append(sub);
           li.append(det);
-        } else li.append(pageLink(part.title, part.path));
+        } else {
+          li.append(pageLink(part.title, part.path));
+          if (part.note) li.append(el("span", "count", ` · ${part.note}`));
+        }
         ul.append(li);
       }
       col.append(ul);

@@ -141,6 +141,24 @@ that already holds them are folded into it: cppreference's "parameters", "return
 repeats its page's title, numpy.sum's page next to numpy.sum. docs you added before are
 organized once, the next time you run `search`, with nothing downloaded.
 
+### official guides, with their docs
+
+some packages keep their guide apart from their reference: polars' api reference links its
+user guide on docs.pola.rs, numpy's docs link their tutorials ("learn") on numpy.org. when a
+package's docs link such a guide in their own header, docsearch reads it with them, as part of
+the same copy, organized the same way (polars' "getting started" is learn, its "concepts"
+understand). only official ones: on the docs' own site, or a site that links to the package's
+repository. a guide has no versions, so it says the day it was read ("user guide, as of
+2026-10-12"), and it comes only with the docs of the newest release.
+
+```bash
+search add polars                                  # its user guide comes with it
+search add mylib --guide https://mylib.dev/guide/  # one its docs don't link (kept in packages.toml)
+```
+
+docs you added before guides: `search add polars` (or `search sync`) adds their guides,
+without downloading the docs again.
+
 ### search tricks
 
 - `"drop_duplicates"` in quotes: exact match only

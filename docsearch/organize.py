@@ -53,7 +53,7 @@ LABELS = [
                    r"explanations?|background|overview|architecture|philosophy|what is .*"),
 ]
 PARTS = [
-    ("removed", r"changes|history|news|development|developers?|governance( .*)?|roadmap|"
+    ("removed", r"changes|history|news|development|developers?|(.* )?developer'?s? guide|governance( .*)?|roadmap|"
                 r"building( .*)? from source|build(ing)? from source( .*)?"),
     ("learn", r"(.* )?tutorials?( .*)?|(.* )?quick ?start( guide)?|(.* )?for (absolute )?beginners|"
               r"(.* )?tour( of .*)?|learn( .*)?"),
@@ -144,10 +144,10 @@ def names_of(meta: dict) -> set[str]:
     return {n for n in out if n}
 
 
-def page_of(location: str, root: str, stored: set[str]) -> str | None:
-    """The stored page an entry is on (as order.page_order names it)."""
+def page_of(location: str, meta: dict, stored: set[str]) -> str | None:
+    """The stored page an entry is on (as order.page_order names it; a guide's under guide/)."""
     from docsearch import order
-    rel = order.rel_of(location, root)
+    rel = order.rel_in(location, meta)
     if rel is None:
         return None
     for c in (rel, rel + "/index.html", rel + ".html"):
@@ -177,14 +177,20 @@ def classify(sid: str, meta: dict, entries: list[cli.Entry]) -> Pages:
     for e in entries:
         if "#" in e.location:
             continue
-        rel = page_of(e.location, root, stored)
+        rel = page_of(e.location, meta, stored)
         if rel and e.kind not in cli.PAGE_KINDS and e.kind not in ("tutorial", "module"):
             named.add(rel)
         elif rel and not title.get(rel):         # (a page whose heading is outside what is kept)
             title[rel] = re.sub(r" \(page\)$", "", e.title)
-    pages = set(title) | {p for e in entries if (p := page_of(e.location, root, stored))}
+    pages = set(title) | {p for e in entries if (p := page_of(e.location, meta, stored))}
+    guides = {g["dir"] + "/": g for g in meta.get("guides") or []}
+    for folder, g in guides.items():             # a guide's first page: named as its link names it
+        first = page_of(g["root"], meta, stored)   # (one its index does not list stands for it:
+        if first:                                  # numpy's tutorials have no first page)
+            pages.add(first)
+            title[first] = g["title"]
     lists = {u for u in contents.parent.values() if u is not None}
-    unread = {p for u in meta.get("unread") or [] if (p := page_of(u, root, stored))}   # (not downloaded:
+    unread = {p for u in meta.get("unread") or [] if (p := page_of(u, meta, stored))}   # (not downloaded:
     unread -= pages                                                   # about the project, organize.unread)
 
     def above(rel: str) -> str | None:
@@ -211,15 +217,20 @@ def classify(sid: str, meta: dict, entries: list[cli.Entry]) -> Pages:
             seen.add(cur)
             said.append(cur)
             cur = up.get(cur)
-        if any(label.get(r) == "removed" for r in said):
-            purpose[rel], anchor[rel] = "removed", None
-            continue
+        guide = next((g for f, g in guides.items() if rel.startswith(f)), None)
+        own = rel[len(guide["dir"]) + 1:] if guide else rel          # (its address in its part)
+        if any(label.get(r) == "removed" for r in said) or (
+                (guide or contents.parent.get(rel) is None) and FOLDERS["removed"] & set(own.lower().split("/")[:-1])):
+            purpose[rel], anchor[rel] = "removed", None   # (a guide's page, or one no contents list: its
+            continue                                      # folder says, as development/ in polars' guide)
         at = next((r for r in said if label.get(r)), None)
+        first = own.split("/")[0] if "/" in own else ""
         if at is not None:
             purpose[rel], anchor[rel] = label[at], at
+        elif guide is not None:                  # a guide's page: the guide's purpose
+            purpose[rel], anchor[rel] = guide["purpose"], page_of(guide["root"], meta, stored)
         else:                                    # named by its folder: the part is the folder's
-            first = rel.split("/")[0] if "/" in rel else ""          # first page (extending/index.html)
-            purpose[rel] = FOLDER_OF.get(first.lower()) or "lookup"
+            purpose[rel] = FOLDER_OF.get(first.lower()) or "lookup"   # first page (extending/index.html)
             anchor[rel] = next((r for r in reversed(said) if r.startswith(first + "/")), None) \
                 if first.lower() in FOLDER_OF else None
     rest = sorted(pages - stored, key=order.natural)
@@ -246,12 +257,14 @@ def contents(sid: str) -> list[dict]:
     meta = cli.load_meta(sid)
     entries = list(cli.iter_entries(sid, keep=1))
     pages = classify(sid, meta, entries)
-    root = meta.get("root", "")
     stored = set(pages.order)
     count: dict[str, int] = {}
+    prose: set[str] = set()                          # pages with more than API objects on them
     for e in entries:
-        rel = page_of(e.location, root, stored) or e.location
+        rel = page_of(e.location, meta, stored) or e.location
         count[rel] = count.get(rel, 0) + 1
+        if e.kind in cli.PAGE_KINDS:
+            prose.add(rel)
 
     def head_of(rel: str) -> str | None:
         """The topmost page above `rel` that gives its purpose (the part it is in)."""
@@ -274,21 +287,28 @@ def contents(sid: str) -> list[dict]:
         if h == rel:
             heads[p].append(rel)
         under[h] = under.get(h, 0) + count.get(rel, 0)
-    kids: dict[str, list[str]] = {}                  # a page's contents; by address, only the
-    sections = {u for u in pages.up.values() if u}   # pages that have pages under them too
+    kids: dict[str, list[str]] = {}                  # a page's contents; by address, the pages that
+    sections = {u for u in pages.up.values() if u}   # have pages under them, or prose (not numpy.sum's)
     for rel in pages.order:
         up = pages.up.get(rel)
         if up is not None and pages.purpose.get(rel) == pages.purpose.get(up) and head_of(rel) != rel \
-                and (pages.parent.get(rel) == up or rel in sections):
+                and (pages.parent.get(rel) == up or rel in sections or rel in prose):
             kids.setdefault(up, []).append(rel)
+    pages_dir = d / "pages"
 
     def item(rel: str) -> dict:
-        return {"title": pages.title.get(rel) or rel, "path": f"{sid}/{rel}"}
+        """A page to open; for one that stands for a guide with no first page, its first page."""
+        at = rel if offline.page_file(pages_dir, rel) is None or offline.page_file(pages_dir, rel).exists() \
+            else next(iter(kids.get(rel, [])), rel)
+        return {"title": pages.title.get(rel) or rel, "path": f"{sid}/{at}"}
     out = []
     for p in PURPOSES:
         parts: dict[str, dict] = {}                  # (two pages of one title: one part)
+        firsts = {page_of(g["root"], meta, stored): g for g in meta.get("guides") or []}
         for h in heads[p]:
-            part = parts.setdefault(item(h)["title"], item(h) | {"entries": 0, "pages": [], "more": 0})
+            g = firsts.get(h)                        # (a guide: of no version, read on a day)
+            part = parts.setdefault(item(h)["title"], item(h) | {"entries": 0, "pages": [], "more": 0}
+                                    | ({"note": f"official guide, as of {g.get('asof', '')}"} if g else {}))
             part["entries"] += under.get(h, 0)
             part["pages"] += [item(k) for k in kids.get(h, [])]
         for part in parts.values():
@@ -325,12 +345,11 @@ def organize(sid: str, entries: list[cli.Entry], meta: dict) -> tuple[list[cli.E
             e.purpose = said if said in PURPOSES else "lookup" if meta.get("kind") == "man" else "learn"
         meta["organized"] = VERSION
         return entries, list(range(len(entries)))
-    root = meta.get("root", "")
     purposes = page_purposes(sid, meta, entries)
     stored_pages = set(purposes)
     by_page: dict[str, list[int]] = {}
     for i, e in enumerate(entries):
-        by_page.setdefault(page_of(e.location, root, stored_pages) or e.location, []).append(i)
+        by_page.setdefault(page_of(e.location, meta, stored_pages) or e.location, []).append(i)
     drop: set[int] = set()
     removed_pages: set[str] = set()
     folded = 0
@@ -365,9 +384,11 @@ def organize(sid: str, entries: list[cli.Entry], meta: dict) -> tuple[list[cli.E
         if f is not None:
             f.unlink(missing_ok=True)
     keep = [i for i in range(len(entries)) if i not in drop]
+    before = meta.get("left_out") or {} if meta.get("organized") else {}    # (organized again: a guide added)
+    now = {"pages": len(removed_pages) + (0 if before else len(meta.get("unread") or [])),
+           "entries": len(drop) - folded, "folded": folded}
     meta["organized"] = VERSION
-    meta["left_out"] = {"pages": len(removed_pages) + len(meta.get("unread") or []), "entries": len(drop) - folded,
-                        "folded": folded}
+    meta["left_out"] = {k: before.get(k, 0) + v for k, v in now.items()}
     return [entries[i] for i in keep], keep
 
 

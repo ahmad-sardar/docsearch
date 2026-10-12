@@ -208,6 +208,9 @@ class Library:
         guides, how-tos): cli.MODES. With no query, the docs organized (how: what it covers)."""
         q = q.strip()
         mode = mode if mode in cli.MODES else "what"
+        m = re.match(r"how\s+(?=\S)", q, re.I)          # "how merge two tables": how, as search how
+        if m:
+            q, mode = q[m.end():], "how"
         srcs = srcs or self.default                  # never two versions of one package at once
         with self.lock:
             self.ensure(srcs)
@@ -237,6 +240,9 @@ class Library:
             with self.lock:
                 hits = index.search(q, limit=3000 if srcs else cli.SHOW, mode=mode)
             ids = [i for i, _, _ in hits if not srcs or sid_of[i] in srcs][:cli.SHOW]
+        if mode == "how" and q and not ids:          # no tutorial, guide or example matches: the
+            out = self.search(q, srcs, offset, limit, ai, project, "what")      # reference, said so
+            return {**out, "fallback": "how"}
         state = None
         if ai and plain_q:                           # the model reorders the top results
             from docsearch import rerank

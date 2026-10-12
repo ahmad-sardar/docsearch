@@ -184,16 +184,34 @@ def main() -> None:
           and how and {it["purpose"] for it in how} <= {"learn", "do"} and how[0]["name"] == "Sorting by key (section)"
           and {it["purpose"] for it in empty_how} == {"learn", "do"},
           f"plain search: the reference (names first); how: the tutorials and guides ({what[:2]}, {how[:2]})")
+    typed = lib.search("how sorting by key", {"mini"}, 0, 20)
+    check(typed["mode"] == "how" and typed["q"] == "sorting by key" and typed["items"]
+          and typed["items"][0]["name"] == "Sorting by key (section)",
+          f"\"how\" first in the page's search box: how, as search how ({typed['q']!r}, {typed['mode']})")
+    cli.save("refonly", [cli.Entry("refonly.join (function)", "function", "https://ref.example/join.html#refonly.join",
+                                   "Joins two tables.", "refonly", "lookup")],
+             {"name": "refonly", "spec": "refonly", "kind": "sphinx", "root": "https://ref.example/", "count": 1,
+              "organized": organize.VERSION, "created": "2026-10-12 10:00", "model": None})
+    with contextlib.redirect_stderr(io.StringIO()):
+        cli.make_search_caches("refonly")
+    none = web.Library().search("how join two tables", {"refonly"}, 0, 20)
+    run("remove", "refonly")
+    check(none["mode"] == "what" and none.get("fallback") == "how" and none["items"]
+          and none["items"][0]["name"] == "refonly.join",
+          f"how, where no tutorial, guide or example matches: the reference, said so ({none['items'][:1]})")
     opened = []
     real_open, web.open_browser = web.open_browser, opened.append
     try:
         run("how", "mini", "sort", "by", "key")
         run("mini", "sum")
+        run("ai", "how", "mini", "sort", "by", "key")
     finally:
         web.open_browser = real_open
     check(opened[0]["mode"] == "how" and opened[0]["q"] == "sort by key" and opened[0]["src"] == "mini"
-          and opened[1]["mode"] == "what",
-          f"search how IDEA: the page searches the guides; plain search, the reference ({opened})")
+          and opened[1]["mode"] == "what"
+          and (opened[2]["mode"], opened[2]["q"], opened[2]["src"]) == ("how", "sort by key", "mini"),
+          f"search how IDEA: the page searches the guides; plain search, the reference; search ai how IDEA: "
+          f"the guides, ranked with AI ({opened})")
     ex = lib.search("sums rows mini.sum examples", {"mini"}, 0, 20, mode="how")["items"]
     ex = next((it for it in ex if it["kind"] == "example"), None)
     shown = lib.entry(ex["id"]) if ex else {}

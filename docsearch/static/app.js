@@ -162,11 +162,14 @@ async function search({ openFirst = true, append = false, ai = false } = {}) {
   if (append) state.items.push(...data.items);
   else { state.items = data.items; state.sel = -1; $("#results").textContent = ""; $(".results-pane").scrollTop = 0; }
   state.total = data.total;
+  state.shown = data.q;                      // ("how merge": "merge", in how mode: as search how)
   renderResults(append ? data.items : state.items, append ? state.items.length - data.items.length : 0);
   const where = state.srcs.size ? searchedSources().join(", ") : "all packages";
   const fixed = data.corrected ? ` · also searched “${data.corrected}”` : "";
-  const kind = state.how ? " · how: tutorials, guides, how-tos" : "";
-  status(state.q ? `${data.total} results for “${state.q}”${fixed} · ${where}${kind}${data.ai === "ranked" ? " · ranked with AI" : ""}`
+  $("#how").setAttribute("aria-pressed", data.mode === "how" ? "true" : "false");
+  const kind = data.mode === "how" ? " · how: tutorials, guides, how-tos"
+             : data.fallback ? " · no tutorial, guide or example matches: the reference" : "";
+  status(state.q ? `${data.total} results for “${data.q}”${fixed} · ${where}${kind}${data.ai === "ranked" ? " · ranked with AI" : ""}`
                  : `${data.total} entries · ${where}, in reading order${kind}`);
   if (data.error) status(data.error);
   if (data.ai === "not installed") {
@@ -266,7 +269,7 @@ function completeMark(it, long = false) {
 // The parts of a name that match the query words, underlined.
 function marked(text, cls) {
   const span = el("span", cls);
-  const words = state.q.toLowerCase().split(/[^a-z0-9_]+/).filter((w) => w.length > 1);
+  const words = (state.shown ?? state.q).toLowerCase().split(/[^a-z0-9_]+/).filter((w) => w.length > 1);
   const low = text.toLowerCase();
   const on = new Array(text.length).fill(false);
   for (const w of words) for (let i = low.indexOf(w); i >= 0; i = low.indexOf(w, i + 1)) on.fill(true, i, i + w.length);
@@ -496,7 +499,8 @@ function showHome() {
   const t = el("table");
   const rows = [["np.sum, svd, nn.Linear", "an API name (aliases like np, pd work)"], ["lnsvd", "letters in order: numpy.linalg.svd"],
                 ["sum of elements along an axis", "a description: search by meaning"],
-                ["How (or search how …)", "how to do it: tutorials, guides, how-tos instead of the reference"],
+                ["how merge two tables", "how first (or the How button, or search how …): tutorials, guides, "
+                                         + "how-tos instead of the reference"],
                 ["↑ ↓", "move through the results"],
                 ["Enter", "the full page (offline copy)"], ["Esc", "back, then clear the search"],
                 ["/", "jump to the search box"], ["w", "wrap or scroll long code lines"],

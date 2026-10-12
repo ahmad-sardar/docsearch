@@ -4767,8 +4767,9 @@ def main(argv: list[str] | None = None) -> None:
     if not argv:                                   # just "search": open the search page
         quick_search([])
         return
-    if argv[0] == "ai":                            # search ai IDEA (any words, even "-O3")
-        quick_search(list(argv[1:]), ai=True)
+    if argv[0] == "ai":                            # search ai IDEA (any words, even "-O3"); search ai how
+        how = argv[1:2] == ["how"]                 # IDEA: the guides, ranked with AI
+        quick_search(list(argv[2:] if how else argv[1:]), ai=True, how=how)
         return
     if argv[0] == "how":                           # search how IDEA: tutorials, guides, how-tos
         quick_search(list(argv[1:]), how=True)

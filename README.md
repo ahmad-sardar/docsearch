@@ -140,7 +140,8 @@ two searches, for two questions:
 - **plain `search`: what** something is. the reference and the explanations (look up,
   understand): `search np.sum`, `search broadcasting`. names come first, as always.
 - **`search how`: how** to do something. the tutorials, guides and how-tos (learn, do):
-  `search how read a json file`. in the page, the **How** button switches.
+  `search how read a json file`. in the page, the **How** button switches, or start what you
+  type with "how". with ai: `search ai how pandas pivot a table`.
 
 examples are units of their own in `search how`: a function's "examples" part, with the text
 around it, stays linked to the function (enter opens its page), and cppreference's example

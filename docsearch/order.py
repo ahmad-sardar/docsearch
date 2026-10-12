@@ -75,8 +75,8 @@ def url_in(rel: str, meta: dict) -> str:
 def stored_pages(pages_dir: Path) -> list[str]:
     if not pages_dir.exists():
         return []
-    return [str(f.relative_to(pages_dir))[:-3] for f in pages_dir.rglob("*.gz")
-            if "_images" not in f.relative_to(pages_dir).parts]
+    return [f.relative_to(pages_dir).as_posix()[:-3] for f in pages_dir.rglob("*.gz")     # (Windows:
+            if "_images" not in f.relative_to(pages_dir).parts]                         # / too, not \\)
 
 
 def below(parent: str, child: str) -> bool:

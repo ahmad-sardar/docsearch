@@ -2489,7 +2489,11 @@ class Postings:
             yield t, self[t]
 
 
-PAGE_KINDS = {"doc", "label", "page", "section", "man", "help", "usage", "term"}   # prose, not API
+PAGE_KINDS = {"doc", "label", "page", "section", "man", "help", "usage", "term", "example"}   # prose, not API
+# What each kind of search covers (organize.py): plain search, what a name or an idea is (the
+# reference, explanations); search how, how to do something (tutorials, guides, how-tos).
+# Docs from before they were organized (no purpose) are in both.
+MODES = {"what": {"lookup", "understand", ""}, "how": {"learn", "do", ""}}
 ALIASES = {"np": "numpy", "pd": "pandas", "plt": "matplotlib.pyplot", "sp": "scipy", "tf": "tensorflow",
            "nn": "torch.nn", "F": "torch.nn.functional", "sk": "sklearn"}
 
@@ -2568,6 +2572,8 @@ class Index:
         self.cut: set[int] = set()           # entries whose text is shortened in memory
         self.tails: list = []                # per source: (first entry, offsets, the rest on disk)
         self.pool = cf.ThreadPoolExecutor(max_workers=1)    # the spelling ranker, see search()
+        self.allowed = None                  # during a search: the entries its kind covers (MODES)
+        self.masks: dict = {}
         vecs, firsts, lens = [], [], []
         self.spans: list[tuple[int, str]] = []    # (first entry, folder): whose entries are whose
         self.post = Postings()               # one keyword index over the chosen sources
@@ -2687,6 +2693,8 @@ class Index:
         if not ids:
             return []
         shared = np.bincount(np.concatenate([self.gram_posts[k] for k in ids]), minlength=len(self.titles_proc))
+        if self.allowed is not None:
+            shared[~self.allowed] = 0                # (another kind of search's entries)
         cand = np.argpartition(-shared, min(TRIGRAM_KEEP, len(shared) - 1))[:TRIGRAM_KEEP]
         cand = np.sort(cand[shared[cand] > 0])
         s = process.cdist([self.titles_proc[i] for i in cand], [q], scorer=fuzz.WRatio, processor=None,
@@ -2700,7 +2708,8 @@ class Index:
             return []
         # q0 [^q1]* q1 [^q2]* q2 ... : each gap stops at the next wanted letter (no backtracking blow-up)
         pat = re.compile(re.escape(qs[0]) + "".join(f"[^{re.escape(c)}]*{re.escape(c)}" for c in qs[1:]))
-        hits = [i for i, e in enumerate(self.entries) if pat.search(e.title.lower())]
+        hits = [i for i, e in enumerate(self.entries) if pat.search(e.title.lower())
+                and (self.allowed is None or self.allowed[i])]
         if len(hits) > 5000:  # short queries match almost everything: score the shortest titles
             hits = sorted(hits, key=lambda i: len(self.entries[i].title))[:5000]
         scored = sorted(((subsequence_score(qs, self.entries[i].title), i) for i in hits), reverse=True)
@@ -2720,6 +2729,8 @@ class Index:
             idf = math.log((n - len(ids) + 0.5) / (len(ids) + 0.5) + 1.0)   # rare words weigh more
             norm = BM25_K1 * (1 - BM25_B + BM25_B * self.dl[ids] / self.avgdl)  # long entries weigh less
             scores[ids] += idf * tf * (BM25_K1 + 1) / (tf + norm)            # repeats saturate
+        if self.allowed is not None:
+            scores[~self.allowed] = 0
         hit = np.flatnonzero(scores)
         return hit[np.argsort(-scores[hit])][:CANDIDATES].tolist()
 
@@ -2730,6 +2741,8 @@ class Index:
             sims = self.emb @ self.model.encode([q])[0]     # cosine similarity (unit vectors)
             if self.no_vectors is not None:
                 sims[self.no_vectors] = -2.0                # below any similarity: never by meaning
+            if self.allowed is not None:
+                sims[~self.allowed] = -2.0
             k = min(CANDIDATES, len(sims))
             top = np.argpartition(-sims, k - 1)[:k]
             return [int(i) for i in top[np.lexsort((top, -sims[top]))]
@@ -2739,6 +2752,8 @@ class Index:
         sims = self.emb @ qv                       # cosine similarity (vectors are unit length)
         if self.no_vectors is not None:
             sims = mx.where(self.no_vectors, mx.array(-2.0, dtype=sims.dtype), sims)
+        if self.allowed is not None:
+            sims = mx.where(mx.array(self.allowed), sims, mx.array(-2.0, dtype=sims.dtype))
         k = min(CANDIDATES, sims.shape[0])
         top = np.array(mx.argpartition(-sims, k - 1)[:k])
         s = np.array(sims[mx.array(top)].astype(mx.float32))
@@ -2822,17 +2837,29 @@ class Index:
         return (sorted(set(exact), key=order)[:CANDIDATES],
                 sorted(set(prefix) - set(exact), key=order)[:CANDIDATES])
 
-    def search(self, q: str, limit: int = SHOW) -> list[tuple[int, float, dict]]:
+    def search(self, q: str, limit: int = SHOW, mode: str | None = None) -> list[tuple[int, float, dict]]:
         """The ranked results. If the query has words the docs never use (misspelled), the
         corrected query is searched too and the two result lists are fused: a right
         correction brings its results up, a wrong one cannot push the typed query's out
-        (benchmark: eval/results-spelling.md)."""
-        hits = self.search_as_typed(q, limit)
-        fixed = self.correction(q)
-        if fixed is None:
-            return hits
-        other = self.search_as_typed(fixed, limit)
-        return rrf([("typed", [i for i, _, _ in hits], 1.0), ("corrected", [i for i, _, _ in other], 1.0)])[:limit]
+        (benchmark: eval/results-spelling.md). `mode`: "what" or "how" (MODES), only the
+        entries that kind of search covers, each ranker choosing among them."""
+        self.allowed = self.mode_mask(mode) if mode else None
+        try:
+            hits = self.search_as_typed(q, limit)
+            fixed = self.correction(q)
+            if fixed is None:
+                return hits
+            other = self.search_as_typed(fixed, limit)
+            return rrf([("typed", [i for i, _, _ in hits], 1.0), ("corrected", [i for i, _, _ in other], 1.0)])[:limit]
+        finally:
+            self.allowed = None
+
+    def mode_mask(self, mode: str):
+        """The entries a kind of search covers (MODES), made once."""
+        import numpy as np
+        if mode not in self.masks:
+            self.masks[mode] = np.array([e.purpose in MODES[mode] for e in self.entries], dtype=bool)
+        return self.masks[mode]
 
     def correction(self, q: str) -> str | None:
         """The query with its misspelled words corrected, or None if it has none."""
@@ -2848,7 +2875,8 @@ class Index:
         if not re.search(r"\w", q):                     # only symbols (?. ?? ... <<): a name with them
             exact, prefix = self.rank_name(q)            # (~, <<) or a title showing them; words,
             lists = [("name", exact, 3.0), ("prefix", prefix, 1.0), ("symbols", self.rank_symbols(q), 3.0)]
-            return [h for h in rrf(lists) if not self.duplicate(h[0])][:limit]   # spelling, meaning: noise
+            return [h for h in rrf(self.only_allowed(lists)) if not self.duplicate(h[0])][:limit]   # spelling,
+                                                                                                # meaning: noise
         # The spelling ranker runs on the other cores (in C++, outside the GIL) while the
         # others run here; together they take about as long as it does alone.
         edit = self.pool.submit(self.rank_edit, q) if self.mode in ("spell", "hybrid") else None
@@ -2863,7 +2891,13 @@ class Index:
         if self.mode in ("meaning", "hybrid"):
             lists.append(("meaning", self.rank_meaning(q), 1.0))
         # A page about one API object (numpy.sum's page) repeats that object: keep the object.
-        return [h for h in rrf(lists) if not self.duplicate(h[0])][:limit]
+        return [h for h in rrf(self.only_allowed(lists)) if not self.duplicate(h[0])][:limit]
+
+    def only_allowed(self, lists: list) -> list:
+        """The rankers' lists, without the entries this kind of search does not cover."""
+        if self.allowed is None:
+            return lists
+        return [(name, [i for i in ids if self.allowed[i]], w) for name, ids, w in lists]
 
     def full_text(self, i: int) -> str:
         """An entry's whole text: the start kept in memory, the rest read from its tails file."""
@@ -4537,7 +4571,7 @@ def remember(spec: str) -> None:
             config_set(name, vals + [want])
 
 
-COMMANDS = {"add", "sync", "list", "remove", "embed", "serve", "stop", "known", "ai", "upgrade", "downgrade",
+COMMANDS = {"add", "sync", "list", "remove", "embed", "serve", "stop", "known", "ai", "how", "upgrade", "downgrade",
             "setup", "save"}
 ONLINE = {"add", "sync", "embed", "upgrade", "downgrade", "setup", "save"}   # the only commands that may go online
                                        # (embed: only to download the model, once)
@@ -4603,10 +4637,11 @@ def offline_only() -> None:
     socket.socket.connect_ex = connect_ex
 
 
-def quick_search(words: list[str], ai: bool = False) -> None:
+def quick_search(words: list[str], ai: bool = False, how: bool = False) -> None:
     """search numpy svd  ->  the browser opens with the results for 'svd' in numpy.
     Leading package names choose the packages; without one, all packages are searched.
-    search ai IDEA  ->  the same, and the AI model reorders the top results."""
+    search ai IDEA  ->  the same, and the AI model reorders the top results.
+    search how IDEA  ->  how to do it: tutorials, guides and how-tos, not the reference (MODES)."""
     from docsearch import rerank, web
     if ai and rerank.model_dir() is None:
         say("The AI model is not downloaded yet; showing the normal results. Get it with: search setup")
@@ -4616,6 +4651,7 @@ def quick_search(words: list[str], ai: bool = False) -> None:
     src, use = search_copies(sources, project)
     mine = groups()                                  # (the project's versions of docs you have:
     web.open_browser({"q": q, "src": ",".join(src), "use": ",".join(use), "ai": "1" if ai else "0",
+                      "mode": "how" if how else "what",
                       "proj": ";".join(f"{g}:{v}" for g, v in project.items() if g in mine)})   # what is newer is marked)
 
 
@@ -4723,6 +4759,8 @@ def main(argv: list[str] | None = None) -> None:
                        help="replace docs you have even if the new download looks incomplete")
         u.set_defaults(func=cmd_upgrade)
     sub.add_parser("ai", help="search with AI: search ai IDEA (a model on this computer reorders the top results)")
+    sub.add_parser("how", help="search how IDEA: how to do it, in the tutorials, guides and how-tos (plain "
+                               "search: the reference)")
     argv = sys.argv[1:] if argv is None else argv
     if not argv or argv[0] not in ONLINE:          # everything but indexing stays offline
         offline_only()
@@ -4731,6 +4769,9 @@ def main(argv: list[str] | None = None) -> None:
         return
     if argv[0] == "ai":                            # search ai IDEA (any words, even "-O3")
         quick_search(list(argv[1:]), ai=True)
+        return
+    if argv[0] == "how":                           # search how IDEA: tutorials, guides, how-tos
+        quick_search(list(argv[1:]), how=True)
         return
     if argv[0] in ("-e", "--exact"):               # search -e drop_duplicates: "drop_duplicates"
         sources, q = split_sources(list(argv[1:]))  # (the shell removes quotes typed around words)

@@ -18,9 +18,16 @@ no internet, a few seconds.
 - the search page lists, before you type, each package's learn, do, look up and understand
   entries, each in reading order; results say their purpose; the home view has the contents
   by purpose (each part with the pages its contents list)
+- plain search is the reference (look up, understand; names first); search how IDEA (and the
+  page's How) the tutorials, guides and how-tos (learn, do)
 - search list NAME: how many entries of each purpose, what was left out, the source code
 - docs from before: organized once, with nothing downloaded; their vectors keep the rows of the
   entries kept
+- examples (examples.py): an API entry's "Examples" part, and cppreference's Example section,
+  are example entries of search how, at their entry's place (plain search finds the entry);
+  whether one is complete is read from its code: names it uses and never defines or imports
+  ("df (from earlier)", "import polars as pl", "from itertools import batched"; numpy's and
+  pandas' np and pd are taken as their docs say), a C++ program with its includes and main
 - official guides (guides.py): the docs' header links a "User guide" on their own site (its
   folder holds the docs: only the guide's pages are read, from its sitemap) and "Tutorials" on
   a site that links to the package's repository: both read with the docs, as parts of the copy,
@@ -74,7 +81,8 @@ PAGES = {
     "user/devtools.html": ("Development Tools", "", []),
     "reference/index.html": ("Mini reference", "", ["reference/mini.sum.html"]),
     "reference/mini.sum.html": ("mini.sum", "<dl class='py function'><dt id='mini.sum'>mini.sum(a)</dt>"
-                                "<dd><p>Sums the rows.</p></dd></dl>", []),
+                                "<dd><p>Sums the rows.</p><p class='rubric'>Examples</p><div class='highlight'><pre>"
+                                "&gt;&gt;&gt; mini.sum([1, 2])\n3</pre></div></dd></dl>", []),
     "dev/index.html": ("Contributing to Mini", "", ["dev/internals.html"]),
     "dev/internals.html": ("Internals", "", []),
     "whatsnew/index.html": ("Release notes", "", ["whatsnew/v1.0.html"]),
@@ -127,6 +135,7 @@ def main() -> None:
     cli.CONFIG = cli.DATA / "packages.toml"
     labels()
     folding()
+    completeness()
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Site)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     site = f"http://127.0.0.1:{server.server_address[1]}"
@@ -159,7 +168,7 @@ def main() -> None:
     names = [it["name"] for it in items]
     check(groups == ["learn", "do", "lookup", "understand"] and names.index("How to sort (page)") < names.index("Sorting by key (section)"),
           f"before you type: learn, do, look up, understand, each in reading order ({groups}, {names})")
-    found = lib.search("sorting by key", {"mini"}, 0, 5)["items"]
+    found = lib.search("sorting by key", {"mini"}, 0, 5, mode="how")["items"]
     check(found and found[0]["purpose"] == "do", f"results say their purpose ({found[:1]})")
     contents = {g["purpose"]: g for g in lib.contents({"mini"})[0]["groups"]}
     do = contents["do"]["parts"][0]
@@ -168,10 +177,36 @@ def main() -> None:
           and contents["lookup"]["parts"][0]["title"] == "Mini reference" and contents["do"]["count"] >= 3
           and (cli.HOME / "mini" / "contents.json").exists(),
           f"the contents, by purpose: each part with the pages its contents list ({contents})")
+    what = lib.search("mini.sum sorting by key", {"mini"}, 0, 50)["items"]
+    how = lib.search("mini.sum sorting by key", {"mini"}, 0, 50, mode="how")["items"]
+    empty_how = lib.search("", {"mini"}, 0, 200, mode="how")["items"]
+    check(what and what[0]["name"] == "mini.sum" and {it["purpose"] for it in what} <= {"lookup", "understand"}
+          and how and {it["purpose"] for it in how} <= {"learn", "do"} and how[0]["name"] == "Sorting by key (section)"
+          and {it["purpose"] for it in empty_how} == {"learn", "do"},
+          f"plain search: the reference (names first); how: the tutorials and guides ({what[:2]}, {how[:2]})")
+    opened = []
+    real_open, web.open_browser = web.open_browser, opened.append
+    try:
+        run("how", "mini", "sort", "by", "key")
+        run("mini", "sum")
+    finally:
+        web.open_browser = real_open
+    check(opened[0]["mode"] == "how" and opened[0]["q"] == "sort by key" and opened[0]["src"] == "mini"
+          and opened[1]["mode"] == "what",
+          f"search how IDEA: the page searches the guides; plain search, the reference ({opened})")
+    ex = lib.search("sums rows mini.sum examples", {"mini"}, 0, 20, mode="how")["items"]
+    ex = next((it for it in ex if it["kind"] == "example"), None)
+    shown = lib.entry(ex["id"]) if ex else {}
+    check(ex is not None and ex["name"] == "mini.sum › Examples" and ex["complete"] == {"needs": ["import mini"]}
+          and "mini.sum([1, 2])" in shown.get("html", "") and "Sums the rows" not in shown.get("html", "")
+          and shown["page"]["path"] == "mini/reference/mini.sum.html" and shown["page"]["at"] == "mini.sum"
+          and "mini.sum › Examples" not in [it["name"] for it in lib.search("mini.sum", {"mini"}, 0, 20)["items"]],
+          f"an API entry's examples: an entry of search how, at its entry's place; complete or what it needs "
+          f"(here: import mini); plain search finds the entry itself ({ex})")
     meta["repo"] = "github.com/mini/mini"
     cli.write_atomic(cli.HOME / "mini" / "meta.json", json.dumps(meta).encode())
     said = run("list", "mini")
-    check("learn 2" in said and "do 4" in said and "understand 2" in said and "pages about the project left out" in said
+    check("learn 2" in said and "do 5" in said and "understand 2" in said and "pages about the project left out" in said
           and "source code: github.com/mini/mini" in said,
           f"search list NAME: each purpose's count, what was left out, the source code ({said!r})")
     migrate()
@@ -208,6 +243,33 @@ def labels() -> None:
           f"not downloaded: release notes (their folder too) and contributing pages; never a page of API objects ({skip})")
 
 
+def completeness() -> None:
+    from docsearch import examples as X
+    ok = {
+        "pandas": X.needs("```\n>>> df = pd.DataFrame({'a': [1]})\n>>> df.a.sum()\n1\n```", package="pandas"),
+        "later": X.needs("```\n>>> df.merge(other)\n```", package="pandas"),
+        "polars": X.needs("```\n>>> pl.DataFrame({'a': [1]})\n```", package="polars"),
+        "stdlib": X.needs("```\n>>> list(batched('ABCDEFG', 3))\n```", name="itertools.batched"),
+        "program": X.needs("```cpp\n#include <print>\nint main() { std::println(\"hi\"); }\n```"),
+        "fragment": X.needs("```cpp\nstd::vector<int> v;\nv.push_back(1);\n```"),
+        "prose": X.needs("No code here."),
+        "ipython": X.needs("```\nIn [1]: df1 = pd.DataFrame({'a': [1]})\n\nIn [2]: pd.merge(df1, df2)\nOut[2]: 1\n```",
+                           package="pandas")}
+    check(ok == {"pandas": {"complete": True}, "later": {"needs": ["df (from earlier)", "other (from earlier)"]},
+                 "polars": {"needs": ["import polars as pl"]}, "stdlib": {"needs": ["from itertools import batched"]},
+                 "program": {"complete": True}, "fragment": {"needs": ["#include and main"]}, "prose": None,
+                 "ipython": {"needs": ["df2 (from earlier)"]}},
+          f"an example's code: complete, or what it needs, read from the code ({ok})")
+    entry = cli.Entry("numpy.sum (function)", "function", "https://x/numpy.sum.html#numpy.sum",
+                      "```python\nnumpy.sum(a)\n```\n\nSums.\n\nExamples\n\nTry it in your browser!\n\n"
+                      "```\n>>> np.sum([1, 2])\n3\n```\n\nGo BackOpen In Tab", "numpy", "lookup")
+    made = X.entries_of([entry])
+    check(len(made) == 1 and made[0].title == "numpy.sum › Examples" and made[0].kind == "example"
+          and made[0].purpose == "do" and made[0].location == entry.location and "Sums." not in made[0].text
+          and "browser" not in made[0].text and ">>> np.sum" in made[0].text,
+          f"an API entry's Examples part, without the page's buttons: an example entry at its place ({made})")
+
+
 def folding() -> None:
     """cppreference's sections: folded when the page's entry holds them, word for word."""
     root = "https://en.cppreference.com/"
@@ -227,7 +289,9 @@ def folding() -> None:
     meta = {"name": "cpp", "kind": "known", "root": root}
     kept, keep = organize.organize("folding", entries, meta)
     titles = [e.title for e in kept]
+    kinds = [e.kind for e in kept]
     check(titles == ["std::format", "std::format › Example", "std::format › See also"] and keep == [0, 3, 4]
+          and kinds == ["api", "example", "section"] and kept[1].purpose == "do"
           and meta["left_out"]["folded"] == 3,
           f"folded: Parameters, Return value (in the page's entry), an empty section; kept: Example, and a "
           f"See also whose text the page does not have ({titles})")
@@ -326,7 +390,8 @@ def guides() -> None:
 
 
 def guides_found() -> None:
-    from docsearch import guides as G, pages
+    from docsearch import guides as G
+    from docsearch import pages
     header = ("<a href='/api/stable/'>API</a> <a href='https://docs.lib.example/'>User guide</a> "
               "<a href='https://learn.lib-tutorials.example/'>Tutorials</a> <a href='https://blog.example/'>Learn more</a>")
     guide_sites(header)

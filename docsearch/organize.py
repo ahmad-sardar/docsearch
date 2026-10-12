@@ -29,7 +29,7 @@ from typing import NamedTuple
 from docsearch import cli
 from docsearch import pages as offline
 
-VERSION = 1                       # meta["organized"]: the rules a copy was organized with
+VERSION = 2                       # meta["organized"]: the rules a copy was organized with (2: examples)
 PURPOSES = {"learn": "Learn", "do": "Do", "lookup": "Look up", "understand": "Understand"}
 
 # The sites' own names for their parts, on a title made plain (lower case, without the
@@ -184,7 +184,7 @@ def classify(sid: str, meta: dict, entries: list[cli.Entry]) -> Pages:
             title[rel] = re.sub(r" \(page\)$", "", e.title)
     pages = set(title) | {p for e in entries if (p := page_of(e.location, meta, stored))}
     guides = {g["dir"] + "/": g for g in meta.get("guides") or []}
-    for folder, g in guides.items():             # a guide's first page: named as its link names it
+    for g in guides.values():                    # a guide's first page: named as its link names it
         first = page_of(g["root"], meta, stored)   # (one its index does not list stands for it:
         if first:                                  # numpy's tutorials have no first page)
             pages.add(first)
@@ -337,8 +337,9 @@ def body(text: str) -> str:
 
 
 def organize(sid: str, entries: list[cli.Entry], meta: dict) -> tuple[list[cli.Entry], list[int]]:
-    """(the entries kept, each with its purpose; their numbers among `entries`). The pages of
-    removed entries are deleted from the copy's stored pages; meta says what was left out."""
+    """(the entries kept, each with its purpose, then the example entries made from them
+    (examples.py); each one's number among `entries`, -1 for an example made now). The pages
+    of removed entries are deleted from the copy's stored pages; meta says what was left out."""
     if meta.get("kind") in ("man", "saved"):         # man pages; articles you saved: all kept
         for e in entries:                            # (a man page is looked up; an article, learned)
             said = label_of(e.title, set(), part=False)
@@ -384,12 +385,18 @@ def organize(sid: str, entries: list[cli.Entry], meta: dict) -> tuple[list[cli.E
         if f is not None:
             f.unlink(missing_ok=True)
     keep = [i for i in range(len(entries)) if i not in drop]
+    from docsearch import examples
+    for i in keep:                                   # an Example section: an example, for search how
+        e = entries[i]
+        if e.kind == "section" and re.search(r" › Examples?$", e.title):
+            e.kind, e.purpose = "example", "learn" if e.purpose == "learn" else "do"
+    new = examples.entries_of([entries[i] for i in keep])    # an API entry's examples, an entry too
     before = meta.get("left_out") or {} if meta.get("organized") else {}    # (organized again: a guide added)
     now = {"pages": len(removed_pages) + (0 if before else len(meta.get("unread") or [])),
            "entries": len(drop) - folded, "folded": folded}
     meta["organized"] = VERSION
     meta["left_out"] = {k: before.get(k, 0) + v for k, v in now.items()}
-    return [entries[i] for i in keep], keep
+    return [entries[i] for i in keep] + new, keep + [-1] * len(new)
 
 
 def organize_copy(sid: str) -> dict:
@@ -400,6 +407,7 @@ def organize_copy(sid: str) -> dict:
     d = cli.HOME / sid
     meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
     entries = list(cli.iter_entries(sid))
+    had = dict(meta.get("left_out") or {})           # (organized before: say only what changed now)
     kept, keep = organize(sid, entries, meta)
     vectors = None
     if (d / "emb.npy").exists():
@@ -408,12 +416,29 @@ def organize_copy(sid: str) -> dict:
             vectors = None                           # (not this copy's: made again by search embed)
     meta["count"] = len(kept)
     cli.save(sid, kept, meta)                        # (removes emb.npy: these rows replace it)
-    if vectors is not None:
-        np.save(d / "emb.npy", vectors[keep])
     for f in ("bm25.npz", "tails.bin", "tails.npy", "order.npy"):
         (d / f).unlink(missing_ok=True)
     cli.make_search_caches(sid)
-    return meta.get("left_out", {})
+    if vectors is not None:
+        save_vectors(sid, vectors, kept, keep)
+    return {k: v - had.get(k, 0) for k, v in (meta.get("left_out") or {}).items()}
+
+
+def save_vectors(sid: str, vectors, kept: list[cli.Entry], keep: list[int]) -> None:
+    """A copy's vectors after it is organized: the rows it had for the entries kept (`keep`:
+    their numbers among the old ones), and made for the new ones (-1, or past the old ones:
+    examples, a guide's pages), with nothing else embedded again."""
+    import numpy as np
+    new = [k for k, i in enumerate(keep) if not 0 <= i < len(vectors)]
+    made = {}
+    if new:
+        model = cli.get_model(download=True)
+        texts = [f"{kept[k].title}\n{cli.plain(kept[k].text)[:cli.EMBED_CHARS]}" for k in new]
+        with cli.Progress(f"  vectors for {len(new):,} new entries of {sid}", len(texts)) as bar:
+            made = dict(zip(new, model.encode(texts, batch=64, progress=bar.update)))
+    rows = [made[k] if k in made else vectors[i] for k, i in enumerate(keep)]
+    np.save(cli.HOME / sid / "emb.npy", np.stack(rows).astype(np.float32) if rows else
+            np.zeros((0, vectors.shape[1]), np.float32))
 
 
 def migrate() -> None:

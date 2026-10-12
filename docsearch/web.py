@@ -87,6 +87,7 @@ class Library:
         self.summaries: dict[int, str] = {}
         self._covers: dict[str, dict] = {}          # copy -> what it describes
         self._marks: dict[int, dict] = {}           # entry -> its version marks
+        self._complete: dict[int, dict | None] = {} # entry -> its example's completeness
         self.load(sorted(self.default | (set(extra) & set(sids))))
         self.sites: dict[str, tuple[str, Path]] = {}     # where each copy's pages are (a guide's: sid/guide)
         for s, m in self.meta.items():
@@ -183,11 +184,30 @@ class Library:
             text = cli.snippet(e, q)
         return {"id": i, "name": cli.api_name(e.title) if is_api else e.title, "kind": e.kind,
                 "source": self.sid_of[i], "api": is_api, "summary": text, "purpose": e.purpose,
-                **self.versioned(i, self.sid_of[i], project)}
+                "complete": self.complete(i), **self.versioned(i, self.sid_of[i], project)}
+
+    def complete(self, i: int) -> dict | None:
+        """An example's (or a guide section's) code: complete, or what it needs (examples.py);
+        None for entries without code it can read. Kept once found."""
+        if i not in self._complete:
+            from docsearch import examples
+            e = self.index.entries[i]
+            out = None
+            if e.kind == "example" or (e.kind in cli.PAGE_KINDS and e.purpose in ("learn", "do") and "```" in e.text):
+                m = self.meta[self.sid_of[i]]
+                name = m.get("name", "")
+                base = re.sub(r" › Examples?$", "", e.title)
+                out = examples.needs(self.full_text(i), "cpp" if name in ("cpp", "c") else "", name,
+                                     cli.api_name(base) if e.kind == "example" else "")
+            self._complete[i] = out
+        return self._complete[i]
 
     def search(self, q: str, srcs: set[str], offset: int, limit: int, ai: bool = False,
-               project: dict[str, str] | None = None) -> dict:
+               project: dict[str, str] | None = None, mode: str = "what") -> dict:
+        """`mode`: "what" (plain search: the reference, explanations) or "how" (tutorials,
+        guides, how-tos): cli.MODES. With no query, the docs organized (how: what it covers)."""
         q = q.strip()
+        mode = mode if mode in cli.MODES else "what"
         srcs = srcs or self.default                  # never two versions of one package at once
         with self.lock:
             self.ensure(srcs)
@@ -196,14 +216,17 @@ class Library:
         plain_q = " ".join([rest] + phrases).strip()     # what ranks the results (and the AI reads)
         if not q:                                    # no query: all the docs, each package by purpose
             ids = self.browse(index, sid_of, srcs)   # (learn, do, look up, understand), in reading order
+            if mode == "how":
+                ids = [i for i in ids if index.entries[i].purpose in cli.MODES["how"]]
         elif phrases or patterns:                    # strict: every match, the best first
             with self.lock:
                 try:
                     found = index.strict(phrases, patterns, index.full_text)
                 except ValueError as e:
                     return {"q": q, "total": 0, "ai": None, "items": [], "error": str(e)}
-                hits = index.search(plain_q, limit=3000) if plain_q else []
-            allowed = {i for i in found if (not srcs or sid_of[i] in srcs) and not index.duplicate(i)}
+                hits = index.search(plain_q, limit=3000, mode=mode) if plain_q else []
+            allowed = {i for i in found if (not srcs or sid_of[i] in srcs) and not index.duplicate(i)
+                       and index.entries[i].purpose in cli.MODES[mode]}
             ranked = [i for i, _, _ in hits if i in allowed]
             if self._browse_pos[0] is not index:
                 self._browse_pos = (index, {i: k for k, i in enumerate(index.browse)})
@@ -212,7 +235,7 @@ class Library:
             ids = ranked + sorted((i for i in allowed if i not in seen), key=lambda i: pos.get(i, len(pos)))
         else:
             with self.lock:
-                hits = index.search(q, limit=3000 if srcs else cli.SHOW)
+                hits = index.search(q, limit=3000 if srcs else cli.SHOW, mode=mode)
             ids = [i for i, _, _ in hits if not srcs or sid_of[i] in srcs][:cli.SHOW]
         state = None
         if ai and plain_q:                           # the model reorders the top results
@@ -228,7 +251,7 @@ class Library:
                 state = "ranked"
         with self.lock:
             fixed = index.correction(plain_q) if plain_q else None
-        return {"q": q, "total": len(ids), "ai": state, "corrected": fixed,
+        return {"q": q, "total": len(ids), "ai": state, "corrected": fixed, "mode": mode,
                 "items": [self.item(i, q, project) for i in ids[offset:offset + limit]]}
 
     def browse(self, index, sid_of: list[str], srcs: set[str]) -> list[int]:
@@ -279,14 +302,16 @@ class Library:
             rel = rel or "index.html"
             stored = self.as_standard(sid, offline.load_page(site[1], rel))
             if stored is not None:
-                html_text = fragment(stored, anchor, e.kind)
+                own = e.kind != "example" or re.fullmatch(r"Examples?", anchor)   # (an example made from
+                html_text = fragment(stored, anchor, e.kind) if own else None     # an entry: its own text)
                 page = {"path": f"{key}/{rel}", "at": anchor}
-                code = self.code_of(sid, html_text, is_api)
+                code = self.code_of(sid, html_text, is_api) if html_text is not None else None
         if html_text is None:                        # no offline page: draw the indexed text
             base = e.location if cli.safe_url(e.location) else "https://invalid.invalid/"
             html_text = offline.sanitize(MD.render(self.full_text(i)), base)
         return {"id": i, "name": name, "kind": e.kind, "source": sid, "api": is_api,
-                "version": self.guide_label(sid, key) or self.label(sid), "code": code, "repo": self.repo(sid), **self.versioned(i, sid, project),
+                "version": self.guide_label(sid, key) or self.label(sid), "code": code, "repo": self.repo(sid),
+                **self.versioned(i, sid, project), "complete": self.complete(i),
                 "html": offline.localize_links(html_text, self.sites, sid), "page": page,
                 "web": e.location if cli.safe_url(e.location) else None,
                 "import": import_line(name, e.kind) if is_api else None}
@@ -563,7 +588,7 @@ class Handler(BaseHTTPRequestHandler):
                 offset = max(0, int(qs.get("offset", "0") or 0))
                 limit = min(200, max(1, int(qs.get("limit", "60") or 60)))
                 return self.json(lib.search(qs.get("q", "")[:300], srcs, offset, limit, qs.get("ai") == "1",
-                                            project_of(qs.get("proj", ""))))
+                                            project_of(qs.get("proj", "")), qs.get("mode", "what")))
             m = re.fullmatch(r"/api/source/(\d+)", url.path)
             if m:
                 i = int(m.group(1))

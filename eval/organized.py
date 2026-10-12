@@ -69,10 +69,31 @@ def purpose(index, gold: dict[int, int]) -> str:
     return Counter(index.entries[i].purpose or "?" for i, g in gold.items() if g == best).most_common(1)[0][0]
 
 
-def rows(index, qs: list[dict], key: str) -> list[dict]:
+def complete_first(index, weight: float):
+    """How mode, with complete examples (docsearch/examples.py) given one more vote of
+    `weight` in the fusion: does preferring them find the answers sooner?"""
+    from docsearch import examples
+    done: dict[int, bool] = {}
+
+    def ok(i: int) -> bool:
+        if i not in done:
+            e = index.entries[i]
+            name = cli.source_id(e.source).split("@")[0]
+            r = examples.needs(index.full_text(i), "cpp" if name in ("cpp", "c") else "", name) \
+                if e.kind == "example" or "```" in e.text else None
+            done[i] = bool(r and r.get("complete"))
+        return done[i]
+
+    def search(q: str, limit: int, mode: str | None = None):
+        hits = [i for i, _, _ in index.search(q, limit=200, mode="how")]
+        return cli.rrf([("how", hits, 1.0), ("complete", [i for i in hits if ok(i)], weight)])[:limit]
+    return search
+
+
+def rows(index, qs: list[dict], key: str, mode: str | None = None, search=None) -> list[dict]:
     out = []
     for q in qs:
-        ranked = [i for i, _, _ in index.search(q["q"], limit=DEPTH)]
+        ranked = [i for i, _, _ in (search or index.search)(q["q"], limit=DEPTH, mode=mode)]
         out.append(bench.per_query(ranked, q[key]) | {"recall50": float(any(q[key].get(i, 0) >= 1 for i in ranked))})
     return out
 
@@ -83,13 +104,24 @@ def main() -> None:
     ap.add_argument("--after", type=Path, required=True)
     ap.add_argument("--split", default="dev", choices=["dev", "test"])
     ap.add_argument("--out", type=Path)
+    ap.add_argument("--mode", choices=["what", "how"], help="the kind of search asked of --after (cli.MODES)")
+    ap.add_argument("--modes", action="store_true",
+                    help="on --after only: plain search as it was (all entries) against what and how (cli.MODES)")
     a = ap.parse_args()
-    before, before_sid = index_of(a.before)
     after, after_sid = index_of(a.after)
-    qs = questions(before, before_sid, after, after_sid, a.split)
-    runs = [{"name": "before", "rows": rows(before, qs, "gold"), "ms_p50": 0, "ms_p95": 0},
-            {"name": "organized", "rows": rows(after, qs, "gold_after"), "ms_p50": 0, "ms_p95": 0}]
-    out = [f"## Organized docs, {a.split} split\n"]
+    if a.modes:
+        qs = [{**q, "gold_after": q["gold"], "purpose": purpose(after, q["gold"])}
+              for q in bench.load_questions(after, after_sid)[0] if q["split"] == a.split]
+        runs = [{"name": name, "rows": rows(after, qs, "gold_after", mode), "ms_p50": 0, "ms_p95": 0}
+                for name, mode in (("before", None), ("what", "what"), ("how", "how"))]
+        runs += [{"name": f"how+complete{w:g}", "rows": rows(after, qs, "gold_after", "how", complete_first(after, w)),
+                  "ms_p50": 0, "ms_p95": 0} for w in (0.5, 1.0)]
+    else:
+        before, before_sid = index_of(a.before)
+        qs = questions(before, before_sid, after, after_sid, a.split)
+        runs = [{"name": "before", "rows": rows(before, qs, "gold"), "ms_p50": 0, "ms_p95": 0},
+                {"name": "organized", "rows": rows(after, qs, "gold_after", a.mode), "ms_p50": 0, "ms_p95": 0}]
+    out = [f"## {'What and how' if a.modes else 'Organized docs'}, {a.split} split\n"]
     groups = [("All questions", lambda q: True),
               ("Stack Overflow questions", lambda q: q["set"] == "so")]
     groups += [(f"Stack Overflow questions whose answer is {p}", lambda q, p=p: q["set"] == "so" and q["purpose"] == p)
@@ -107,7 +139,8 @@ def main() -> None:
         a.out.write_text(text)
         (a.out.with_suffix(".json")).write_text(json.dumps(
             [{"q": q["q"], "set": q["set"], "source": q["source"], "purpose": q["purpose"],
-              "before": runs[0]["rows"][k]["mrr"], "after": runs[1]["rows"][k]["mrr"]} for k, q in enumerate(qs)]))
+              **{r["name"]: r["rows"][k]["mrr"] for r in runs}, "after": runs[1]["rows"][k]["mrr"]}
+             for k, q in enumerate(qs)]))
 
 
 if __name__ == "__main__":

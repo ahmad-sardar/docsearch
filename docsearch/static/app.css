@@ -146,6 +146,9 @@ kbd {
          font: 600 12px var(--font); letter-spacing: .04em; text-transform: uppercase; border-bottom: 1px solid var(--border); }
 .r .purpose { flex: none; font-size: 12px; color: var(--tip); }      /* learn, do, understand */
 .r .purpose.understand { color: var(--seealso); }
+.done { flex: none; font-size: 12px; color: var(--tip); }           /* an example: complete */
+.done.warn { color: var(--warn); }                                  /* needs a name or an import */
+.pill.done { border-color: color-mix(in srgb, currentColor 35%, transparent); }
 
 /* ---- the document ------------------------------------------------------------- */
 .doc-pane { background: var(--panel); scroll-padding-top: 16px; }

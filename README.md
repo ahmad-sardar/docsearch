@@ -19,6 +19,7 @@ search np.sum                             # by name
 search lnsvd                              # by a few letters
 search dataframe.mrege                    # typos are fine
 search sum of elements along an axis      # by meaning
+search how join two tables                # how to do it: tutorials, guides, how-tos
 search ai how do i drop duplicate rows    # a question, ranked by a small local model
 ```
 
@@ -97,6 +98,7 @@ docs.
 
 ```bash
 search numpy svd              # just numpy
+search how pandas pivot       # how to do it, in pandas' guides (plain search: the reference)
 search                        # open the page
 search list                   # what you have, and which version
 search stop                   # stop the background server
@@ -132,6 +134,24 @@ only the docs' own words (a page's title, or the part of their table of contents
 
 the page's home shows each package that way: each part (as its docs name it) with the pages
 under it. results say what they're for. `search list numpy` counts them.
+
+two searches, for two questions:
+
+- **plain `search`: what** something is. the reference and the explanations (look up,
+  understand): `search np.sum`, `search broadcasting`. names come first, as always.
+- **`search how`: how** to do something. the tutorials, guides and how-tos (learn, do):
+  `search how read a json file`. in the page, the **How** button switches.
+
+examples are units of their own in `search how`: a function's "examples" part, with the text
+around it, stays linked to the function (enter opens its page), and cppreference's example
+programs too. each says whether its code is complete, read from the code itself: "complete",
+or what it needs first ("needs df (from earlier)", "needs import polars as pl"). numpy's and
+pandas' examples assume `np` and `pd`, as their docs say.
+
+measured on the stack overflow questions (`eval/results-organized.md`, test split): plain
+search finds what it found before (mrr 0.269 against 0.267; names 0.982, unchanged), without
+the guides in its way. on the 27 questions whose answer is a tutorial or how-to, `search how`
+scores 0.27 against 0.19: better, but too few questions to be sure.
 
 pages about the project, not about using it, are left out: release notes, what's new,
 contributing and development, building from source, the license (pandas: 2,495 release-note

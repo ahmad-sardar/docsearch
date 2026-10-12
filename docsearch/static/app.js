@@ -46,6 +46,7 @@ async function init() {
   state.proj = p.get("proj") || "";           // your project's versions (cpp:C++17;python:3.12)
   state.ai = p.get("ai") === "1";            // "search ai IDEA" turns AI on; plain "search", off
   $("#ai").setAttribute("aria-pressed", state.ai ? "true" : "false");
+  setHow(p.get("mode") === "how");           // "search how IDEA": the guides; plain "search": the reference
   $("#q").value = state.q;
   renderSources();
   renderChoose();
@@ -152,7 +153,8 @@ async function search({ openFirst = true, append = false, ai = false } = {}) {
   clearTimeout(state.aiTimer);
   const ctl = (state.searchCtl = new AbortController());
   const params = new URLSearchParams({ q: state.q, src: searchedSources().join(","),
-                                       offset: append ? state.items.length : 0, limit: 80 });
+                                       offset: append ? state.items.length : 0, limit: 80,
+                                       mode: state.how ? "how" : "what" });
   if (state.proj) params.set("proj", state.proj);
   if (ai) { params.set("ai", "1"); status(`Ranking with AI… (“${state.q}”)`); }
   let data;
@@ -163,8 +165,9 @@ async function search({ openFirst = true, append = false, ai = false } = {}) {
   renderResults(append ? data.items : state.items, append ? state.items.length - data.items.length : 0);
   const where = state.srcs.size ? searchedSources().join(", ") : "all packages";
   const fixed = data.corrected ? ` · also searched “${data.corrected}”` : "";
-  status(state.q ? `${data.total} results for “${state.q}”${fixed} · ${where}${data.ai === "ranked" ? " · ranked with AI" : ""}`
-                 : `${data.total} entries · ${where}, in reading order`);
+  const kind = state.how ? " · how: tutorials, guides, how-tos" : "";
+  status(state.q ? `${data.total} results for “${state.q}”${fixed} · ${where}${kind}${data.ai === "ranked" ? " · ranked with AI" : ""}`
+                 : `${data.total} entries · ${where}, in reading order${kind}`);
   if (data.error) status(data.error);
   if (data.ai === "not installed") {
     toast("The AI model is not downloaded yet. In a terminal: search setup");
@@ -177,6 +180,13 @@ async function search({ openFirst = true, append = false, ai = false } = {}) {
   if (!append && !ai && state.ai && state.q) {
     state.aiTimer = setTimeout(() => search({ openFirst, ai: true }), 450);
   }
+}
+
+// How: the tutorials, guides and how-tos (learn, do); off, the reference (look up, understand).
+function setHow(on) {
+  state.how = on;
+  $("#how").setAttribute("aria-pressed", on ? "true" : "false");
+  $("#q").placeholder = on ? "How do I… (tutorials, guides, how-tos)" : "Search: a name (np.sum), some letters (lnsvd), or describe it";
 }
 
 function setAI(on) {
@@ -215,6 +225,8 @@ function renderResults(items, start) {
     }
     const mark = versionMark(it);
     if (mark) meta.append(mark);
+    const done = completeMark(it);
+    if (done) meta.append(done);
     if (state.sources.length > 1 && !state.srcs.size) meta.append(el("span", "src", sourceLabel(it.source)));
     if (it.summary) meta.append(el("span", "sum", it.summary));
     li.append(meta);
@@ -236,6 +248,18 @@ function versionMark(it, long = false) {
   span.title = flags.includes("newer") ? `${words}: newer than your project (${it.project})`
              : flags.includes("removed") ? `${words}: gone in your project's version (${it.project})`
              : flags.includes("deprecated") ? `deprecated in ${m.deprecated}${yours}` : words + yours;
+  return span;
+}
+
+// An example's code, read (examples.py): complete as it is, or what it needs first (a name
+// from earlier on its page, an import).
+function completeMark(it, long = false) {
+  const c = it.complete;
+  if (!c) return null;
+  const text = c.complete ? "complete" : `needs ${c.needs.join(", ")}`;
+  const span = el("span", `done${long ? " pill" : ""}${c.complete ? "" : " warn"}`, long || c.complete ? text : "needs…");
+  span.title = c.complete ? "Its code runs as it is: every name it uses is defined or imported in it"
+                          : `Its code uses what it does not define or import: ${c.needs.join("; ")}`;
   return span;
 }
 
@@ -282,7 +306,8 @@ async function openEntry(id, push = true) {
   renderDoc({
     crumbs: d.api && d.name.includes(".") ? d.name.split(".").slice(0, -1) : [d.source],
     title: d.api ? d.name.split(".").pop() : d.name, kind: d.kind,
-    meta: [`${d.source} ${d.version}`.trim()], mark: versionMark(d, true), html: d.html, web: d.web,
+    meta: [`${d.source} ${d.version}`.trim()], mark: versionMark(d, true), done: completeMark(d, true),
+    html: d.html, web: d.web,
     actions: [
       d.page && { label: "Full page", primary: true, key: "Enter", run: () => openPage(d.page.path, d.page.at) },
       { label: "Copy name", run: () => copy(d.name, "name") },
@@ -339,6 +364,7 @@ function renderDoc(d, at) {
   if (d.kind) row.append(el("span", "pill kind", d.kind));
   d.meta.filter(Boolean).forEach((m) => row.append(el("span", "pill", m)));
   if (d.mark) row.append(d.mark);
+  if (d.done) row.append(d.done);
   head.append(row);
   const actions = el("div", "actions");
   for (const a of d.actions.filter(Boolean)) {
@@ -469,7 +495,9 @@ function showHome() {
   w.append(el("h2", null, "How to search"));
   const t = el("table");
   const rows = [["np.sum, svd, nn.Linear", "an API name (aliases like np, pd work)"], ["lnsvd", "letters in order: numpy.linalg.svd"],
-                ["sum of elements along an axis", "a description: search by meaning"], ["↑ ↓", "move through the results"],
+                ["sum of elements along an axis", "a description: search by meaning"],
+                ["How (or search how …)", "how to do it: tutorials, guides, how-tos instead of the reference"],
+                ["↑ ↓", "move through the results"],
                 ["Enter", "the full page (offline copy)"], ["Esc", "back, then clear the search"],
                 ["/", "jump to the search box"], ["w", "wrap or scroll long code lines"],
                 ["c", "copy the name of the current entry"], ["s", "the source code of the current entry"]];
@@ -572,6 +600,7 @@ function syncURL(push) {
   const p = new URLSearchParams();
   if (state.q) p.set("q", state.q);
   if (state.ai) p.set("ai", "1");
+  if (state.how) p.set("mode", "how");
   if (state.proj) p.set("proj", state.proj);
   if (state.srcs.size) p.set("src", searchedSources().join(","));
   if (state.view?.type === "entry") p.set("id", state.view.id);
@@ -636,6 +665,11 @@ async function removeSource(s, button) {
 function bindEvents() {
   const input = $("#q");
   $("#manage").addEventListener("click", openPanel);
+  $("#how").addEventListener("click", () => {
+    setHow(!state.how);
+    toast(state.how ? "How: searching the tutorials, guides and how-tos" : "Searching the reference");
+    search({ openFirst: !!state.q });
+  });
   $("#ai").addEventListener("click", () => {
     setAI(!state.ai);
     toast(state.ai ? "AI ranking on: the model reorders the top results" : "AI ranking off");

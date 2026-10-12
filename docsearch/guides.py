@@ -174,9 +174,9 @@ def add_to_copy(sid: str, args) -> None:
         store = importers.Store(sid, part["guide"]["root"], part["guide"]["dir"])
         store.reset()
         if part["kind"] == "sphinx":
-            found, extra = cli.build_sphinx(name, part["url"], None, args.workers, None, store=store)
+            found, _ = cli.build_sphinx(name, part["url"], None, args.workers, None, store=store)
         else:
-            found, extra = importers.build_website(name, sid, part, store, args.workers, None)
+            found, _ = importers.build_website(name, sid, part, store, args.workers, None)
         store.finish(args.workers)
         for e in found:
             e.source = sid if "@" in sid else e.source
@@ -193,11 +193,6 @@ def add_to_copy(sid: str, args) -> None:
     cli.save(sid, kept, meta)
     cli.make_search_caches(sid)
     if vectors is not None and len(vectors) == len(old):
-        added = [i for i in keep if i >= len(old)]
-        model = cli.get_model(download=True)
-        texts = [f"{(old + new)[i].title}\n{cli.plain((old + new)[i].text)[:cli.EMBED_CHARS]}" for i in added]
-        made = model.encode(texts, batch=64) if texts else np.zeros((0, vectors.shape[1]), np.float32)
-        rows = {i: v for i, v in zip(added, made)}
-        np.save(d / "emb.npy", np.stack([vectors[i] if i < len(old) else rows[i] for i in keep]).astype(np.float32))
+        organize.save_vectors(sid, vectors, kept, keep)    # (the guide's rows made; the docs' kept)
     elif vectors is not None:
         cli.make_vectors(sid, name)

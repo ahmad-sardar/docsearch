@@ -107,11 +107,16 @@ def make_copy(group: str, ed: str, spec: str = "") -> str:
         found = list(cli.iter_entries(base.name))
     finally:
         cli.HOME = real
+    out: set[str] = set()                               # pages of other standards: their sections too
     for k, e in enumerate(found):
-        if not versions.in_standard(versions.entry_marks(e.text, lang), y):
+        page = e.location.split("#")[0]
+        if page in out:
             continue
         m = later.match(e.title)
-        if m and (versions.standard_year(lang + m.group(1)) or 0) > y:
+        if not versions.in_standard(versions.entry_marks(e.text, lang), y) or (
+                m and (versions.standard_year(lang + m.group(1)) or 0) > y):
+            if "#" not in e.location:
+                out.add(page)
             continue
         e.text, e.source = versions.standard_text(e.text, lang, y), sid
         keep.append(k)

@@ -70,3 +70,4 @@ jobs:
           uv run python tests/crawl.py
           uv run python tests/source.py
           uv run python tests/versions.py
+          uv run python tests/organize.py

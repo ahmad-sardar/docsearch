@@ -142,6 +142,10 @@ kbd {
 .r .sum { color: var(--soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .r:hover .sum, .r[aria-selected="true"] .sum { white-space: normal; }
 .more { text-align: center; color: var(--faint); font-size: 13px; padding: 10px; }
+.group { position: sticky; top: 0; z-index: 1; padding: 8px 14px 6px; background: var(--bg); color: var(--soft);
+         font: 600 12px var(--font); letter-spacing: .04em; text-transform: uppercase; border-bottom: 1px solid var(--border); }
+.r .purpose { flex: none; font-size: 12px; color: var(--tip); }      /* learn, do, understand */
+.r .purpose.understand { color: var(--seealso); }
 
 /* ---- the document ------------------------------------------------------------- */
 .doc-pane { background: var(--panel); scroll-padding-top: 16px; }
@@ -309,6 +313,16 @@ div.highlight:hover .copy-btn, dt.sig:hover .copy-btn, .copy-btn:focus { opacity
 .welcome .lead { color: var(--soft); font-size: 17px; margin: 0 0 24px; }
 .welcome table { display: table; }
 .welcome td:first-child { white-space: nowrap; }
+.welcome h2 { font: 650 20px var(--font); margin: 32px 0 8px; }
+.contents .package h2 { border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+.contents h3 { font: 600 15px var(--font); margin: 18px 0 6px; }
+.contents .count { color: var(--faint); font-weight: 400; font-size: 13px; }
+.contents ul { list-style: none; margin: 0; padding: 0; }
+.contents ul ul { padding: 2px 0 6px 18px; columns: 2 16em; column-gap: 24px; }
+.contents li { margin: 2px 0; break-inside: avoid; }
+.contents summary { cursor: pointer; }
+.contents a { text-decoration: none; }
+.contents a:hover { text-decoration: underline; }
 .toast {
   position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 20px); opacity: 0;
   background: var(--text); color: var(--panel); font-size: 14px; padding: 7px 16px;

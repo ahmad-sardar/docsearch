@@ -19,9 +19,11 @@ The result is cached next to the index (order.npy) and rebuilt when the entries 
 """
 from __future__ import annotations
 
+import html
 import re
 import urllib.parse
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 
@@ -29,6 +31,7 @@ from docsearch import cli
 from docsearch import pages as offline
 
 ID = re.compile(r'\sid="([^"]+)"')
+H1 = re.compile(r"<h1\b[^>]*>(.*?)</h1>", re.S | re.I)
 TOC_CLASSES = ("toctree-wrapper", "autosummary")
 
 
@@ -146,17 +149,28 @@ def fetch_nav(meta: dict) -> list[str]:
     return out
 
 
-def page_order(sid: str, meta: dict) -> tuple[list[str], dict[str, dict[str, int]]]:
-    """(stored pages in reading order, each page's anchors and their positions)."""
+class Contents(NamedTuple):
+    order: list[str]                     # stored pages in reading order
+    anchors: dict[str, dict[str, int]]   # each page's anchors and their positions
+    parent: dict[str, str | None]        # the page whose contents list it (None: a start)
+    title: dict[str, str]                # its first heading
+
+
+def page_order(sid: str, meta: dict) -> Contents:
+    """The docs' contents, as their pages list each other (see above)."""
     pages_dir = cli.HOME / sid / "pages"
     root = meta.get("root", "")
     stored = set(stored_pages(pages_dir))
     found: dict[str, dict[str, int]] = {}
+    title: dict[str, str] = {}
 
     def text(rel: str) -> str:
-        """A page, read once: its anchors are kept, not its HTML (a big site's is gigabytes)."""
+        """A page, read once: its anchors and heading are kept, not its HTML (a big site's
+        is gigabytes)."""
         page = offline.load_page(pages_dir, rel) or ""
         found[rel] = {m.group(1): m.start() for m in ID.finditer(page)}
+        h1 = H1.search(page)
+        title[rel] = " ".join(html.unescape(re.sub(r"<[^>]+>", "", h1.group(1))).split()) if h1 else ""
         return page
 
     def find(rel: str | None) -> str | None:
@@ -182,16 +196,18 @@ def page_order(sid: str, meta: dict) -> tuple[list[str], dict[str, dict[str, int
 
     order: list[str] = []
     seen: set[str] = set()
+    parent: dict[str, str | None] = {}
 
     def walk(start: str) -> None:
-        stack = [start]
+        stack: list[tuple[str, str | None]] = [(start, None)]
         while stack:
-            rel = stack.pop()
+            rel, up = stack.pop()
             if rel in seen or rel not in stored:
                 continue
             seen.add(rel)
             order.append(rel)
-            stack += reversed([c for c in children(rel) if c not in seen])
+            parent[rel] = up
+            stack += reversed([(c, rel) for c in children(rel) if c not in seen])
 
     for s in seeds(meta):
         if find(s):
@@ -199,7 +215,7 @@ def page_order(sid: str, meta: dict) -> tuple[list[str], dict[str, dict[str, int
     for rel in sorted(stored - seen, key=lambda r: (r.count("/"), natural(r))):
         walk(rel)
     anchors = {rel: found[rel] for rel in order}           # (each page in the order was read)
-    return order, anchors
+    return Contents(order, anchors, parent, title)
 
 
 def reading_order(sid: str, count: int | None = None) -> np.ndarray:
@@ -213,7 +229,7 @@ def reading_order(sid: str, count: int | None = None) -> np.ndarray:
             return cached
     meta = cli.load_meta(sid)
     locations = [e.location for e in cli.iter_entries(sid, keep=1)]     # (their addresses only)
-    order, anchors = page_order(sid, meta)
+    order, anchors, _, _ = page_order(sid, meta)
     rank = {rel: k for k, rel in enumerate(order)}
     root = meta.get("root", "")
     others = sorted({r for loc in locations if (r := rel_of(loc, root) or loc) not in rank}, key=natural)

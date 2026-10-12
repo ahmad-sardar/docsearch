@@ -116,6 +116,7 @@ class Entry:
     location: str   # URL, or "man git-commit"
     text: str       # Markdown shown in the preview, also the input to the model
     source: str     # the source name the user typed, e.g. "numpy"
+    purpose: str = ""   # learn, do, lookup, understand (organize.py); "" before docs were organized
 
 
 def die(msg: str) -> None:
@@ -1072,8 +1073,16 @@ def build_sphinx(name: str, root: str, inv: bytes | None, workers: int, max_page
     for o in best.values():
         page, _, anchor = o["uri"].partition("#")
         pages.setdefault(page, []).append((o, anchor))
+    from docsearch import organize                       # release notes, contributing: not read
+    titles = {o["uri"].partition("#")[0]: o["disp"] for o in objs if o["role"] == "doc"}
+    api_pages = {p for p, items in pages.items() if any(o["role"] not in ("doc", "label") for o, _ in items)}
+    unread = organize.unread(titles, api_pages, {name.lower(), project.lower()} - {""})
+    best = {u: o for u, o in best.items() if u.partition("#")[0] not in unread}
+    for p in unread:
+        pages.pop(p, None)
     page_list = list(pages)[:max_pages] if max_pages and folder is None else list(pages)
-    say(f"  {project} {version}".rstrip() + f": {len(best)} documented objects on {len(page_list)} pages")
+    say(f"  {project} {version}".rstrip() + f": {len(best)} documented objects on {len(page_list)} pages"
+        + (f" ({len(unread)} pages about the project left out: release notes, contributing...)" if unread else ""))
     if len(page_list) > 1500 and not (folder is not None and (folder / "state.json").exists()):
         say("  This is a large site. The first download can take several minutes.")
     page_list = [p for p in page_list if same_site(root, urllib.parse.urljoin(root, p))]
@@ -1094,7 +1103,7 @@ def build_sphinx(name: str, root: str, inv: bytes | None, workers: int, max_page
     entries, partial, images = read_listed(page_list, urls, fetch, cut, workers, fails, store, folder,
                                            max_pages, name)
     extra = {"project": project, "version": version, "failed_pages": len(fails),
-             "failures": fails.as_meta(), "pages": True}
+             "failures": fails.as_meta(), "pages": True, "unread": sorted(urllib.parse.urljoin(root, p) for p in unread)}
     if fails:
         fails.report()
     if partial:
@@ -2084,7 +2093,8 @@ def load_meta(sid: str) -> dict:
 def iter_entries(sid: str, keep: int | None = None):
     for e in read_entries(source_dir(sid) / "entries.json"):
         yield Entry(clean(e["title"]), clean(e["kind"]), clean(e["location"]),
-                    clean(e["text"])[:keep] if keep else clean(e["text"]), clean(e["source"]))
+                    clean(e["text"])[:keep] if keep else clean(e["text"]), clean(e["source"]),
+                    e.get("purpose", ""))
 
 
 # --------------------------------------------------------------------------- embeddings
@@ -2934,6 +2944,7 @@ def build_known(name: str, sid: str, plan: dict, workers: int, max_pages: int | 
         entries += found
         say(f"  {kind}: {len(found)} entries")
         meta["failed_pages"] = meta.get("failed_pages", 0) + extra.get("failed_pages", 0)
+        meta["unread"] = meta.get("unread", []) + extra.get("unread", [])    # (pages about the project)
         for key, v in (extra.get("failures") or {}).items():         # the causes, over all parts
             have = meta.setdefault("failures", {}).setdefault(key, {"count": 0, "example": v["example"]})
             have["count"] += v["count"]
@@ -3230,6 +3241,9 @@ def add_each(args, outer: str) -> None:
         if str(meta.get("root", "")).startswith("http") and meta.get("kind") not in ("local", "readme"):
             from docsearch import order
             meta["nav"] = order.fetch_nav(meta)        # the docs' sidebar: their reading order
+        from docsearch import organize
+        entries, _ = organize.organize(sid, entries, meta)   # learn, do, look up, understand
+        meta["count"] = len(entries)
         save(sid, entries, meta)
         say(f"  saved {len(entries)} entries in {time.time() - t0:.0f} s")
         entries = []                               # (a big site's whole texts: not needed from here on)
@@ -3570,6 +3584,14 @@ def cmd_list(args) -> None:
                   f"{vec:<14} {m.get('root', '')}   (indexed {m.get('created', '?')}){marks.get(d.name, '')}")
 
 
+def copy_repo(meta: dict) -> str:
+    """Where a copy's source code is: as found when it was added; for docs we know, their
+    profile; else the repository their entries' source links name."""
+    from docsearch import sources
+    plan = sources.KNOWN.get(meta.get("name", "")) if meta.get("kind") == "known" else None
+    return meta.get("repo") or (plan or {}).get("repo") or (meta.get("source") or {}).get("repo") or ""
+
+
 def choose_copy(name: str) -> None:
     """search list NAME: a package's copies; at a terminal, choose the one search uses."""
     group = (folder_name(name) or name).split("@")[0]
@@ -3579,8 +3601,17 @@ def choose_copy(name: str) -> None:
         return
     now, _ = in_use(group)
     print(f"{group}:")
+    from docsearch import organize
     for k, sid in enumerate(have, 1):
         print(f"  {k}) {copy_text(sid)}{'   <- search uses this' if sid == now and len(have) > 1 else ''}")
+        meta = load_meta(sid)
+        n = organize.counts(sid)
+        if any(n.values()):                          # what its docs are for (organize.py)
+            left = (meta.get("left_out") or {}).get("pages", 0)
+            print("       " + " · ".join(f"{organize.PURPOSES[p].lower()} {c:,}" for p, c in n.items() if c)
+                  + (f"   ({left} pages about the project left out)" if left else ""))
+        if copy_repo(meta):
+            print(f"       source code: {copy_repo(meta)}")
     if len(have) == 1:
         return
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
@@ -4220,6 +4251,8 @@ def cmd_save(args) -> None:
     kept = [e for e in old if e.location.split("#")[0] not in set(pages)]
     meta.update(urls=list(dict.fromkeys(meta.get("urls", []) + pages)), updated=now, count=len(kept) + len(new))
     meta["nav"] = meta["urls"]                       # read in the order you saved them
+    from docsearch import organize
+    organize.organize(sid, new, meta)                # (each saved page: to learn from, unless it says)
     save(sid, kept + new, meta)
     make_search_caches(sid)
     for e in new:
@@ -4609,8 +4642,9 @@ def main(argv: list[str] | None = None) -> None:
                 stream.reconfigure(encoding="utf-8", errors="replace")
     if not (argv or sys.argv[1:])[:1] == ["serve"]:
         migrate_copies()                    # docs from before copies were kept by version: once
-        from docsearch import standards
+        from docsearch import organize, standards
         standards.migrate()                 # cppreference: one copy per standard (once)
+        organize.migrate()                  # docs by purpose: learn, do, look up, understand (once)
     p = argparse.ArgumentParser(prog="search", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)

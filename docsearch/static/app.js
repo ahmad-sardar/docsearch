@@ -50,7 +50,7 @@ async function init() {
   renderSources();
   renderChoose();
   bindEvents();
-  await search({ openFirst: !p.get("id") && !p.get("page") });
+  await search({ openFirst: !!state.q && !p.get("id") && !p.get("page") });
   if (p.get("page")) openPage(p.get("page"), p.get("at"), false);
   else if (p.get("id")) openEntry(+p.get("id"), false);
   else if (!state.q) showHome();
@@ -71,7 +71,7 @@ function renderSources() {
     b.addEventListener("click", () => {
       state.srcs.has(group) ? state.srcs.delete(group) : state.srcs.add(group);
       renderSources();
-      search({ openFirst: !!state.q });
+      search({ openFirst: !!state.q }).then(homeAgain);
     });
     if (versions.length > 1) {                       // choose the version to search
       const sel = el("select", "ver");
@@ -89,7 +89,7 @@ function renderSources() {
       sel.addEventListener("change", () => {
         state.active[group] = sel.value;
         renderSources();
-        search({ openFirst: !!state.q });
+        search({ openFirst: !!state.q }).then(homeAgain);
       });
       b.append(sel);
     } else if (active.version) {
@@ -186,10 +186,18 @@ function setAI(on) {
 
 function status(text) { $("#status").textContent = text; }
 
+// What an entry is for (organize.py): before you type, the list goes package by package,
+// each in this order, each in the order its docs are read.
+const PURPOSE = { learn: "Learn", do: "Do", lookup: "Look up", understand: "Understand" };
+
 function renderResults(items, start) {
   const ol = $("#results");
   $(".more", ol)?.remove();
   items.forEach((it, k) => {
+    const prev = state.items[start + k - 1];
+    if (!state.q && PURPOSE[it.purpose] && (!prev || prev.purpose !== it.purpose || prev.source !== it.source)) {
+      ol.append(el("li", "group", `${PURPOSE[it.purpose]} · ${sourceLabel(it.source)}`));
+    }
     const li = el("li", "r");
     li.setAttribute("role", "option");
     li.dataset.n = start + k;
@@ -202,6 +210,9 @@ function renderResults(items, start) {
     li.append(name);
     const meta = el("div", "meta");
     meta.append(el("span", "kind", it.kind));
+    if (state.q && it.purpose && it.purpose !== "lookup" && PURPOSE[it.purpose]) {
+      meta.append(el("span", `purpose ${it.purpose}`, PURPOSE[it.purpose]));
+    }
     const mark = versionMark(it);
     if (mark) meta.append(mark);
     if (state.sources.length > 1 && !state.srcs.size) meta.append(el("span", "src", sourceLabel(it.source)));
@@ -267,6 +278,7 @@ async function openEntry(id, push = true) {
   const proj = state.proj ? `?${new URLSearchParams({ proj: state.proj })}` : "";
   try { d = await getJSON(`/api/entry/${id}${proj}`, ctl); } catch (e) { if (e.name !== "AbortError") toast(e.message); return; }
   state.view = { type: "entry", id };
+  state.entry = d;
   renderDoc({
     crumbs: d.api && d.name.includes(".") ? d.name.split(".").slice(0, -1) : [d.source],
     title: d.api ? d.name.split(".").pop() : d.name, kind: d.kind,
@@ -443,6 +455,8 @@ function buildToc(root) {
   }
 }
 
+// Before you type: each package's docs as docsearch organizes them (learn, do, look up,
+// understand), each part as its docs' contents list it, then how to search.
 function showHome() {
   state.view = { type: "home" };
   const doc = $("#doc");
@@ -450,18 +464,75 @@ function showHome() {
   const w = el("div", "welcome content");
   w.append(el("h1", null, "Search your documentation"));
   w.append(el("p", "lead", "Type a name, a few letters in order, or describe what you want. Everything here works offline."));
+  const contents = el("div", "contents");
+  w.append(contents);
+  w.append(el("h2", null, "How to search"));
   const t = el("table");
   const rows = [["np.sum, svd, nn.Linear", "an API name (aliases like np, pd work)"], ["lnsvd", "letters in order: numpy.linalg.svd"],
                 ["sum of elements along an axis", "a description: search by meaning"], ["↑ ↓", "move through the results"],
                 ["Enter", "the full page (offline copy)"], ["Esc", "back, then clear the search"],
                 ["/", "jump to the search box"], ["w", "wrap or scroll long code lines"],
-                ["c", "copy the name of the current entry"]];
+                ["c", "copy the name of the current entry"], ["s", "the source code of the current entry"]];
   for (const [k, v] of rows) { const tr = el("tr"); tr.append(el("td", null, k), el("td", null, v)); t.append(tr); }
   w.append(t);
-  const p = el("p", null, "Packages: " + state.sources.map((s) => `${s.name} ${s.version} (${s.count})`).join(" · "));
-  w.append(p);
   doc.append(w);
   $("#toc").textContent = "";
+  showContents(contents);
+}
+
+// The home view again, for the packages now chosen (it lists their contents).
+function homeAgain() { if (!state.q && state.view?.type === "home") showHome(); }
+
+async function showContents(box) {
+  const view = state.view;
+  let data;
+  try { data = await getJSON(`/api/contents?${new URLSearchParams({ src: searchedSources().join(",") })}`); } catch (_) { return; }
+  if (state.view !== view) return;               // (another view, or the home view again, since)
+  const toc = $("#toc");
+  if (data.sources.length > 1) toc.append(el("h2", null, "Packages"));
+  for (const s of data.sources) {
+    const sec = el("section", "package");
+    sec.id = `contents-${s.id}`;
+    sec.append(el("h2", null, `${s.name} ${s.version}`.trim()));
+    for (const g of s.groups) {
+      const col = el("div", `purpose-group ${g.purpose}`);
+      const h = el("h3", null, g.label);
+      h.append(el("span", "count", ` ${g.count.toLocaleString()} entries`));
+      col.append(h);
+      const ul = el("ul", "parts");
+      for (const part of g.parts) {
+        const li = el("li");
+        if (part.pages.length) {
+          const det = el("details");
+          det.open = part.pages.length <= 12;
+          const sum = el("summary");
+          sum.append(pageLink(part.title, part.path), el("span", "count", ` ${part.pages.length + part.more}`));
+          det.append(sum);
+          const sub = el("ul");
+          for (const pg of part.pages) { const x = el("li"); x.append(pageLink(pg.title, pg.path)); sub.append(x); }
+          if (part.more) sub.append(el("li", "count", `and ${part.more} more`));
+          det.append(sub);
+          li.append(det);
+        } else li.append(pageLink(part.title, part.path));
+        ul.append(li);
+      }
+      col.append(ul);
+      sec.append(col);
+    }
+    box.append(sec);
+    if (data.sources.length > 1) {
+      const a = el("a", null, `${s.name} ${s.version}`.trim());
+      a.href = `#contents-${s.id}`;
+      a.addEventListener("click", (ev) => { ev.preventDefault(); sec.scrollIntoView({ block: "start", behavior: "smooth" }); });
+      toc.append(a);
+    }
+  }
+}
+
+function pageLink(title, path) {
+  const a = el("a", null, title);
+  a.href = `/?${new URLSearchParams({ page: path })}`;      // (the docs' click handler opens it here)
+  return a;
 }
 
 function showEmpty() {
@@ -637,7 +708,10 @@ function bindEvents() {
     } else if (!inInput && ev.key === "c" && state.view?.type === "entry") {
       $$(".actions button").find((b) => b.textContent === "Copy name")?.click();
     } else if (!inInput && ev.key === "s" && state.view?.type === "entry") {
-      $$(".actions button").find((b) => b.dataset.source)?.click();
+      const b = $$(".actions button").find((x) => x.dataset.source);
+      if (b) b.click();
+      else toast(state.entry?.code ? "Its source code was not stored with these docs (search upgrade NAME --force stores it)"
+                                   : "These docs link no source code for this entry");
     } else if (ev.key === "PageDown" || ev.key === "PageUp") {
       ev.preventDefault();
       const pane = $("#doc-pane");

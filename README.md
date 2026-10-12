@@ -117,8 +117,29 @@ in the page:
 | s | the source code it documents (when its docs link to it) |
 | ⌘↩ / ctrl+enter | rank this search with ai, once |
 
-before you type anything, the list shows the docs in reading order, like a table of
-contents.
+before you type anything, the page shows each package's docs organized by what you read
+them for (next section), and the list goes through them in reading order.
+
+### organized by what you read them for
+
+official docs mix everything together. docsearch sorts every entry into one of four, using
+only the docs' own words (a page's title, or the part of their table of contents it's in):
+
+- **learn**: tutorials, getting started, quickstarts (the python tutorial, numpy quickstart)
+- **do**: how-tos, user guides, faqs, installing (python howtos, pandas user guide)
+- **look up**: the reference, every function and class (numpy reference, the standard library)
+- **understand**: fundamentals, concepts, internals (numpy fundamentals)
+
+the page's home shows each package that way: each part (as its docs name it) with the pages
+under it. results say what they're for. `search list numpy` counts them.
+
+pages about the project, not about using it, are left out: release notes, what's new,
+contributing and development, building from source, the license (pandas: 2,495 release-note
+entries). sphinx docs skip them before downloading. and parts listed apart from the entry
+that already holds them are folded into it: cppreference's "parameters", "return value",
+"see also" sections (in the c++ docs, 6 of every 10 entries were these), a section that
+repeats its page's title, numpy.sum's page next to numpy.sum. docs you added before are
+organized once, the next time you run `search`, with nothing downloaded.
 
 ### search tricks
 

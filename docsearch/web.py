@@ -83,6 +83,7 @@ class Library:
         self.lock = threading.Lock()                 # one search at a time (the model), one load
         self.order: list[str] = []                   # the copies loaded, in the order they came
         self._browse_pos: tuple = (None, {})         # (index, entry -> place in index.browse)
+        self._browse: tuple = (None, [])             # ((index, packages), the list before you type)
         self.summaries: dict[int, str] = {}
         self._covers: dict[str, dict] = {}          # copy -> what it describes
         self._marks: dict[int, dict] = {}           # entry -> its version marks
@@ -132,10 +133,7 @@ class Library:
     def repo(self, sid: str) -> str:
         """Where a docs' source code is: as found when they were added; for docs we know, their
         profile; else the repository their entries' source links name."""
-        from docsearch import sources
-        m = self.meta[sid]
-        plan = sources.KNOWN.get(m.get("name", "")) if m.get("kind") == "known" else None
-        return m.get("repo") or (plan or {}).get("repo") or (m.get("source") or {}).get("repo") or ""
+        return cli.copy_repo(self.meta[sid])
 
     def covers(self, sid: str) -> dict[str, str]:
         """What a copy describes (versions.covers): kept, it is asked once."""
@@ -180,7 +178,7 @@ class Library:
         else:                                        # a page's snippet is the query's: made each time
             text = cli.snippet(e, q)
         return {"id": i, "name": cli.api_name(e.title) if is_api else e.title, "kind": e.kind,
-                "source": self.sid_of[i], "api": is_api, "summary": text,
+                "source": self.sid_of[i], "api": is_api, "summary": text, "purpose": e.purpose,
                 **self.versioned(i, self.sid_of[i], project)}
 
     def search(self, q: str, srcs: set[str], offset: int, limit: int, ai: bool = False,
@@ -192,8 +190,8 @@ class Library:
             index, sid_of = self.index, self.sid_of     # this search's, even if another loads more
         rest, phrases, patterns = cli.parse_strict(q)
         plain_q = " ".join([rest] + phrases).strip()     # what ranks the results (and the AI reads)
-        if not q:                                    # no query: all the docs, in reading order
-            ids = [i for i in index.browse if not srcs or sid_of[i] in srcs]
+        if not q:                                    # no query: all the docs, each package by purpose
+            ids = self.browse(index, sid_of, srcs)   # (learn, do, look up, understand), in reading order
         elif phrases or patterns:                    # strict: every match, the best first
             with self.lock:
                 try:
@@ -228,6 +226,38 @@ class Library:
             fixed = index.correction(plain_q) if plain_q else None
         return {"q": q, "total": len(ids), "ai": state, "corrected": fixed,
                 "items": [self.item(i, q, project) for i in ids[offset:offset + limit]]}
+
+    def browse(self, index, sid_of: list[str], srcs: set[str]) -> list[int]:
+        """The entries listed before you type: each package's learn, do, look up and understand
+        entries, each in the order the docs are read (organize.py, order.py)."""
+        from docsearch import organize
+        key = (index, frozenset(srcs))
+        if self._browse[0] != key:                   # (made once: scrolling asks again and again)
+            rank = {p: k for k, p in enumerate(organize.PURPOSES)}
+            where = {sid: k for k, (_, sid) in enumerate(index.spans)}
+            ids = [i for i in index.browse if not srcs or sid_of[i] in srcs]
+            self._browse = (key, sorted(ids, key=lambda i: (where[sid_of[i]],
+                                                            rank.get(index.entries[i].purpose, len(rank)))))
+        return self._browse[1]
+
+    def contents(self, srcs: set[str]) -> list[dict]:
+        """Each package's table of contents by purpose (organize.contents), with how many of
+        its entries each purpose has."""
+        from docsearch import organize
+        srcs = srcs or self.default
+        with self.lock:
+            self.ensure(srcs)
+        have: dict[tuple[str, str], int] = {}
+        for i, e in enumerate(self.index.entries):
+            have[self.sid_of[i], e.purpose] = have.get((self.sid_of[i], e.purpose), 0) + 1
+        out = []
+        for sid in [s for s in self.order if s in srcs]:
+            groups = organize.contents(sid)
+            for g in groups:
+                g["count"] = have.get((sid, g["purpose"]), 0)
+            out.append({"id": sid, "name": self.meta[sid].get("name", sid), "version": self.label(sid),
+                        "groups": groups})
+        return out
 
     def rerank_text(self, i: int) -> str:
         e = self.index.entries[i]
@@ -521,6 +551,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not 0 <= i < len(lib.index.entries):
                     return self.json({"error": "no such entry"}, 404)
                 return self.json(lib.entry(i, project_of(qs.get("proj", ""))))
+            if url.path == "/api/contents":
+                return self.json({"sources": lib.contents({s for s in qs.get("src", "").split(",") if s})})
             if url.path == "/api/page":
                 data = lib.page(qs.get("path", ""))
                 return self.json(data) if data else self.json({"error": "page not stored"}, 404)

@@ -1,0 +1,446 @@
+"""Docs organized by what you read them for: learn, do, look up, understand.
+
+Every entry gets a purpose, from the docs' own words, never guessed from its text:
+- learn: tutorials, getting started, quickstarts (Python's tutorial, NumPy quickstart)
+- do: how-tos, user guides, FAQs, installing (NumPy how-tos, pandas' user guide)
+- look up: the reference, every API object (NumPy reference, the Python Standard Library)
+- understand: fundamentals, concepts, internals (NumPy fundamentals)
+
+A page's purpose is the nearest label of its own: its own title, else the title of the page
+whose contents list it, and so on up the docs' table of contents (order.page_order). A page
+no contents list is under its folder's index page (reference/ under reference/index.html),
+and else named by its folder (tutorial/, howto/, reference/). API objects are look up.
+
+Pages about the project, not about using it, are removed: release notes, what's new,
+development and contributing, building from source, the license. A page is removed when it
+or a page above it in the contents says so ("Contributing to NumPy" and all its pages).
+
+Parts listed apart from the entry that already holds them are folded into it:
+cppreference's "Parameters", "Return value", "See also"... sections (each is in its page's
+entry, word for word); a Sphinx section that only repeats its page's title; a page that only
+repeats its API object (numpy.sum's page, numpy.sum).
+"""
+from __future__ import annotations
+
+import json
+import re
+from typing import NamedTuple
+
+from docsearch import cli
+from docsearch import pages as offline
+
+VERSION = 1                       # meta["organized"]: the rules a copy was organized with
+PURPOSES = {"learn": "Learn", "do": "Do", "lookup": "Look up", "understand": "Understand"}
+
+# The sites' own names for their parts, on a title made plain (lower case, without the
+# project's name: "NumPy reference" -> "reference"), each matched as the whole title. A page
+# that starts a part (its contents list other pages, or nothing lists it) is named by PARTS
+# too: "F2PY reference manual", "Python HOWTOs"; any other page only by LABELS, whose words
+# say what a page is wherever it is ("Logging HOWTO", "Argparse Tutorial"), not what it is
+# about ("imp — Access the import internals", "doctest — Test interactive Python examples").
+LABELS = [
+    ("removed", r"(.* )?release notes?( .*)?|(.* )?(what'?s|what is) new( in( .*)?)?|whatsnew|change ?log( .*)?|"
+                r"release history|contributing( .*)?|(.* )?contributor'?s? guide|how to contribute( .*)?|"
+                r"code of conduct|(.* )?licen[cs]e|copyright|history and licen[cs]e|"
+                r"about( this| these)? (documents?|documentation|docs)|dealing with bugs|reporting bugs|"
+                r"search( page)?|download( .*)? documentation|improve( a| this)? documentation( page)?"),
+    ("learn", r"(.* )?tutorials?|getting started( .*)?|quick ?start( guide)?|absolute basics( .*)?|"
+              r"(\d+ )?minutes to( .*)?|first steps( .*)?"),
+    ("do", r"(.* )?how-?tos?|(.* )?howtos?|(.* )?cookbook|(.* )?faqs?|(.* )?frequently asked questions|"
+           r"installing( .*)?|installation( .*)?|(.* )?migration guide|setup and usage"),
+    ("lookup", r"glossary|(.* )?index"),
+    ("understand", r"fundamentals|(key |core |basic )?concepts|internals|under[- ]the[- ]hood( .*)?|"
+                   r"explanations?|background|overview|architecture|philosophy|what is .*"),
+]
+PARTS = [
+    ("removed", r"changes|history|news|development|developers?|governance( .*)?|roadmap|"
+                r"building( .*)? from source|build(ing)? from source( .*)?"),
+    ("learn", r"(.* )?tutorials?( .*)?|(.* )?quick ?start( guide)?|(.* )?for (absolute )?beginners|"
+              r"(.* )?tour( of .*)?|learn( .*)?"),
+    ("do", r"(.* )?how-?tos?( .*)?|(.* )?howtos?( .*)?|how to .*|(.* )?user'?s? guide( .*)?|(.* )?recipes|"
+           r"install( .*)?|migrating( .*)?|porting( .*)?|(.* )?examples|(.* )?gallery|(.* )?guides?"),
+    ("lookup", r"(.* )?reference( manual| guide)?|(.* )?api( reference| documentation| docs)?|"
+               r"(.* )?standard library|(.* )?module index"),
+    ("understand", r"(.* )?fundamentals|(.* )?internals|(.* )?concepts|design( .*)?"),
+]
+LABEL_RE = {p: re.compile(rx) for p, rx in LABELS}
+PART_RE = {p: re.compile(rx) for p, rx in PARTS}
+ORDER = ("removed", "learn", "do", "lookup", "understand")      # (the first that matches)
+
+# A part's folder, where nothing above it says (the first folder of its address)
+FOLDERS = {
+    "learn": {"tutorial", "tutorials", "getting_started", "getting-started", "quickstart", "learn"},
+    "do": {"howto", "howtos", "how-to", "how_to", "user_guide", "user-guide", "userguide", "user", "guide",
+           "guides", "faq", "using", "installing", "install", "installation", "distributing", "extending",
+           "examples", "cookbook"},
+    "lookup": {"reference", "api", "library", "c-api", "capi", "builtins", "std", "ref", "generated", "cpp", "c"},
+    "understand": {"concepts", "explanation", "explanations", "background", "internals"},
+    "removed": {"whatsnew", "whats-new", "release", "releases", "changelog", "changes", "dev", "development",
+                "contributing", "contribute", "building"},
+}
+FOLDER_OF = {f: p for p, fs in FOLDERS.items() for f in fs}
+
+# Sections of an entry that only part it (cppreference's API pages, and others like them)
+SUBPARTS = {"parameters", "return value", "return values", "returns", "exceptions", "complexity", "notes",
+            "note", "defect reports", "see also", "references", "external links", "template parameters",
+            "member types", "member functions", "non-member functions", "data members", "member constants",
+            "member objects", "nested types", "nested classes", "helper classes", "helper types",
+            "helper variable template", "helper variable templates", "helper templates", "helper concepts",
+            "deduction guides", "specializations", "protected member functions", "public member functions",
+            "member variables", "types", "constants", "functions", "classes", "macros", "macro constants",
+            "objects", "keywords", "includes", "type requirements", "requirements", "error handling"}
+
+
+RELEASES = re.compile(r"(.* )?release notes?( .*)?|(.* )?(what'?s|what is) new( in( .*)?)?|whatsnew|change ?log( .*)?|"
+                      r"release history")
+
+
+def unread(titles: dict[str, str], api_pages: set[str], names: set[str]) -> set[str]:
+    """Pages of a Sphinx site not worth downloading, known from its inventory alone (their
+    titles): a page whose own title says it is about the project (release notes,
+    contributing), and every page in a folder whose index page is release notes (pandas'
+    whatsnew/: 120 pages). What else the contents put under such pages is left out after the
+    download (page_purposes). Pages that document API objects are always read."""
+    releases = {page.rsplit("/", 1)[0] + "/" for page, t in titles.items()
+                if page.endswith("/index.html") and RELEASES.fullmatch(plain_title(t, names))}
+    out = set()
+    for page in set(titles) | {p for f in releases for p in titles if p.startswith(f)}:
+        if page in api_pages:
+            continue
+        part = page.endswith("index.html")             # (a folder's first page starts a part)
+        if label_of(titles.get(page, ""), names, part) == "removed" or any(page.startswith(f) for f in releases):
+            out.add(page)
+    return out
+
+
+def plain_title(title: str, names: set[str]) -> str:
+    """A title as LABELS reads it: "NumPy 2.5.0 Release Notes" -> "2.5.0 release notes"."""
+    t = re.sub(r" \((page|section)\)$", "", title).lower().replace("’", "'")
+    t = re.sub(r"[^\w\s'+./-]", " ", t)
+    words = [w for w in t.split() if w not in names and w not in ("the", "a", "an")]
+    return " ".join(words)
+
+
+def label_of(title: str, names: set[str], part: bool = True) -> str | None:
+    """What a title says a page is: "removed", a purpose, or None. `part`: the page starts
+    a part of the docs (PARTS name it too)."""
+    t = plain_title(title, names)
+    if not t:
+        return None
+    return next((p for p in ORDER if LABEL_RE[p].fullmatch(t) or (part and PART_RE[p].fullmatch(t))), None)
+
+
+def names_of(meta: dict) -> set[str]:
+    """The project's name as its titles write it: numpy; C++ (cpp); python."""
+    from docsearch import sources
+    name = str(meta.get("name") or "").lower()
+    out = {name, name.replace("-", " ")}
+    known = sources.KNOWN.get(name) or {}
+    if known.get("standards"):
+        out.add(known["standards"].lower())
+    project = str(meta.get("project") or "").lower()
+    if project:
+        out.add(project)
+    return {n for n in out if n}
+
+
+def page_of(location: str, root: str, stored: set[str]) -> str | None:
+    """The stored page an entry is on (as order.page_order names it)."""
+    from docsearch import order
+    rel = order.rel_of(location, root)
+    if rel is None:
+        return None
+    for c in (rel, rel + "/index.html", rel + ".html"):
+        if c in stored:
+            return c
+    return rel
+
+
+class Pages(NamedTuple):
+    order: list[str]                 # the pages in reading order (order.page_order)
+    purpose: dict[str, str]          # each page's purpose, or "removed"
+    anchor: dict[str, str | None]    # the page whose title gave it (None: its folder, or none)
+    up: dict[str, str | None]        # the page above it (in the contents, else by its address)
+    parent: dict[str, str | None]    # the page whose contents list it
+    title: dict[str, str]
+
+
+def classify(sid: str, meta: dict, entries: list[cli.Entry]) -> Pages:
+    """Each page's purpose (see above), and where it comes from."""
+    from docsearch import order
+    root = meta.get("root", "")
+    contents = order.page_order(sid, meta) if root.startswith("http") else order.Contents([], {}, {}, {})
+    stored = set(contents.order)
+    names = names_of(meta)
+    title: dict[str, str] = dict(contents.title)
+    named: set[str] = set()                      # API pages: their titles are names, not labels
+    for e in entries:
+        if "#" in e.location:
+            continue
+        rel = page_of(e.location, root, stored)
+        if rel and e.kind not in cli.PAGE_KINDS and e.kind not in ("tutorial", "module"):
+            named.add(rel)
+        elif rel and not title.get(rel):         # (a page whose heading is outside what is kept)
+            title[rel] = re.sub(r" \(page\)$", "", e.title)
+    pages = set(title) | {p for e in entries if (p := page_of(e.location, root, stored))}
+    lists = {u for u in contents.parent.values() if u is not None}
+    unread = {p for u in meta.get("unread") or [] if (p := page_of(u, root, stored))}   # (not downloaded:
+    unread -= pages                                                   # about the project, organize.unread)
+
+    def above(rel: str) -> str | None:
+        """The nearest page above a page by its address: its folder's index page (Sphinx:
+        reference/index.html), or the page named as its folder (cppreference: c/keyword for
+        c/keyword/alignas)."""
+        parts = rel.split("/")
+        for k in range(len(parts) - 1, 0, -1):
+            folder = "/".join(parts[:k])
+            for c in (folder + "/index.html", folder + ".html", folder):
+                if c != rel and (c in pages or c in unread):
+                    return c
+        return None
+
+    up: dict[str, str | None] = {r: contents.parent.get(r) or above(r) for r in pages}
+    label = {r: None if r in named else label_of(title.get(r, ""), names, r in lists or contents.parent.get(r) is None)
+             for r in pages}
+    label.update({r: "removed" for r in unread})
+    purpose: dict[str, str] = {}
+    anchor: dict[str, str | None] = {}
+    for rel in pages:
+        cur, seen, said = rel, set(), []
+        while cur is not None and cur not in seen:   # the page, then the pages above it
+            seen.add(cur)
+            said.append(cur)
+            cur = up.get(cur)
+        if any(label.get(r) == "removed" for r in said):
+            purpose[rel], anchor[rel] = "removed", None
+            continue
+        at = next((r for r in said if label.get(r)), None)
+        if at is not None:
+            purpose[rel], anchor[rel] = label[at], at
+        else:                                    # named by its folder: the part is the folder's
+            first = rel.split("/")[0] if "/" in rel else ""          # first page (extending/index.html)
+            purpose[rel] = FOLDER_OF.get(first.lower()) or "lookup"
+            anchor[rel] = next((r for r in reversed(said) if r.startswith(first + "/")), None) \
+                if first.lower() in FOLDER_OF else None
+    rest = sorted(pages - stored, key=order.natural)
+    return Pages(contents.order + rest, purpose, anchor, up, dict(contents.parent), title)
+
+
+def page_purposes(sid: str, meta: dict, entries: list[cli.Entry]) -> dict[str, str]:
+    """Each page's purpose, or "removed" (see above)."""
+    return classify(sid, meta, entries).purpose
+
+
+def contents(sid: str) -> list[dict]:
+    """The docs' table of contents, by purpose: for each, its parts (the pages that name it,
+    "NumPy user guide", "The Python Tutorial") in reading order, each with the pages its
+    contents list under it. Kept in contents.json, made again when the entries change."""
+    d = cli.HOME / sid
+    cache = d / "contents.json"
+    newest = max((d / f).stat().st_mtime for f in ("entries.json", "meta.json"))
+    if cache.exists() and cache.stat().st_mtime >= newest:
+        try:
+            return json.loads(cache.read_text(encoding="utf-8"))
+        except ValueError:
+            pass
+    meta = cli.load_meta(sid)
+    entries = list(cli.iter_entries(sid, keep=1))
+    pages = classify(sid, meta, entries)
+    root = meta.get("root", "")
+    stored = set(pages.order)
+    count: dict[str, int] = {}
+    for e in entries:
+        rel = page_of(e.location, root, stored) or e.location
+        count[rel] = count.get(rel, 0) + 1
+
+    def head_of(rel: str) -> str | None:
+        """The topmost page above `rel` that gives its purpose (the part it is in)."""
+        at, top, seen = pages.anchor.get(rel), None, set()
+        while at is not None and at not in seen and pages.purpose.get(at) == pages.purpose.get(rel):
+            seen.add(at)
+            top = at
+            at = pages.anchor.get(pages.up.get(at)) if pages.up.get(at) else None
+        return top
+
+    heads: dict[str, list[str]] = {p: [] for p in PURPOSES}
+    under: dict[str, int] = {}
+    for rel in pages.order:
+        p = pages.purpose.get(rel)
+        if p not in PURPOSES:
+            continue
+        h = head_of(rel)
+        if h is None:
+            continue
+        if h == rel:
+            heads[p].append(rel)
+        under[h] = under.get(h, 0) + count.get(rel, 0)
+    kids: dict[str, list[str]] = {}                  # a page's contents; by address, only the
+    sections = {u for u in pages.up.values() if u}   # pages that have pages under them too
+    for rel in pages.order:
+        up = pages.up.get(rel)
+        if up is not None and pages.purpose.get(rel) == pages.purpose.get(up) and head_of(rel) != rel \
+                and (pages.parent.get(rel) == up or rel in sections):
+            kids.setdefault(up, []).append(rel)
+
+    def item(rel: str) -> dict:
+        return {"title": pages.title.get(rel) or rel, "path": f"{sid}/{rel}"}
+    out = []
+    for p in PURPOSES:
+        parts: dict[str, dict] = {}                  # (two pages of one title: one part)
+        for h in heads[p]:
+            part = parts.setdefault(item(h)["title"], item(h) | {"entries": 0, "pages": [], "more": 0})
+            part["entries"] += under.get(h, 0)
+            part["pages"] += [item(k) for k in kids.get(h, [])]
+        for part in parts.values():
+            pages_ = list({x["title"]: x for x in reversed(part["pages"])}.values())[::-1]   # (one of a title)
+            part["more"], part["pages"] = max(0, len(pages_) - 80), pages_[:80]
+        if parts:
+            out.append({"purpose": p, "label": PURPOSES[p], "parts": list(parts.values())})
+    try:
+        cli.write_atomic(cache, json.dumps(out).encode())
+    except OSError:
+        pass
+    return out
+
+
+def subpart(e: cli.Entry) -> str | None:
+    """The heading of a section that only parts its page: "Return value" of "std::format › Return value"."""
+    if e.kind not in ("section", "label") or " › " not in e.title:
+        return None
+    head = e.title.rsplit(" › ", 1)[1].strip().lower()
+    return head if head in SUBPARTS or head.startswith("inherited from") else None
+
+
+def body(text: str) -> str:
+    """A section's own text, without its heading: what its page's entry must hold."""
+    return re.sub(r"^#+ [^\n]*(\n+|$)", "", text.strip(), count=1)[:300]
+
+
+def organize(sid: str, entries: list[cli.Entry], meta: dict) -> tuple[list[cli.Entry], list[int]]:
+    """(the entries kept, each with its purpose; their numbers among `entries`). The pages of
+    removed entries are deleted from the copy's stored pages; meta says what was left out."""
+    if meta.get("kind") in ("man", "saved"):         # man pages; articles you saved: all kept
+        for e in entries:                            # (a man page is looked up; an article, learned)
+            said = label_of(e.title, set(), part=False)
+            e.purpose = said if said in PURPOSES else "lookup" if meta.get("kind") == "man" else "learn"
+        meta["organized"] = VERSION
+        return entries, list(range(len(entries)))
+    root = meta.get("root", "")
+    purposes = page_purposes(sid, meta, entries)
+    stored_pages = set(purposes)
+    by_page: dict[str, list[int]] = {}
+    for i, e in enumerate(entries):
+        by_page.setdefault(page_of(e.location, root, stored_pages) or e.location, []).append(i)
+    drop: set[int] = set()
+    removed_pages: set[str] = set()
+    folded = 0
+    for rel, ids in by_page.items():
+        page_purpose = purposes.get(rel, "lookup")
+        api = [i for i in ids if entries[i].kind not in cli.PAGE_KINDS]
+        if page_purpose == "removed" and not api:
+            drop.update(ids)
+            removed_pages.add(rel)
+            continue
+        whole = [i for i in ids if "#" not in entries[i].location]
+        page_title = {re.sub(r" \(page\)$", "", entries[i].title) for i in whole}
+        api_names = {cli.api_name(entries[i].title).lower() for i in api}
+        for i in ids:
+            e = entries[i]
+            e.purpose = "lookup" if e.kind not in cli.PAGE_KINDS else (
+                "lookup" if page_purpose == "removed" else page_purpose)
+            if subpart(e) and (not body(e.text) or any(body(e.text) in entries[j].text for j in ids
+                                                       if j != i and j not in drop and not subpart(entries[j]))):
+                drop.add(i)                          # (its page's entry has it, word for word)
+                folded += 1
+            elif e.kind == "label" and re.sub(r" \(section\)$", "", e.title) in page_title:
+                drop.add(i)                          # (the page under its own title again)
+                folded += 1
+            elif e.kind == "doc" and "#" not in e.location and \
+                    re.sub(r" \(page\)$", "", e.title).lower() in api_names:
+                drop.add(i)                          # (numpy.sum's page: the object numpy.sum)
+                folded += 1
+    pages_dir = cli.HOME / sid / "pages"
+    for rel in removed_pages:
+        f = offline.page_file(pages_dir, rel)
+        if f is not None:
+            f.unlink(missing_ok=True)
+    keep = [i for i in range(len(entries)) if i not in drop]
+    meta["organized"] = VERSION
+    meta["left_out"] = {"pages": len(removed_pages) + len(meta.get("unread") or []), "entries": len(drop) - folded,
+                        "folded": folded}
+    return [entries[i] for i in keep], keep
+
+
+def organize_copy(sid: str) -> dict:
+    """A copy made before docs were organized: organized now, with nothing downloaded. Its
+    entries are classified, removed and folded; its vectors keep the rows of the kept ones;
+    its search caches are made again."""
+    import numpy as np
+    d = cli.HOME / sid
+    meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+    entries = list(cli.iter_entries(sid))
+    kept, keep = organize(sid, entries, meta)
+    vectors = None
+    if (d / "emb.npy").exists():
+        vectors = np.load(d / "emb.npy", allow_pickle=False)
+        if len(vectors) != len(entries):
+            vectors = None                           # (not this copy's: made again by search embed)
+    meta["count"] = len(kept)
+    cli.save(sid, kept, meta)                        # (removes emb.npy: these rows replace it)
+    if vectors is not None:
+        np.save(d / "emb.npy", vectors[keep])
+    for f in ("bm25.npz", "tails.bin", "tails.npy", "order.npy"):
+        (d / f).unlink(missing_ok=True)
+    cli.make_search_caches(sid)
+    return meta.get("left_out", {})
+
+
+def migrate() -> None:
+    """Copies, and downloads kept aside (standards.py), from before docs were organized:
+    organized once. A language standard's copy is made again from its organized download."""
+    from docsearch import standards
+    places = [(standards.base_dir(g).parent, g) for g in standards_groups() if standards.have_base(g)]
+    places += [(cli.HOME, s) for s in cli.indexed()]            # (the downloads first: copies come from them)
+    stopped = False
+    for home, sid in places:
+        try:
+            meta = json.loads((home / sid / "meta.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if meta.get("organized") == VERSION or meta.get("partial") or (home / sid / "crawl").exists():
+            continue
+        if not stopped:
+            from docsearch import web
+            web.stop()                               # (a running search page holds their files)
+            stopped = True
+        group, std = sid.split("@")[0], meta.get("standard") or {}
+        if home == cli.HOME and std and standards.have_base(group):
+            cli.say(f"{sid}: organizing its docs (learn, do, look up, understand), once: made again from "
+                    f"the download of every {std.get('lang', group)} standard")
+            standards.make_copy(group, std["edition"], meta.get("spec") or group)
+            continue
+        real, cli.HOME = cli.HOME, home
+        try:
+            cli.say(f"{sid}: organizing its docs (learn, do, look up, understand), once")
+            out = organize_copy(sid)
+            said = ([f"left out {out['pages']} pages about the project (release notes, development...)"]
+                    if out.get("pages") else []) + \
+                   ([f"folded {out['folded']} parts into the entries that hold them"] if out.get("folded") else [])
+            if said:
+                cli.say("  " + "; ".join(said))
+        finally:
+            cli.HOME = real
+
+
+def standards_groups() -> list[str]:
+    from docsearch import sources, standards
+    return [g for g in sources.KNOWN if standards.profile(g)]
+
+
+def counts(sid: str) -> dict[str, int]:
+    """How many entries a copy has of each purpose."""
+    out = {p: 0 for p in PURPOSES}
+    for e in cli.iter_entries(sid, keep=1):
+        if e.purpose in out:
+            out[e.purpose] += 1
+    return out

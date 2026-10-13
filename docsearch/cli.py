@@ -2512,7 +2512,8 @@ class Postings:
 
 PAGE_KINDS = {"doc", "label", "page", "section", "man", "help", "usage", "term", "example"}   # prose, not API
 # What each kind of search covers (organize.py): plain search, what a name or an idea is (the
-# reference, explanations); search how, how to do something (tutorials, guides, how-tos).
+# reference, explanations); search how, how to do something: tutorials, guides, how-tos,
+# examples and the API objects that do it first, then the rest (Index.search).
 # Docs from before they were organized (no purpose) are in both.
 MODES = {"what": {"lookup", "understand", ""}, "how": {"learn", "do", ""}}
 ALIASES = {"np": "numpy", "pd": "pandas", "plt": "matplotlib.pyplot", "sp": "scipy", "tf": "tensorflow",
@@ -2862,8 +2863,13 @@ class Index:
         """The ranked results. If the query has words the docs never use (misspelled), the
         corrected query is searched too and the two result lists are fused: a right
         correction brings its results up, a wrong one cannot push the typed query's out
-        (benchmark: eval/results-spelling.md). `mode`: "what" or "how" (MODES), only the
-        entries that kind of search covers, each ranker choosing among them."""
+        (benchmark: eval/results-spelling.md). `mode`: "what", plain search: only the entries
+        it covers (MODES), each ranker choosing among them; "how": search how's own entries
+        (MODES, and the API objects: numpy.argmax finds the indices of the maximum) fused with
+        every entry (eval/results-usability.md, T2)."""
+        if mode == "how":                            # its own first, then everything: the function
+            own, every = self.search(q, limit, "how-own"), self.search(q, limit)      # that does it too
+            return rrf([("how", [i for i, _, _ in own], 1.0), ("all", [i for i, _, _ in every], 1.0)])[:limit]
         self.allowed = self.mode_mask(mode) if mode else None
         try:
             hits = self.search_as_typed(q, limit)
@@ -2876,10 +2882,13 @@ class Index:
             self.allowed = None
 
     def mode_mask(self, mode: str):
-        """The entries a kind of search covers (MODES), made once."""
+        """The entries a kind of search covers (MODES; "how-own": search how's, and the API
+        objects), made once."""
         import numpy as np
         if mode not in self.masks:
-            self.masks[mode] = np.array([e.purpose in MODES[mode] for e in self.entries], dtype=bool)
+            self.masks[mode] = np.array([e.purpose in MODES[mode.split("-")[0]]
+                                         or (mode == "how-own" and e.kind not in PAGE_KINDS)
+                                         for e in self.entries], dtype=bool)
         return self.masks[mode]
 
     def correction(self, q: str) -> str | None:
@@ -4691,7 +4700,8 @@ def quick_search(words: list[str], ai: bool = False, how: bool = False) -> None:
     """search numpy svd  ->  the browser opens with the results for 'svd' in numpy.
     Leading package names choose the packages; without one, all packages are searched.
     search ai IDEA  ->  the same, and the AI model reorders the top results.
-    search how IDEA  ->  how to do it: tutorials, guides and how-tos, not the reference (MODES)."""
+    search how IDEA  ->  how to do it: tutorials, guides, how-tos, examples and the functions
+    that do it first (MODES)."""
     from docsearch import rerank, web
     if ai and rerank.model_dir() is None:
         say("The AI model is not downloaded yet; showing the normal results. Get it with: search setup")
@@ -4809,8 +4819,8 @@ def main(argv: list[str] | None = None) -> None:
                        help="replace docs you have even if the new download looks incomplete")
         u.set_defaults(func=cmd_upgrade)
     sub.add_parser("ai", help="search with AI: search ai IDEA (a model on this computer reorders the top results)")
-    sub.add_parser("how", help="search how IDEA: how to do it, in the tutorials, guides and how-tos (plain "
-                               "search: the reference)")
+    sub.add_parser("how", help="search how IDEA: how to do it: tutorials, guides, how-tos, examples and the "
+                               "functions that do it first (plain search: the reference)")
     argv = sys.argv[1:] if argv is None else argv
     if not argv or argv[0] not in ONLINE:          # everything but indexing stays offline
         offline_only()
@@ -4821,7 +4831,7 @@ def main(argv: list[str] | None = None) -> None:
         how = argv[1:2] == ["how"]                 # IDEA: the guides, ranked with AI
         quick_search(list(argv[2:] if how else argv[1:]), ai=True, how=how)
         return
-    if argv[0] == "how":                           # search how IDEA: tutorials, guides, how-tos
+    if argv[0] == "how":                           # search how IDEA: guides, how-tos, examples first
         quick_search(list(argv[1:]), how=True)
         return
     if argv[0] in ("-e", "--exact"):               # search -e drop_duplicates: "drop_duplicates"

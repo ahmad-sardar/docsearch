@@ -19,7 +19,7 @@ search np.sum                             # by name
 search lnsvd                              # by a few letters
 search dataframe.mrege                    # typos are fine
 search sum of elements along an axis      # by meaning
-search how join two tables                # how to do it: tutorials, guides, how-tos
+search how join two tables                # how to do it: guides, how-tos, examples first
 search ai how do i drop duplicate rows    # a question, ranked by a small local model
 ```
 
@@ -139,8 +139,8 @@ two searches, for two questions:
 
 - **plain `search`: what** something is. the reference and the explanations (look up,
   understand): `search np.sum`, `search broadcasting`. names come first, as always.
-- **`search how`: how** to do something. the tutorials, guides and how-tos (learn, do):
-  `search how read a json file`. in the page, the **How** button switches, or start what you
+- **`search how`: how** to do something. the tutorials, guides, how-tos and examples (learn,
+  do) and the functions that do it come first, then the rest: `search how read a json file`. in the page, the **How** button switches, or start what you
   type with "how". with ai: `search ai how pandas pivot a table`.
 
 examples are units of their own in `search how`: a function's "examples" part, with the text

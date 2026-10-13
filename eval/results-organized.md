@@ -426,3 +426,18 @@ be sure. Most questions (218 of 245) link a reference page: how is not their sea
 | how | 0.000 [0.000, 0.000] | -0.973 (p=0.0004) | 0.000 | 0.00 | 0.00 | 0.00 | 0.00 | 0.000 | 0 / 0 | 0.0 |
 | how+complete0.5 | 0.000 [0.000, 0.000] | -0.973 (p=0.0004) | 0.000 | 0.00 | 0.00 | 0.00 | 0.00 | 0.000 | 0 / 0 | 0.0 |
 | how+complete1 | 0.000 [0.000, 0.000] | -0.973 (p=0.0004) | 0.000 | 0.00 | 0.00 | 0.00 | 0.00 | 0.000 | 0 / 0 | 0.0 |
+
+## Search how, T2 (2026-10-12), dev split, your data organized by version 3
+
+How mode is its own entries (learn, do, examples) and the API objects, fused with every entry
+(eval/results-usability.md has the candidates). Paired with how mode as it was:
+
+| questions | how as it was | how now | Δ [95% CI] | p |
+|---|---|---|---|---|
+| Stack Overflow (113) | 0.202 | 0.263 | +0.061 [+0.010, +0.117] | 0.029 |
+| … whose answer is learn or do (14) | 0.261 | 0.290 | +0.029 [−0.124, +0.223] | 0.80 |
+| … whose answer is lookup (98) | 0.196 | 0.262 | +0.067 [+0.012, +0.123] | 0.022 |
+| Ideas (7) | 0.187 | 0.181 | −0.006 | 0.88 |
+| Names (21) | 0.000 | 0.938 | +0.938 | <0.001 |
+
+Plain search is not changed (0.211 on Stack Overflow, names 0.938).

@@ -205,7 +205,8 @@ class Library:
     def search(self, q: str, srcs: set[str], offset: int, limit: int, ai: bool = False,
                project: dict[str, str] | None = None, mode: str = "what") -> dict:
         """`mode`: "what" (plain search: the reference, explanations) or "how" (tutorials,
-        guides, how-tos): cli.MODES. With no query, the docs organized (how: what it covers)."""
+        guides, how-tos, examples and the functions that do it first): cli.MODES. With no
+        query, the docs organized (how: its learn and do parts)."""
         q = q.strip()
         mode = mode if mode in cli.MODES else "what"
         m = re.match(r"how\s+(?=\S)", q, re.I)          # "how merge two tables": how, as search how
@@ -229,7 +230,7 @@ class Library:
                     return {"q": q, "total": 0, "ai": None, "items": [], "error": str(e)}
                 hits = index.search(plain_q, limit=3000, mode=mode) if plain_q else []
             allowed = {i for i in found if (not srcs or sid_of[i] in srcs) and not index.duplicate(i)
-                       and index.entries[i].purpose in cli.MODES[mode]}
+                       and (mode == "how" or index.entries[i].purpose in cli.MODES[mode])}
             ranked = [i for i, _, _ in hits if i in allowed]
             if self._browse_pos[0] is not index:
                 self._browse_pos = (index, {i: k for k, i in enumerate(index.browse)})
@@ -240,9 +241,6 @@ class Library:
             with self.lock:
                 hits = index.search(q, limit=3000 if srcs else cli.SHOW, mode=mode)
             ids = [i for i, _, _ in hits if not srcs or sid_of[i] in srcs][:cli.SHOW]
-        if mode == "how" and q and not ids:          # no tutorial, guide or example matches: the
-            out = self.search(q, srcs, offset, limit, ai, project, "what")      # reference, said so
-            return {**out, "fallback": "how"}
         state = None
         if ai and plain_q:                           # the model reorders the top results
             from docsearch import rerank

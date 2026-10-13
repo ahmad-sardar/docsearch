@@ -183,9 +183,10 @@ def main() -> None:
     how = lib.search("mini.sum sorting by key", {"mini"}, 0, 50, mode="how")["items"]
     empty_how = lib.search("", {"mini"}, 0, 200, mode="how")["items"]
     check(what and what[0]["name"] == "mini.sum" and {it["purpose"] for it in what} <= {"lookup", "understand"}
-          and how and {it["purpose"] for it in how} <= {"learn", "do"} and how[0]["name"] == "Sorting by key (section)"
+          and how and how[0]["name"] == "Sorting by key (section)" and "mini.sum" in [it["name"] for it in how]
           and {it["purpose"] for it in empty_how} == {"learn", "do"},
-          f"plain search: the reference (names first); how: the tutorials and guides ({what[:2]}, {how[:2]})")
+          f"plain search: the reference (names first); how: the tutorials and guides first, the function "
+          f"that does it too ({what[:2]}, {how[:2]})")
     typed = lib.search("how sorting by key", {"mini"}, 0, 20)
     check(typed["mode"] == "how" and typed["q"] == "sorting by key" and typed["items"]
           and typed["items"][0]["name"] == "Sorting by key (section)",
@@ -198,9 +199,8 @@ def main() -> None:
         cli.make_search_caches("refonly")
     none = web.Library().search("how join two tables", {"refonly"}, 0, 20)
     run("remove", "refonly")
-    check(none["mode"] == "what" and none.get("fallback") == "how" and none["items"]
-          and none["items"][0]["name"] == "refonly.join",
-          f"how, where no tutorial, guide or example matches: the reference, said so ({none['items'][:1]})")
+    check(none["mode"] == "how" and none["items"] and none["items"][0]["name"] == "refonly.join",
+          f"how, where no tutorial, guide or example matches: the function that does it ({none['items'][:1]})")
     opened = []
     real_open, web.open_browser = web.open_browser, opened.append
     try:

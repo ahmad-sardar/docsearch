@@ -226,3 +226,48 @@ MRR@10, the same 141 questions on both, each answered by its own copy; paired ra
 
 Names unchanged; plain search within noise (the questions that moved, both ways, are close
 calls among API names: numpy.unique_*, atleast_1d).
+
+# T2: how mode finds the function that does it (2026-10-12)
+
+The same copy as T1 (your data organized by version 3). Each candidate measured on the
+usability questions and on the Stack Overflow dev questions in how mode (MRR@10, paired with
+"as it was", bootstrap 95% interval of the difference, randomization test):
+
+| how mode | usability how (44): #1 / top 3 / top 5 / missing | Stack Overflow (113) | names (21) |
+|---|---|---|---|
+| (c) as it was: learn and do only | 25 / 31 / 35 / 6 | 0.202 | 0 |
+| (a) learn, do, examples and API objects | 25 / 33 / 33 / 6 | 0.261 (+0.059 [+0.008, +0.114], p=0.033) | 0.938 |
+| (b) everything, fused with learn and do | 25 / 33 / 39 / 1 | 0.223 (+0.021 [−0.001, +0.045], p=0.081) | 0.153 |
+| **(d) everything, fused with (a)** | **27 / 33 / 35 / 2** | **0.263 (+0.061 [+0.010, +0.117], p=0.029)** | **0.938** |
+| (f) (a) fused with learn and do | 28 / 33 / 37 / 5 | 0.217 (+0.015, p=0.167) | — |
+| (g) all three lists fused | 26 / 32 / 36 / 4 | 0.226 (+0.024 [+0.001, +0.048], p=0.055) | 0.261 |
+
+Kept: (d). Search how ranks tutorials, guides, how-tos, examples and API objects first (two
+votes), and explanations and reference prose after (one), so the function that does it is
+found. It is the only candidate meeting all of the ticket's conditions:
+- the S1 answers in the top 3: argmax #1, vstack #1, np.save #1, timeit #1, asyncio.gather #2,
+  std::sort #3 (as it was: gather #4);
+- usability in how mode better (#1 25 → 27, missing 6 → 2);
+- Stack Overflow questions whose answer is a how-to (14): 0.261 → 0.290 (p=0.80), no drop;
+- plain search unchanged (it is not touched).
+
+Questions that changed from T1 (`eval/runs/usability-t2.json`):
+
+| package | question | T1 | T2 | first now |
+|---|---|---|---|---|
+| pandas | group by multiple columns and sum | 2 | 1 | pandas.api.typing.DataFrameGroupBy.sum |
+| python | run coroutines concurrently | 4 | 2 | asyncio.eager_task_factory |
+| all | sort a list | 3 | 1 | polars.Expr.list.sort › Examples: a false match ("list.sort"); Python's list.sort is #3, Sorting Techniques #9 (T4) |
+| polars | add a new column | 4 | 1 | polars.DataFrame.with_columns |
+| cuda | copy memory from host to device | — | 1 | cudaMemcpyPeer |
+| cpp | convert a string to an int | 33 | 25 | std::to_string |
+| python | log messages to a file | 19 | 13 | Logging to multiple destinations (section) |
+| langchain | add short-term memory / approve a tool call / memory persistence / model provider | — | 4 / 7 / 3 / 18 | (your old langchain copy's guides are labeled look up: T8, T10) |
+| python | read a file line by line | 1 | 7 | fileinput.filelineno |
+| cuda | launch a kernel | 1 | 8 | CU_GRAPH_KERNEL_NODE_PORT_LAUNCH_ORDER |
+| c | copy a string safely | 5 | — | copysign › Example |
+| numpy | invert a matrix | 6 | 7 | numpy.invert › Examples |
+
+Worse: three answers that were first now lose to API names close to the words (fileinput's
+functions, CUDA's launch enum constants, C's copysign). Speed: how mode searches twice, 66 ms
+a search (median) against 34 ms for plain search.

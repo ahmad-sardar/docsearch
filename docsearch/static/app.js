@@ -167,8 +167,7 @@ async function search({ openFirst = true, append = false, ai = false } = {}) {
   const where = state.srcs.size ? searchedSources().join(", ") : "all packages";
   const fixed = data.corrected ? ` · also searched “${data.corrected}”` : "";
   $("#how").setAttribute("aria-pressed", data.mode === "how" ? "true" : "false");
-  const kind = data.mode === "how" ? " · how: tutorials, guides, how-tos"
-             : data.fallback ? " · no tutorial, guide or example matches: the reference" : "";
+  const kind = data.mode === "how" ? " · how: guides, how-tos and examples first" : "";
   status(state.q ? `${data.total} results for “${data.q}”${fixed} · ${where}${kind}${data.ai === "ranked" ? " · ranked with AI" : ""}`
                  : `${data.total} entries · ${where}, in reading order${kind}`);
   if (data.error) status(data.error);
@@ -185,11 +184,12 @@ async function search({ openFirst = true, append = false, ai = false } = {}) {
   }
 }
 
-// How: the tutorials, guides and how-tos (learn, do); off, the reference (look up, understand).
+// How: tutorials, guides, how-tos, examples and the functions that do it first; off, the
+// reference and explanations (look up, understand).
 function setHow(on) {
   state.how = on;
   $("#how").setAttribute("aria-pressed", on ? "true" : "false");
-  $("#q").placeholder = on ? "How do I… (tutorials, guides, how-tos)" : "Search: a name (np.sum), some letters (lnsvd), or describe it";
+  $("#q").placeholder = on ? "How do I… (guides, how-tos, examples first)" : "Search: a name (np.sum), some letters (lnsvd), or describe it";
 }
 
 function setAI(on) {
@@ -500,7 +500,7 @@ function showHome() {
   const rows = [["np.sum, svd, nn.Linear", "an API name (aliases like np, pd work)"], ["lnsvd", "letters in order: numpy.linalg.svd"],
                 ["sum of elements along an axis", "a description: search by meaning"],
                 ["how merge two tables", "how first (or the How button, or search how …): tutorials, guides, "
-                                         + "how-tos instead of the reference"],
+                                         + "how-tos, examples and the functions that do it first"],
                 ["↑ ↓", "move through the results"],
                 ["Enter", "the full page (offline copy)"], ["Esc", "back, then clear the search"],
                 ["/", "jump to the search box"], ["w", "wrap or scroll long code lines"],
@@ -671,7 +671,7 @@ function bindEvents() {
   $("#manage").addEventListener("click", openPanel);
   $("#how").addEventListener("click", () => {
     setHow(!state.how);
-    toast(state.how ? "How: searching the tutorials, guides and how-tos" : "Searching the reference");
+    toast(state.how ? "How: guides, how-tos and examples first" : "Searching the reference");
     search({ openFirst: !!state.q });
   });
   $("#ai").addEventListener("click", () => {

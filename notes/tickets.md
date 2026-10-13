@@ -43,7 +43,7 @@ top 5, missing.
   - "Reading and writing files" is in the how-mode top 5 for "how read a file line by line";
   - Python's example count is reported, with 20 read by hand.
 
-### T2 How mode finds the function that does it
+### T2 How mode finds the function that does it (done: `eval/results-usability.md`)
 - **Change:** three candidates, measured, one kept:
   - (a) how = learn + do + examples + API objects;
   - (b) how = everything, guides and examples ranked first;

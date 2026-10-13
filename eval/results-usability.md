@@ -127,3 +127,102 @@ Questions in `eval/usability.json`; run with `eval/usability.py`. Each ticket's 
 | langchain | how | use a different model provider (new) | 4 | Model providers |
 | langchain | how | add a custom tool (new) | 1 | Use tools in a prompt › Add and use tools |
 | langchain | what | what is middleware (new) | 1 | Middleware |
+
+# T1: examples, right purpose and real ones only (2026-10-12)
+
+On a copy of your data (`data/index` copied to a scratch folder), organized again by version 3
+rules: once, 94 s for the eight copies, nothing downloaded; your `data/` untouched until you run it.
+
+What changed:
+- re-organizing kept the page's purpose for examples: numpy's were "look up" (1,460); now an
+  example is "do" (or "learn" in a tutorial), wherever it is;
+- an example is an "Examples" part, code shown in use (a `>>>` session with its results, a whole
+  C/C++ program), or code the docs present as one ("For example:", "Example:", "Run this code");
+  not a struct's definition or a grammar in a description;
+- cppreference's "This section is incomplete: no example" sections are not examples;
+- each example says first what its entry is ("Returns the indices of the maximum values along
+  an axis."): its code seldom does;
+- found on the way: a section reached by its Sphinx label held only its first paragraph (Python's
+  "Reading and writing files": 111 letters of 8,385). Now the whole section; copies you have are
+  cut again from their stored pages.
+
+Examples per copy:
+
+| copy | before | after | gone, read |
+|---|---|---|---|
+| python | 1,477 | 1,199 | 278 description code (`__import__`'s equivalent code, IDL grammar…) |
+| numpy | 1,477 (1,460 look up) | 1,432 (all do) | C structs |
+| cpp | 3,947 | 3,001 | 928 placeholders; "a possible implementation", data-race code |
+| c | 424 | 412 | 12 placeholders |
+| cuda | 57 | 3 | 54 struct and enum definitions |
+| pandas, polars, langchain | 2,133, 1,289, 93 | same | — |
+
+Python, 20 examples drawn at random and read: 20 are examples. 2 show a method's example under its
+class (`asyncio.StreamWriter`: `drain`; `socket.socket`: `recvmsg_into`), since a class's entry
+holds its methods' text. 1 said "Parameters" first (fixed: a heading is not the sentence).
+
+### Usability, by mode
+
+| | questions | #1 | top 3 | top 5 | missing |
+|---|---|---|---|---|---|
+| how, before | 44 | 20 | 26 | 28 | 9 |
+| how, T1 | 44 | 25 | 31 | 35 | 6 |
+| what, before | 27 | 21 | 25 | 25 | 2 |
+| what, T1 | 27 | 20 | 25 | 25 | 2 |
+
+The ticket's targets ("how", numpy, Python):
+
+| question | wanted | before | T1 |
+|---|---|---|---|
+| find the indices of the maximum value | `numpy.argmax › Examples` | — | 5 (`numpy.ma.argmax` first) |
+| stack two arrays vertically | `numpy.vstack › Examples` | — | 3 |
+| save an array to disk and load it back | `numpy.save › Examples` | — | 2 |
+| read a file line by line | "Reading and writing files" | 43 | 1 |
+
+Questions whose rank changed (rank of the wanted answer; `eval/runs/usability-t1.json`):
+
+| package | mode | question | before | T1 | first now |
+|---|---|---|---|---|---|
+| numpy | how | find the indices of the maximum value | — | 1 | numpy.ma.argmax › Examples |
+| numpy | how | reshape an array | — | 1 | numpy.reshape › Examples |
+| numpy | how | invert a matrix | — | 6 | numpy.invert › Examples (bitwise: wrong) |
+| python | how | read a file line by line | 19 | 1 | Reading and writing files (section) |
+| python | how | measure how long a function takes | 2 | 1 | timeit › Examples |
+| python | how | make an http request | 2 | 1 | http.client.HTTPConnection.request › Examples |
+| python | how | run coroutines concurrently | 13 | 4 | asyncio.Task.cancel › Examples |
+| python | how | log messages to a file | 12 | 19 | Logging to multiple destinations (section) |
+| python | what | f-string format specification | 1 | 2 | string.templatelib.Interpolation.format_spec |
+| pandas | how | group by multiple columns and sum | 6 | 2 | Aggregation (section) |
+| pandas | how | write a dataframe to a csv file | 4 | 3 | Writing to CSV format (section) |
+| pandas | how | merge two dataframes on a column | 1 | 4 | Merging (section) |
+| cpp | how | sort a vector | 12 | 3 | std::stable_sort › Example |
+| cpp | how | iterate over a map | 2 | 1 | std::map::begin › Example |
+| cpp | how | read a file line by line | 1 | 2 | std::ftell › Example |
+| cpp | how | convert a string to an int | — | 33 | std::wstring_convert::from_bytes › Example |
+| c | how | copy a string safely | 9 | 5 | copysign › Example |
+| cuda | how | launch a kernel | 2 | 1 | cuLaunchKernel › Examples |
+| cuda | how | copy memory from host to device | 11 | — | cuOccupancyMaxPotentialBlockSize › Examples |
+| numpy | what | what is a ufunc | 3 | 2 | import_ufunc |
+
+Read with care:
+- "Merging", "Aggregation", "Writing to CSV format" are pandas' user-guide sections that answer
+  the question; the wanted names ("merge", "groupby", "to_csv") do not match them, so these
+  count as lower than they are. The questions were left as written.
+- CUDA's copy is its API reference: its 54 "examples" were struct definitions, and how mode
+  found cudaMemcpy through them. With 3 real examples, how mode has almost nothing to search
+  there. T2 (how mode finds the function) is the fix, not fake examples.
+
+### Stack Overflow dev questions (eval/bench.py), paired, before → T1
+
+MRR@10, the same 141 questions on both, each answered by its own copy; paired randomization test.
+
+| questions | search | before | T1 | change | p |
+|---|---|---|---|---|---|
+| Stack Overflow (113) | plain (what) | 0.218 | 0.211 | −0.007 | 0.18 |
+| Stack Overflow (113) | how | 0.157 | 0.202 | +0.045 | 0.055 |
+| Stack Overflow (113) | every entry | 0.230 | 0.250 | +0.021 | 0.13 |
+| Names (21) | plain (what) | 0.938 | 0.938 | 0 | 1.0 |
+| Ideas (7) | plain (what) | 0.214 | 0.214 | 0 | 1.0 |
+
+Names unchanged; plain search within noise (the questions that moved, both ways, are close
+calls among API names: numpy.unique_*, atleast_1d).

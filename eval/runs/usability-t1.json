@@ -1,0 +1,845 @@
+[
+ {
+  "package": "numpy",
+  "mode": "what",
+  "q": "np.linalg.svd",
+  "want": [
+   "numpy.linalg.svd"
+  ],
+  "rank": 1,
+  "first": "numpy.linalg.svd",
+  "mode_used": "what"
+ },
+ {
+  "package": "numpy",
+  "mode": "how",
+  "q": "stack two arrays vertically",
+  "want": [
+   "vstack",
+   "Stacking together different arrays"
+  ],
+  "rank": 1,
+  "first": "Stacking together different arrays (section)",
+  "mode_used": "how"
+ },
+ {
+  "package": "numpy",
+  "mode": "what",
+  "q": "difference between a view and a copy",
+  "want": [
+   "Copies and views"
+  ],
+  "rank": 1,
+  "first": "Copies and views (page)",
+  "mode_used": "what"
+ },
+ {
+  "package": "numpy",
+  "mode": "what",
+  "q": "random integers in a range",
+  "want": [
+   "Generator.integers",
+   "randint"
+  ],
+  "rank": 3,
+  "first": "numpy.random.RandomState.random_integers",
+  "mode_used": "what"
+ },
+ {
+  "package": "numpy",
+  "mode": "how",
+  "q": "save an array to disk and load it back",
+  "want": [
+   "numpy.save",
+   "numpy.load",
+   "Saving and sharing"
+  ],
+  "rank": 1,
+  "first": "numpy.load \u203a Examples",
+  "mode_used": "how"
+ },
+ {
+  "package": "numpy",
+  "mode": "what",
+  "q": "np.where with two conditions",
+  "want": [
+   "numpy.where",
+   "numpy.select"
+  ],
+  "rank": 1,
+  "first": "numpy.select",
+  "mode_used": "what"
+ },
+ {
+  "package": "numpy",
+  "mode": "how",
+  "q": "find the indices of the maximum value",
+  "want": [
+   "argmax"
+  ],
+  "rank": 1,
+  "first": "numpy.ma.argmax \u203a Examples",
+  "mode_used": "how"
+ },
+ {
+  "package": "pandas",
+  "mode": "how",
+  "q": "group by multiple columns and sum",
+  "want": [
+   "groupby",
+   "group by"
+  ],
+  "rank": 2,
+  "first": "Aggregation (section)",
+  "mode_used": "how"
+ },
+ {
+  "package": "pandas",
+  "mode": "how",
+  "q": "merge two dataframes on a column",
+  "want": [
+   "merge"
+  ],
+  "rank": 4,
+  "first": "Merging (section)",
+  "mode_used": "how"
+ },
+ {
+  "package": "pandas",
+  "mode": "how",
+  "q": "read an excel file with several sheets",
+  "want": [
+   "ExcelFile",
+   "sheet"
+  ],
+  "rank": 1,
+  "first": "ExcelFile class (section)",
+  "mode_used": "how"
+ },
+ {
+  "package": "pandas",
+  "mode": "how",
+  "q": "convert a column to datetime",
+  "want": [
+   "to_datetime",
+   "datetime"
+  ],
+  "rank": 1,
+  "first": "pandas.Timestamp.to_pydatetime \u203a Examples",
+  "mode_used": "how"
+ },
+ {
+  "package": "pandas",
+  "mode": "what",
+  "q": "drop_duplicates",
+  "want": [
+   "pandas.DataFrame.drop_duplicates"
+  ],
+  "rank": 3,
+  "first": "pandas.Index.drop_duplicates",
+  "mode_used": "what"
+ },
+ {
+  "package": "pandas",
+  "mode": "how",
+  "q": "apply a function to each row",
+  "want": [
+   "apply"
+  ],
+  "rank": 1,
+  "first": "Series.apply() and DataFrame.apply() (section)",
+  "mode_used": "how"
+ },
+ {
+  "package": "pandas",
+  "mode": "what",
+  "q": "rolling mean",
+  "want": [
+   "Rolling.mean"
+  ],
+  "rank": 1,
+  "first": "pandas.api.typing.Rolling.mean",
+  "mode_used": "what"
+ },
+ {
+  "package": "pandas",
+  "mode": "how",
+  "q": "change the order of columns",
+  "want": [
+   "reindex",
+   "Selecting columns"
+  ],
+  "rank": null,
+  "first": "Column and index locations and names (section)",
+  "mode_used": "how"
+ },
+ {
+  "package": "python",
+  "mode": "how",
+  "q": "read a file line by line",
+  "want": [
+   "Reading and writing files",
+   "Methods of File Objects",
+   "readline"
+  ],
+  "rank": 1,
+  "first": "Reading and writing files (section)",
+  "mode_used": "how"
+ },
+ {
+  "package": "python",
+  "mode": "what",
+  "q": "dataclass field default_factory",
+  "want": [
+   "dataclasses.field"
+  ],
+  "rank": 1,
+  "first": "dataclasses.field",
+  "mode_used": "what"
+ },
+ {
+  "package": "python",
+  "mode": "how",
+  "q": "run coroutines concurrently",
+  "want": [
+   "asyncio.gather",
+   "TaskGroup",
+   "Running Tasks Concurrently"
+  ],
+  "rank": 4,
+  "first": "asyncio.Task.cancel \u203a Examples",
+  "mode_used": "how"
+ },
+ {
+  "package": "python",
+  "mode": "how",
+  "q": "sort a dictionary by value",
+  "want": [
+   "Sorting Techniques",
+   "sorted"
+  ],
+  "rank": 1,
+  "first": "Sorting Techniques (page)",
+  "mode_used": "how"
+ },
+ {
+  "package": "python",
+  "mode": "what",
+  "q": "what is a context manager",
+  "want": [
+   "context manager"
+  ],
+  "rank": 1,
+  "first": "context manager (term)",
+  "mode_used": "what"
+ },
+ {
+  "package": "python",
+  "mode": "what",
+  "q": "f-string format specification",
+  "want": [
+   "Format specification"
+  ],
+  "rank": 2,
+  "first": "string.templatelib.Interpolation.format_spec",
+  "mode_used": "what"
+ },
+ {
+  "package": "python",
+  "mode": "how",
+  "q": "parse command line arguments",
+  "want": [
+   "argparse",
+   "Command-line arguments"
+  ],
+  "rank": 1,
+  "first": "Command-line arguments (section)",
+  "mode_used": "how"
+ },
+ {
+  "package": "python",
+  "mode": "how",
+  "q": "measure how long a function takes",
+  "want": [
+   "timeit",
+   "Performance measurement"
+  ],
+  "rank": 1,
+  "first": "timeit \u203a Examples",
+  "mode_used": "how"
+ },
+ {
+  "package": "polars",
+  "mode": "what",
+  "q": "LazyFrame.collect",
+  "want": [
+   "polars.LazyFrame.collect"
+  ],
+  "rank": 1,
+  "first": "polars.LazyFrame.collect",
+  "mode_used": "what"
+ },
+ {
+  "package": "polars",
+  "mode": "how",
+  "q": "filter rows by a condition",
+  "want": [
+   "filter"
+  ],
+  "rank": 1,
+  "first": "polars.DataFrame.filter \u203a Examples",
+  "mode_used": "how"
+ },
+ {
+  "package": "polars",
+  "mode": "how",
+  "q": "group by and aggregate",
+  "want": [
+   "group_by",
+   "Aggregation"
+  ],
+  "rank": 2,
+  "first": "SELECT \u203a GROUP BY",
+  "mode_used": "how"
+ },
+ {
+  "package": "polars",
+  "mode": "how",
+  "q": "read a parquet file",
+  "want": [
+   "Parquet",
+   "read_parquet"
+  ],
+  "rank": 1,
+  "first": "Parquet \u203a Read",
+  "mode_used": "how"
+ },
+ {
+  "package": "polars",
+  "mode": "what",
+  "q": "window function over groups",
+  "want": [
+   "over",
+   "Window"
+  ],
+  "rank": 1,
+  "first": "Window (page)",
+  "mode_used": "what"
+ },
+ {
+  "package": "cpp",
+  "mode": "what",
+  "q": "std::vector::push_back",
+  "want": [
+   "std::vector::push_back"
+  ],
+  "rank": 1,
+  "first": "std::vector::push_back",
+  "mode_used": "what"
+ },
+ {
+  "package": "cpp",
+  "mode": "how",
+  "q": "sort a vector",
+  "want": [
+   "std::sort"
+  ],
+  "rank": 3,
+  "first": "std::stable_sort \u203a Example",
+  "mode_used": "how"
+ },
+ {
+  "package": "cpp",
+  "mode": "what",
+  "q": "unique_ptr vs shared_ptr",
+  "want": [
+   "std::unique_ptr",
+   "std::shared_ptr"
+  ],
+  "rank": 1,
+  "first": "std::shared_ptr",
+  "mode_used": "what"
+ },
+ {
+  "package": "cpp",
+  "mode": "how",
+  "q": "read a file line by line",
+  "want": [
+   "getline"
+  ],
+  "rank": 2,
+  "first": "std::ftell \u203a Example",
+  "mode_used": "how"
+ },
+ {
+  "package": "cpp",
+  "mode": "what",
+  "q": "lambda capture by reference",
+  "want": [
+   "capture"
+  ],
+  "rank": 1,
+  "first": "Lambda expressions (since C++11) \u203a Lambda capture",
+  "mode_used": "what"
+ },
+ {
+  "package": "c",
+  "mode": "what",
+  "q": "printf format specifiers",
+  "want": [
+   "printf"
+  ],
+  "rank": 1,
+  "first": "printf, fprintf, sprintf, snprintf, printf_s, fprintf_s, sprintf_s, snprintf_s",
+  "mode_used": "what"
+ },
+ {
+  "package": "c",
+  "mode": "how",
+  "q": "copy a string safely",
+  "want": [
+   "strncpy",
+   "strcpy",
+   "snprintf"
+  ],
+  "rank": 5,
+  "first": "copysign, copysignf, copysignl \u203a Example",
+  "mode_used": "how"
+ },
+ {
+  "package": "cuda",
+  "mode": "what",
+  "q": "cudaMalloc",
+  "want": [
+   "cudaMalloc"
+  ],
+  "rank": 1,
+  "first": "cudaMalloc",
+  "mode_used": "what"
+ },
+ {
+  "package": "cuda",
+  "mode": "how",
+  "q": "launch a kernel",
+  "want": [
+   "cudaLaunchKernel",
+   "cuLaunchKernel"
+  ],
+  "rank": 1,
+  "first": "cuLaunchKernel \u203a Examples",
+  "mode_used": "how"
+ },
+ {
+  "package": "langchain",
+  "mode": "how",
+  "q": "create an agent with tools",
+  "want": [
+   "Tools",
+   "Agents",
+   "create_agent"
+  ],
+  "rank": 1,
+  "first": "Managed Deep Agents quickstart \u203a Create and deploy an agent",
+  "mode_used": "how"
+ },
+ {
+  "package": "langchain",
+  "mode": "how",
+  "q": "stream the agent's responses",
+  "want": [
+   "Streaming"
+  ],
+  "rank": 1,
+  "first": "How to collect user feedback for Agent Server runs \u203a Call the streaming run API with `feedback_keys`",
+  "mode_used": "how"
+ },
+ {
+  "package": "langchain",
+  "mode": "how",
+  "q": "get structured output from a model",
+  "want": [
+   "Structured output"
+  ],
+  "rank": 1,
+  "first": "LangChain v1 migration guide \u203a Structured output",
+  "mode_used": "how"
+ },
+ {
+  "package": "langchain",
+  "mode": "how",
+  "q": "add short-term memory to an agent",
+  "want": [
+   "Short-term memory"
+  ],
+  "rank": null,
+  "first": "How to add semantic search to your agent deployment \u203a Usage",
+  "mode_used": "how"
+ },
+ {
+  "package": "langchain",
+  "mode": "how",
+  "q": "ask a human to approve a tool call",
+  "want": [
+   "Human-in-the-loop",
+   "Interrupts"
+  ],
+  "rank": null,
+  "first": "Quickstart",
+  "mode_used": "how"
+ },
+ {
+  "package": "langchain",
+  "mode": "how",
+  "q": "retry a tool call that failed",
+  "want": [
+   "Tool retry",
+   "retry"
+  ],
+  "rank": 1,
+  "first": "How to retry failed runs in experiments (Python only)",
+  "mode_used": "how"
+ },
+ {
+  "package": "langchain",
+  "mode": "what",
+  "q": "create_agent",
+  "want": [
+   "create_agent"
+  ],
+  "rank": null,
+  "first": "Agents",
+  "mode_used": "what"
+ },
+ {
+  "package": "langchain",
+  "mode": "what",
+  "q": "what is a checkpointer",
+  "want": [
+   "Persistence",
+   "Checkpoint"
+  ],
+  "rank": 1,
+  "first": "Checkpointers",
+  "mode_used": "what"
+ },
+ {
+  "package": "langchain",
+  "mode": "what",
+  "q": "init_chat_model",
+  "want": [
+   "init_chat_model"
+  ],
+  "rank": null,
+  "first": "Models \u203a Initialize a model",
+  "mode_used": "what"
+ },
+ {
+  "package": "langchain",
+  "mode": "how",
+  "q": "memory persistence",
+  "want": [
+   "Persistence"
+  ],
+  "rank": null,
+  "first": "Learn \u203a Memory",
+  "mode_used": "how"
+ },
+ {
+  "package": "",
+  "language": "python",
+  "mode": "how",
+  "q": "sort a list",
+  "want": [
+   "Sorting Techniques",
+   "list.sort",
+   "sorted"
+  ],
+  "rank": 3,
+  "first": "std::list::sort \u203a Example",
+  "mode_used": "how"
+ },
+ {
+  "package": "",
+  "mode": "what",
+  "q": "malloc",
+  "want": [
+   "malloc"
+  ],
+  "rank": 1,
+  "first": "std::malloc",
+  "mode_used": "what"
+ },
+ {
+  "package": "",
+  "mode": "what",
+  "q": "mean of an array",
+  "want": [
+   "numpy.mean"
+  ],
+  "rank": 2,
+  "first": "ARRAY_MEAN (section)",
+  "mode_used": "what"
+ },
+ {
+  "package": "",
+  "language": "python",
+  "mode": "how",
+  "q": "concatenate two dataframes",
+  "want": [
+   "concat"
+  ],
+  "rank": 1,
+  "first": "Concatenation",
+  "mode_used": "how"
+ },
+ {
+  "package": "numpy",
+  "mode": "how",
+  "q": "invert a matrix",
+  "want": [
+   "numpy.linalg.inv"
+  ],
+  "new": true,
+  "rank": 6,
+  "first": "numpy.invert \u203a Examples",
+  "mode_used": "how"
+ },
+ {
+  "package": "numpy",
+  "mode": "what",
+  "q": "what is a ufunc",
+  "want": [
+   "Universal functions"
+  ],
+  "new": true,
+  "rank": 2,
+  "first": "import_ufunc",
+  "mode_used": "what"
+ },
+ {
+  "package": "numpy",
+  "mode": "how",
+  "q": "reshape an array",
+  "want": [
+   "reshape"
+  ],
+  "new": true,
+  "rank": 1,
+  "first": "numpy.reshape \u203a Examples",
+  "mode_used": "how"
+ },
+ {
+  "package": "pandas",
+  "mode": "how",
+  "q": "fill missing values",
+  "want": [
+   "fillna",
+   "missing data"
+  ],
+  "new": true,
+  "rank": 1,
+  "first": "Missing data / operations with fill values (section)",
+  "mode_used": "how"
+ },
+ {
+  "package": "pandas",
+  "mode": "what",
+  "q": "MultiIndex",
+  "want": [
+   "pandas.MultiIndex"
+  ],
+  "new": true,
+  "rank": 1,
+  "first": "pandas.MultiIndex",
+  "mode_used": "what"
+ },
+ {
+  "package": "pandas",
+  "mode": "how",
+  "q": "write a dataframe to a csv file",
+  "want": [
+   "to_csv"
+  ],
+  "new": true,
+  "rank": 3,
+  "first": "Writing to CSV format (section)",
+  "mode_used": "how"
+ },
+ {
+  "package": "python",
+  "mode": "how",
+  "q": "make an http request",
+  "want": [
+   "urllib.request",
+   "http.client"
+  ],
+  "new": true,
+  "rank": 1,
+  "first": "http.client.HTTPConnection.request \u203a Examples",
+  "mode_used": "how"
+ },
+ {
+  "package": "python",
+  "mode": "what",
+  "q": "pathlib.Path.glob",
+  "want": [
+   "pathlib.Path.glob"
+  ],
+  "new": true,
+  "rank": 1,
+  "first": "pathlib.Path.glob",
+  "mode_used": "what"
+ },
+ {
+  "package": "python",
+  "mode": "how",
+  "q": "run a shell command and capture its output",
+  "want": [
+   "subprocess.run",
+   "subprocess.check_output"
+  ],
+  "new": true,
+  "rank": 1,
+  "first": "subprocess.check_output \u203a Examples",
+  "mode_used": "how"
+ },
+ {
+  "package": "python",
+  "mode": "how",
+  "q": "log messages to a file",
+  "want": [
+   "Logging HOWTO",
+   "FileHandler",
+   "basicConfig"
+  ],
+  "new": true,
+  "rank": 19,
+  "first": "Logging to multiple destinations (section)",
+  "mode_used": "how"
+ },
+ {
+  "package": "polars",
+  "mode": "how",
+  "q": "add a new column",
+  "want": [
+   "with_columns"
+  ],
+  "new": true,
+  "rank": 4,
+  "first": "Expression expansion \u203a Column renaming",
+  "mode_used": "how"
+ },
+ {
+  "package": "polars",
+  "mode": "what",
+  "q": "pl.col",
+  "want": [
+   "polars.col"
+  ],
+  "new": true,
+  "rank": 1,
+  "first": "polars.col (page)",
+  "mode_used": "what"
+ },
+ {
+  "package": "cpp",
+  "mode": "how",
+  "q": "convert a string to an int",
+  "want": [
+   "stoi"
+  ],
+  "new": true,
+  "rank": 33,
+  "first": "std::wstring_convert::from_bytes \u203a Example",
+  "mode_used": "how"
+ },
+ {
+  "package": "cpp",
+  "mode": "what",
+  "q": "std::optional",
+  "want": [
+   "std::optional"
+  ],
+  "new": true,
+  "rank": 1,
+  "first": "std::optional",
+  "mode_used": "what"
+ },
+ {
+  "package": "cpp",
+  "mode": "how",
+  "q": "iterate over a map",
+  "want": [
+   "std::map",
+   "range-for",
+   "Range-based for"
+  ],
+  "new": true,
+  "rank": 1,
+  "first": "std::map::begin, std::map::cbegin \u203a Example",
+  "mode_used": "how"
+ },
+ {
+  "package": "c",
+  "mode": "how",
+  "q": "allocate an array dynamically",
+  "want": [
+   "malloc",
+   "calloc"
+  ],
+  "new": true,
+  "rank": 1,
+  "first": "calloc \u203a Example",
+  "mode_used": "how"
+ },
+ {
+  "package": "cuda",
+  "mode": "how",
+  "q": "copy memory from host to device",
+  "want": [
+   "cudaMemcpy"
+  ],
+  "new": true,
+  "rank": null,
+  "first": "cuOccupancyMaxPotentialBlockSize \u203a Examples",
+  "mode_used": "how"
+ },
+ {
+  "package": "langchain",
+  "mode": "how",
+  "q": "use a different model provider",
+  "want": [
+   "init_chat_model",
+   "Models"
+  ],
+  "new": true,
+  "rank": null,
+  "first": "How to define a decision model evaluator \u203a Step 1. Create the evaluator",
+  "mode_used": "how"
+ },
+ {
+  "package": "langchain",
+  "mode": "how",
+  "q": "add a custom tool",
+  "want": [
+   "Tools",
+   "tool"
+  ],
+  "new": true,
+  "rank": 1,
+  "first": "Managed Deep Agents quickstart \u203a Custom tools",
+  "mode_used": "how"
+ },
+ {
+  "package": "langchain",
+  "mode": "what",
+  "q": "what is middleware",
+  "want": [
+   "Middleware"
+  ],
+  "new": true,
+  "rank": 1,
+  "first": "Middleware integrations \u203a Share your middleware",
+  "mode_used": "what"
+ }
+]

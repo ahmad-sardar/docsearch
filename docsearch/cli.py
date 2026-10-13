@@ -1033,10 +1033,21 @@ def sphinx_fragment(soup, anchor: str, ids: dict | None = None):
     if el.name == "dt":                       # API object: signature <dt> + body <dd>
         dd = el.find_next_sibling("dd")
         return [el, dd] if dd else [el]
-    if el.name in ("span", "a") and not el.get_text(strip=True):  # older label anchors
+    if el.name in ("span", "a") and not el.get_text(strip=True):  # a label's anchor
+        if opens_section(el):
+            return [el.parent]                # (<section><span id=label><h2>: the section)
         nxt = el.find_next(["section", "div", "dl", "p"])
         return [nxt] if nxt else None
     return [el]
+
+
+def opens_section(el) -> bool:
+    """Is this empty anchor where a section starts (Sphinx puts a label's anchor first in its
+    section: <section id="reading-and-writing-files"><span id="tut-files">)? Then the label
+    is the whole section, not its first paragraph."""
+    up = el.parent
+    return up is not None and (up.name == "section" or (up.name == "div" and "section" in (up.get("class") or []))) \
+        and all(s.name in ("span", "a") and not s.get_text(strip=True) for s in el.find_previous_siblings())
 
 
 def build_sphinx(name: str, root: str, inv: bytes | None, workers: int, max_pages: int | None,

@@ -136,6 +136,8 @@ def main() -> None:
     labels()
     folding()
     completeness()
+    examples_kept()
+    sections_whole()
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Site)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     site = f"http://127.0.0.1:{server.server_address[1]}"
@@ -216,11 +218,11 @@ def main() -> None:
     ex = next((it for it in ex if it["kind"] == "example"), None)
     shown = lib.entry(ex["id"]) if ex else {}
     check(ex is not None and ex["name"] == "mini.sum › Examples" and ex["complete"] == {"needs": ["import mini"]}
-          and "mini.sum([1, 2])" in shown.get("html", "") and "Sums the rows" not in shown.get("html", "")
+          and "mini.sum([1, 2])" in shown.get("html", "") and shown.get("html", "").count("Sums the rows") == 1
           and shown["page"]["path"] == "mini/reference/mini.sum.html" and shown["page"]["at"] == "mini.sum"
           and "mini.sum › Examples" not in [it["name"] for it in lib.search("mini.sum", {"mini"}, 0, 20)["items"]],
-          f"an API entry's examples: an entry of search how, at its entry's place; complete or what it needs "
-          f"(here: import mini); plain search finds the entry itself ({ex})")
+          f"an API entry's examples: an entry of search how, at its entry's place, what the entry is said once; "
+          f"complete or what it needs (here: import mini); plain search finds the entry itself ({ex})")
     meta["repo"] = "github.com/mini/mini"
     cli.write_atomic(cli.HOME / "mini" / "meta.json", json.dumps(meta).encode())
     said = run("list", "mini")
@@ -279,13 +281,76 @@ def completeness() -> None:
                  "ipython": {"needs": ["df2 (from earlier)"]}},
           f"an example's code: complete, or what it needs, read from the code ({ok})")
     entry = cli.Entry("numpy.sum (function)", "function", "https://x/numpy.sum.html#numpy.sum",
-                      "```python\nnumpy.sum(a)\n```\n\nSums.\n\nExamples\n\nTry it in your browser!\n\n"
+                      "```python\nnumpy.sum(a)\n```\n\nSums. Of all.\n\nMore.\n\nExamples\n\nTry it in your browser!\n\n"
                       "```\n>>> np.sum([1, 2])\n3\n```\n\nGo BackOpen In Tab", "numpy", "lookup")
     made = X.entries_of([entry])
     check(len(made) == 1 and made[0].title == "numpy.sum › Examples" and made[0].kind == "example"
-          and made[0].purpose == "do" and made[0].location == entry.location and "Sums." not in made[0].text
-          and "browser" not in made[0].text and ">>> np.sum" in made[0].text,
-          f"an API entry's Examples part, without the page's buttons: an example entry at its place ({made})")
+          and made[0].purpose == "do" and made[0].location == entry.location and made[0].text.startswith("Sums.\n\n")
+          and "More." not in made[0].text and "browser" not in made[0].text and ">>> np.sum" in made[0].text,
+          f"an API entry's Examples part, what the entry is first, without the page's buttons: an example entry "
+          f"at its place ({made})")
+
+
+def examples_kept() -> None:
+    """Examples: only code the docs present as one; re-organizing keeps their purpose, and the
+    examples it would make again the same, with their vectors; placeholders are not examples."""
+    from docsearch import examples as X
+    said = {"described": X.unit(cli.Entry("f (function)", "function", "https://x/f", "Sorts.\n\n```python\n"
+                                          "x = [3, 1]\nx.sort()\n```", "x")),
+            "presented": X.unit(cli.Entry("g (function)", "function", "https://x/g", "Sorts.\n\nFor example:\n\n"
+                                          "```python\nsorted([3, 1])\nsorted('ba')\n```", "x"))}
+    check(said["described"] is None and said["presented"] and said["presented"].startswith("For example:"),
+          f"code in a description is not an example; code the docs present as one is ({said})")
+    root = "https://numpy.example/"
+    at = root + "reference/generated/numpy.sum.html#numpy.sum"
+    sums = "```\n>>> np.sum([1, 2])\n3\n```"
+    entries = [cli.Entry("numpy.sum (function)", "function", at, f"Sums.\n\nExamples\n\n{sums}", "np"),
+               cli.Entry("numpy.sum › Examples", "example", at, f"Sums.\n\n{sums}", "np", "lookup"),  # (relabeled)
+               cli.Entry("numpy.dot (function)", "function", root + "reference/generated/numpy.dot.html#numpy.dot",
+                         "Dots.\n\n```c\nstruct dot {\n  int a;\n};\n```", "np"),
+               cli.Entry("numpy.dot › Examples", "example", root + "reference/generated/numpy.dot.html#numpy.dot",
+                         "```c\nstruct dot {\n  int a;\n};\n```", "np", "do")]          # (any code, before)
+    kept, keep = organize.organize("examples", entries, {"name": "np", "kind": "sphinx", "root": root})
+    got = [(e.title, e.purpose, i) for e, i in zip(kept, keep)]
+    check(got == [("numpy.sum (function)", "lookup", 0), ("numpy.sum › Examples", "do", 1),
+                  ("numpy.dot (function)", "lookup", 2)],
+          f"re-organized: an example keeps its purpose and its row; one made from any code goes ({got})")
+    root = "https://en.cppreference.com/"
+    entries = [cli.Entry("std::f", "api", root + "cpp/f", "std::f does f.", "cpp"),
+               cli.Entry("std::f › Example", "section", root + "cpp/f#Example",
+                         "## Example\n\nThis section is incomplete\nReason: no example", "cpp")]
+    kept, _ = organize.organize("placeholder", entries, {"name": "cpp", "kind": "known", "root": root})
+    check([e.title for e in kept] == ["std::f"], f"an Example section that has none yet: left out ({kept})")
+
+
+def sections_whole() -> None:
+    """A section reached by its label is the whole section (Sphinx puts the label's anchor first
+    in it), not its first paragraph; copies cut before are cut again from their stored pages."""
+    import gzip
+    page = ("<html><body><div role='main'><section id='reading'><span id='tut-files'></span><h2>Reading</h2>"
+            "<p>open() returns a file object.</p><pre>for line in f:\n    print(line)</pre>"
+            "<section id='methods'><span id='tut-methods'></span><h3>Methods</h3><p>Read lines.</p></section>"
+            "</section><section id='other'><h2>Other</h2><p>a</p><span id='mid'></span><p>b</p><p>c</p></section>"
+            "</div></body></html>")
+    soup = cli.make_soup(page.encode())
+    cut = {a: cli.html_to_md("".join(str(n) for n in cli.sphinx_fragment(soup, a))) for a in ("tut-files", "mid")}
+    check("for line in f" in cut["tut-files"] and "Read lines." in cut["tut-files"] and cut["mid"].strip() == "b",
+          f"a label first in its section: the whole section; a label inside one: what it marks ({cut})")
+    root = "https://tut.example/"
+    entries = [cli.Entry("Input and output (page)", "doc", root + "tutorial/io.html", "Input and output.", "tut"),
+               cli.Entry("Reading (section)", "label", root + "tutorial/io.html#tut-files",
+                         "open() returns a file object.", "tut"),
+               cli.Entry("b (section)", "label", root + "tutorial/io.html#mid", "b", "tut")]
+    cli.save("tut", entries, {"name": "tut", "spec": "tut", "kind": "sphinx", "root": root, "pages": True,
+                              "created": "2026-10-01 10:00", "model": cli.MODEL_NAME, "count": 3, "organized": 2})
+    (cli.HOME / "tut" / "pages" / "tutorial").mkdir(parents=True, exist_ok=True)
+    (cli.HOME / "tut" / "pages" / "tutorial" / "io.html.gz").write_bytes(gzip.compress(page.encode()))
+    organize.organize_copy("tut")
+    got = {e.title: e.text for e in cli.iter_entries("tut")}
+    check("for line in f" in got.get("Reading (section)", "") and got.get("b (section)") == "b"
+          and cli.load_meta("tut")["organized"] == organize.VERSION,
+          f"organized again (version 3): a section cut as its first paragraph is cut whole from its stored page, "
+          f"nothing downloaded ({got})")
 
 
 def folding() -> None:
@@ -308,11 +373,12 @@ def folding() -> None:
     kept, keep = organize.organize("folding", entries, meta)
     titles = [e.title for e in kept]
     kinds = [e.kind for e in kept]
-    check(titles == ["std::format", "std::format › Example", "std::format › See also"] and keep == [0, 3, 4]
+    check(titles == ["std::format", "std::format › Example", "std::format › See also"] and keep == [0, -1, 4]
           and kinds == ["api", "example", "section"] and kept[1].purpose == "do"
+          and kept[1].text.startswith("std::format formats.\n\n## Example")
           and meta["left_out"]["folded"] == 3,
-          f"folded: Parameters, Return value (in the page's entry), an empty section; kept: Example, and a "
-          f"See also whose text the page does not have ({titles})")
+          f"folded: Parameters, Return value (in the page's entry), an empty section; kept: Example (what "
+          f"its page is said first: a new vector), and a See also whose text the page does not have ({titles})")
 
 
 def migrate() -> None:

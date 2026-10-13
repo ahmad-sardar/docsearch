@@ -30,7 +30,7 @@ top 5, missing.
   - `eval/results-usability.md`: the baseline on your current data.
 - **Done when:** the baseline table exists; re-running gives the same numbers.
 
-### T1 Examples: right purpose, real examples only
+### T1 Examples: right purpose, real examples only (done: `eval/results-usability.md`)
 - **Change:**
   - re-organizing keeps an example's purpose (do, or learn in a tutorial);
   - an example is an "Examples" part, or code the docs present as one, not every code block;

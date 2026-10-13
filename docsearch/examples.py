@@ -17,6 +17,7 @@ from __future__ import annotations
 import ast
 import builtins
 import re
+import warnings
 
 from docsearch import cli
 
@@ -33,9 +34,23 @@ IPYTHON = re.compile(r"^In \[\d*\]:", re.M)
 IPYTHON_LINE = re.compile(r"^(In \[\d*\]:|\s+\.\.\.:) ?(.*)$")      # In [1]: x = 1 / ...: more
 
 
+# what docs say before code they present as an example ("Run this code": cppreference's)
+PRESENTED = re.compile(r"\b(examples?|for instance|e\.g\.|usage|sample|run this code)\b", re.I)
+PLACEHOLDER = re.compile(r"This section is incomplete|no example", re.I)
+
+
+def shown(code: str) -> bool:
+    """Code that shows itself in use: an interactive session with its results (>>>), or a whole
+    C or C++ program."""
+    return ">>>" in code or ("#include" in code and bool(re.search(r"\bmain\s*\(", code)))
+
+
 def unit(e: cli.Entry) -> str | None:
-    """The examples of an API entry, with the text around them: its "Examples" part; else its
-    code (each block with the sentence before it), past the signature. None: it has none."""
+    """The examples of an API entry, with the text around them: its "Examples" part; else the
+    code it shows in use (a session with its results, a whole program) or presents as an
+    example ("Example:", "For example", "Example usage:"), each block with the sentence before
+    it. Not every block of code: a struct's definition or a grammar is part of the description.
+    None: it has none."""
     text = WIDGET.sub("", e.text)
     lines = text.splitlines()
     at = next((k for k, ln in enumerate(lines) if HEADING.match(ln.strip())), None)
@@ -54,8 +69,35 @@ def unit(e: cli.Entry) -> str | None:
     out = []
     for b in blocks:
         before = text[:b.start()].rstrip().rsplit("\n\n", 1)[-1].strip()
-        out += ([before] if before and "```" not in before else []) + [b.group(0)]
-    return "\n\n".join(out)
+        prose = before if before and "```" not in before else ""
+        if shown(b.group(2)) or PRESENTED.search(prose[-200:]):
+            out += [prose, b.group(0)] if prose else [b.group(0)]
+    return "\n\n".join(out) or None
+
+
+def placeholder(text: str) -> bool:
+    """An Example section that only says it has none yet (cppreference: "This section is
+    incomplete. Reason: no example")."""
+    return "```" not in text and bool(PLACEHOLDER.search(text))
+
+
+def lead(e: cli.Entry) -> str:
+    """What an entry is, in its first sentence ("Returns the indices of the maximum values along
+    an axis."): said first in its examples, whose code seldom says it."""
+    text = re.sub(r"```.*?```", "\n\n", e.text, flags=re.S)
+    for para in re.split(r"\n\s*\n", text):
+        line = cli.plain(" ".join(ln for ln in para.splitlines() if not ln.lstrip().startswith("|")))
+        if len(line.split()) <= 3 and not re.search(r"[a-z]\.$", line):
+            continue                                 # (a heading: Parameters, Usage, Syntax, 1.)
+        if not (line.endswith(":") and len(line) < 80) and not line.startswith("Source code:"):
+            return cli.SENTENCE_END.split(line, 1)[0][:300]
+    return ""
+
+
+def with_lead(of: cli.Entry, text: str) -> str:
+    """An example's text, with what its entry is first (unless it already says so)."""
+    first = lead(of)
+    return text if not first or first[:60] in cli.plain(text[:600]) else f"{first}\n\n{text}"
 
 
 def entries_of(entries: list[cli.Entry]) -> list[cli.Entry]:
@@ -70,7 +112,7 @@ def entries_of(entries: list[cli.Entry]) -> list[cli.Entry]:
             continue
         text = unit(e)
         if text:
-            out.append(cli.Entry(title, "example", e.location, text[:cli.PREVIEW_CHARS], e.source,
+            out.append(cli.Entry(title, "example", e.location, with_lead(e, text)[:cli.PREVIEW_CHARS], e.source,
                                  "learn" if e.purpose == "learn" else "do"))
     return out
 
@@ -127,7 +169,9 @@ def needs(text: str, lang: str = "", package: str = "", name: str = "") -> dict 
     trees = []
     for code in blocks:
         try:
-            trees.append(ast.parse(code))
+            with warnings.catch_warnings():              # (a Windows path in a string: "C:\\Program")
+                warnings.simplefilter("ignore")
+                trees.append(ast.parse(code))
         except SyntaxError:
             continue
     if not trees:

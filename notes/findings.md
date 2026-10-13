@@ -59,6 +59,11 @@ langchain copy, each result read). Evidence is from those runs.
   "› Signature", "› Description", "› Properties" results; `langchain.agents.create_agent` does
   not rank `create_agent` first.
 - **S8 cppreference placeholders become examples** ("This section is incomplete: no example").
+- **S9 (found in T1) A section reached by its Sphinx label holds only its first paragraph:**
+  Python's "Reading and writing files" had 111 letters of 8,385 (the label's anchor opens the
+  section; the cutter took the next paragraph). Every Sphinx copy.
+
+S2, S3, S8, S9: fixed in T1 (`eval/results-usability.md`).
 
 ## Finding the docs
 - **D1 Hugging Face** (transformers, datasets, accelerate, diffusers): "rate limited, nothing

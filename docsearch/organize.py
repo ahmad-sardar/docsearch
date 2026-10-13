@@ -22,6 +22,7 @@ repeats its API object (numpy.sum's page, numpy.sum).
 """
 from __future__ import annotations
 
+import gzip
 import json
 import re
 from typing import NamedTuple
@@ -29,7 +30,8 @@ from typing import NamedTuple
 from docsearch import cli
 from docsearch import pages as offline
 
-VERSION = 2                       # meta["organized"]: the rules a copy was organized with (2: examples)
+VERSION = 3                       # meta["organized"]: the rules a copy was organized with (2: examples;
+                                  # 3: examples keep their purpose, only real ones, no placeholders)
 PURPOSES = {"learn": "Learn", "do": "Do", "lookup": "Look up", "understand": "Understand"}
 
 # The sites' own names for their parts, on a title made plain (lower case, without the
@@ -430,6 +432,8 @@ def organize(sid: str, entries: list[cli.Entry], meta: dict) -> tuple[list[cli.E
             e = entries[i]
             e.purpose = "lookup" if e.kind not in cli.PAGE_KINDS else (
                 "lookup" if page_purpose == "removed" else page_purpose)
+            if e.kind == "example":                  # (an example is for doing, or learning, wherever it is)
+                e.purpose = "learn" if page_purpose == "learn" else "do"
             if subpart(e) and (not body(e.text) or any(body(e.text) in entries[j].text for j in ids
                                                        if j != i and j not in drop and not subpart(entries[j]))):
                 drop.add(i)                          # (its page's entry has it, word for word)
@@ -452,13 +456,33 @@ def organize(sid: str, entries: list[cli.Entry], meta: dict) -> tuple[list[cli.E
         e = entries[i]
         if e.kind == "section" and re.search(r" › Examples?$", e.title):
             e.kind, e.purpose = "example", "learn" if e.purpose == "learn" else "do"
-    new = examples.entries_of([entries[i] for i in keep])    # an API entry's examples, an entry too
+    keep = [i for i in keep if not (entries[i].kind == "example" and examples.placeholder(entries[i].text))]
+    # An API entry's examples, an entry of their own: made again by today's rules. Those made
+    # before that come out the same are kept (and their vectors with them); the others go.
+    api_at = {entries[i].location for i in keep if entries[i].kind not in cli.PAGE_KINDS}
+    made = {i for i in keep if entries[i].kind == "example" and entries[i].location in api_at}
+    fresh = {x.title: x for x in examples.entries_of([entries[i] for i in keep if i not in made])}
+    for i in sorted(made):
+        same = fresh.get(entries[i].title)
+        if same is not None and same.text == entries[i].text[:cli.PREVIEW_CHARS]:
+            del fresh[entries[i].title]
+        else:
+            keep.remove(i)
+    new = list(fresh.values())
+    at = {entries[i].location: entries[i] for i in keep if entries[i].kind != "example"}
+    changed = set()                                  # an Example section, with what its page is
+    for i in [i for i in keep if entries[i].kind == "example" and i not in made]:     # first
+        host = at.get(entries[i].location.split("#")[0])
+        text = examples.with_lead(host, entries[i].text) if host else entries[i].text
+        if text != entries[i].text:
+            entries[i].text = text
+            changed.add(i)                           # (new text: a new vector)
     before = meta.get("left_out") or {} if meta.get("organized") else {}    # (organized again: a guide added)
     now = {"pages": len(removed_pages) + (0 if before else len(meta.get("unread") or [])),
            "entries": len(drop) - folded, "folded": folded}
     meta["organized"] = VERSION
     meta["left_out"] = {k: before.get(k, 0) + v for k, v in now.items()}
-    return [entries[i] for i in keep] + new, keep + [-1] * len(new)
+    return [entries[i] for i in keep] + new, [-1 if i in changed else i for i in keep] + [-1] * len(new)
 
 
 def organize_copy(sid: str) -> dict:
@@ -470,7 +494,9 @@ def organize_copy(sid: str) -> dict:
     meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
     entries = list(cli.iter_entries(sid))
     had = dict(meta.get("left_out") or {})           # (organized before: say only what changed now)
+    recut = whole_sections(sid, entries, meta) if (meta.get("organized") or 0) < 3 else set()
     kept, keep = organize(sid, entries, meta)
+    keep = [-1 if i in recut else i for i in keep]   # (new text: a new vector)
     vectors = None
     if (d / "emb.npy").exists():
         vectors = np.load(d / "emb.npy", allow_pickle=False)
@@ -484,6 +510,35 @@ def organize_copy(sid: str) -> dict:
     if vectors is not None:
         save_vectors(sid, vectors, kept, keep)
     return {k: v - had.get(k, 0) for k, v in (meta.get("left_out") or {}).items()}
+
+
+def whole_sections(sid: str, entries: list[cli.Entry], meta: dict) -> set[int]:
+    """Sections reached by a label, cut before version 3 as their first paragraph (Python's
+    "Reading and writing files": 111 letters of 8,385): cut again, whole, from the stored
+    pages. Nothing downloaded. Returns the entries whose text changed."""
+    root, pages_dir = meta.get("root") or "", cli.HOME / sid / "pages"
+    by_page: dict[str, list[int]] = {}
+    for i, e in enumerate(entries):
+        if e.kind == "label" and "#" in e.location and root and e.location.startswith(root):
+            by_page.setdefault(e.location[len(root):].split("#")[0], []).append(i)
+    changed = set()
+    for rel, idx in by_page.items():
+        f = offline.page_file(pages_dir, rel)
+        if f is None or not f.exists():
+            continue
+        try:
+            soup = cli.make_soup(gzip.decompress(f.read_bytes()))
+        except (OSError, EOFError, ValueError):
+            continue
+        for i in idx:
+            el = soup.find(id=entries[i].location.split("#", 1)[1])
+            if el is None or el.name not in ("span", "a") or el.get_text(strip=True) or not cli.opens_section(el):
+                continue
+            text = cli.html_to_md(str(el.parent))[:cli.PREVIEW_CHARS]
+            if len(text) > len(entries[i].text):
+                entries[i].text = text
+                changed.add(i)
+    return changed
 
 
 def save_vectors(sid: str, vectors, kept: list[cli.Entry], keep: list[int]) -> None:

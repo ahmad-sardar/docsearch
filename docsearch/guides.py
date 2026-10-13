@@ -54,30 +54,35 @@ def official(url: str, root: str, repo: str | None) -> str:
 
 def part_of(guide: dict, root: str, k: int) -> dict | None:
     """How to read a guide, as a part of the docs (cli.build_known): its inventory's pages, or
-    its sitemap's; its own pages only (not the docs again, where its site holds them). None
-    when no index says which pages are the guide's."""
-    from docsearch import importers
-    found = cli.find_docs(guide["url"])
+    the pages its other lists name (site.py: sitemap, llms.txt); its own pages only (not the
+    docs again, where its site holds them). None when nothing says which pages are the guide's."""
+    found = cli.find_docs(guide["url"], lists=True)
     if found is None:
         return None
     kind, groot, _, page = found
     if groot == root or groot.startswith(root):       # (the docs themselves, or a part of them)
         return None
     title = guide["title"]
-    if guide.get("asked"):                            # (a guide you named: as its page names itself)
+    if guide.get("asked") or guide.get("pypi"):       # (named by you, or by PyPI: as its page names itself)
         h = re.search(r"<h1\b[^>]*>(.*?)</h1>|<title>(.*?)</title>", page or "", re.S | re.I)
         title = " ".join(re.sub(r"<[^>]+>", "", (h.group(1) or h.group(2)) if h else "").split()) or title
+        named = [x for x in re.split(r"\s+[-|–—]\s+", title) if x.lower() not in ("home", "index", "welcome")]
+        title = named[0] if named else title         # ("Home - Docs by LangChain": Docs by LangChain)
     info = {"root": groot, "dir": FOLDER if k == 0 else f"{FOLDER}{k + 1}", "title": title,
             "purpose": guide["purpose"]}
     if kind == "sphinx":
         return {"kind": "sphinx", "url": groot, "guide": info}
+    from docsearch import site as sites
     part = {"kind": "website", "root": groot, "start": groot, "prefix": groot, "guide": info}
-    if root.startswith(groot):                        # its site holds the docs (docs.pola.rs/api/...)
-        part["exclude"] = "^" + re.escape(root)
-    if importers.from_sitemap(groot + "sitemap.xml", [groot], 1):
-        part["sitemap"] = groot + "sitemap.xml"       # (its pages, listed: no others reached by links)
+    surveyed = sites.survey(groot, root=groot)
+    pages, _ = sites.choose(surveyed, "", "default") if surveyed is not None else ([], None)
+    pages = [p for p in pages if not p.startswith(root)]          # (its site holds the docs: not them again)
+    if pages:                                         # its pages, as its lists name them (site.py)
+        part.update(sites.reading(surveyed, pages))
     elif root.startswith(groot):
         return None                                   # (no list: its links would lead to all of the site)
+    if root.startswith(groot):                        # its site holds the docs (docs.pola.rs/api/...)
+        part["exclude"] = "^" + re.escape(root) + ("|" + part["exclude"][1:] if part.get("exclude") else "")
     return part
 
 
@@ -99,9 +104,30 @@ def config_guides(name: str) -> list[str]:
     return [got] if isinstance(got, str) else [u for u in got or [] if isinstance(u, str)]
 
 
-def plan_with(plan: dict, name: str, args, newest: bool) -> dict:
-    """The docs' plan with their official guides as more parts: those their header links
-    (only with the docs of the newest release: a guide has no versions), and those you named."""
+def pypi_docs(name: str, root: str) -> list[dict]:
+    """The other docs sites a package's PyPI record names (langchain: its API reference is
+    "Documentation", its guides docs.langchain.com "Homepage"): addresses that say they are
+    docs (a docs. host, a /docs path), outside the docs found. Not a home page of another kind
+    (numpy.org, pola.rs)."""
+    try:
+        p = cli.project_of(name)
+    except (SystemExit, Exception):  # noqa: BLE001 - no record: none
+        return []
+    out = []
+    for u in dict.fromkeys(p["docs"] + p["home"]):
+        u = u if u.endswith("/") or "." in u.rsplit("/", 1)[-1] else u + "/"
+        host, path = urllib.parse.urlparse(u).netloc.lower(), urllib.parse.urlparse(u).path
+        if u.startswith(root) or not (host.startswith(("docs.", "doc.", "documentation.")) or
+                                      re.search(r"/docs?(/|$)", path)):
+            continue
+        out.append({"url": u, "title": "Docs", "purpose": "do", "pypi": True})
+    return out
+
+
+def plan_with(plan: dict, name: str, args, newest: bool, pypi: bool = False) -> dict:
+    """The docs' plan with their official guides as more parts: those their header links, and
+    (`pypi`: a package found through PyPI) the other docs sites its record names; only with
+    the docs of the newest release (a guide has no versions); and those you named."""
     root = plan.get("root") or plan.get("url") or ""
     if not root.startswith("http") or plan.get("found") == "readme":
         return plan
@@ -113,6 +139,8 @@ def plan_with(plan: dict, name: str, args, newest: bool) -> dict:
         except Exception:  # noqa: BLE001 - no page: no header to read
             page = ""
         found = find_guides(root, page, names) if page else []
+        if pypi:
+            found += [g for g in pypi_docs(name, root) if g["url"] not in {f["url"] for f in found}]
     asked = wanted(name, args)
     parts = list(plan.get("parts") or [{k: v for k, v in plan.items() if k not in ("found", "repo", "verified",
                                                                                  "about", "older")}])
@@ -131,8 +159,9 @@ def plan_with(plan: dict, name: str, args, newest: bool) -> dict:
             if guide.get("asked"):
                 say(f"  {guide['url']}: no docs index there (objects.inv, a search index or a sitemap); not read")
             continue
-        say(f"  {name}: its docs link an official guide, \"{part['guide']['title']}\" ({part['guide']['root']}, "
-            f"{why}): read with them")
+        say(f"  {name}: " + ("its PyPI record names more official docs" if guide.get("pypi") else
+                             "its docs link an official guide")
+            + f", \"{part['guide']['title']}\" ({part['guide']['root']}, {why}): read with them")
         parts.append(part)
     if not any(p.get("guide") for p in parts):
         return plan

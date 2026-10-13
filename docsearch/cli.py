@@ -1548,7 +1548,7 @@ def index_in(roots: list[str], files=SITE_INDEXES) -> tuple[str, str, bytes | No
     return None
 
 
-def find_docs(candidate: str, fallback: bool = False) -> tuple[str, str, bytes | None, str] | None:
+def find_docs(candidate: str, fallback: bool = False, lists: bool = False) -> tuple[str, str, bytes | None, str] | None:
     """The docs at or under an address, and the page at the address (its links say whose docs
     they are): ("sphinx", root, inventory) where an objects.inv is; ("website", root, None) for
     other docs, a page that says it is MkDocs or Zensical, or their search index. A page that
@@ -1560,10 +1560,18 @@ def find_docs(candidate: str, fallback: bool = False) -> tuple[str, str, bytes |
         hit = hit or (None if under[0] + SITE_INDEXES[0][0] in UNREACHED else ("website", under[0], None))
     elif page or fallback:                        # (an address that does not answer: not searched)
         hit = index_in(under, SITE_INDEXES[:1])  # (a page of MkDocs or Zensical says where: above)
+        if hit is None and lists and page:       # `lists`: a site that lists its pages for programs
+            from docsearch import site as sites  # (a sitemap, llms.txt: keras.io, spacy.io) is docs
+            found = sites.survey(candidate)
+            if found is not None and found.expected >= MIN_LISTED:
+                hit = ("website", found.root, None)
         hit = hit or (("website", under[0], None) if fallback and under and page else None)
     else:
         hit = None
     return (*hit, page) if hit else None
+
+
+MIN_LISTED = 10          # pages a site must list (sitemap, llms.txt...) to be taken as docs by its lists
 
 
 def docs_links(page: str, url: str, name: str) -> list[tuple[str, bool]]:
@@ -1602,7 +1610,7 @@ def package_docs(name: str, yes: bool) -> tuple[str, str, bytes | None, dict] | 
              lambda: [(u, "home") for u in p["home"]],      # (the repository is asked only if PyPI's
              lambda: [(f"https://{norm}.readthedocs.io/", "guess")]]          # docs links were not it)
     queue = [(u, "docs") for u in p["docs"]]
-    tried: set[str] = set()                           # addresses looked at
+    tried: set[tuple[str, bool]] = set()              # addresses looked at (and at their lists)
     roots: set[str] = set()                           # docs found (several addresses may lead there)
     first = None                                      # the first docs found that could not be checked
     while queue or later:
@@ -1610,15 +1618,17 @@ def package_docs(name: str, yes: bool) -> tuple[str, str, bytes | None, dict] | 
             queue = later.pop(0)()
             continue
         url, how = queue.pop(0)
-        if url in tried:
+        if (url, how == "listed") in tried:
             continue
-        tried.add(url)
-        say(f"  looking at {url}" + (" (a guess)" if how == "guess" else ""))
-        found = find_docs(url, fallback=how == "docs")
+        tried.add((url, how == "listed"))
+        if how != "listed":
+            say(f"  looking at {url}" + (" (a guess)" if how == "guess" else ""))
+        found = find_docs(url, fallback=how == "docs", lists=how == "listed")
         if found is None:
             if how in ("website", "home"):           # a project's home page: its links to its docs
-                page = probe_roots(url)[1]           # (one that names the package: its docs address)
-                queue[:0] = [(link, "docs" if named else "home") for link, named in docs_links(page, url, name)]
+                page = probe_roots(url)[1]           # (one that names the package: its docs address),
+                links = [(link, "docs" if named else "home") for link, named in docs_links(page, url, name)]
+                queue[:0] = links + [(url, "listed")]    # then the pages it lists itself (keras.io)
             continue
         if found[1] in roots:
             continue
@@ -1676,12 +1686,12 @@ def address_repo(page: str, root: str) -> str | None:
     return None
 
 
-def docs_plan(kind: str, root: str, inv: bytes | None) -> dict:
+def docs_plan(kind: str, root: str, inv: bytes | None, read: dict | None = None) -> dict:
     """How to read docs found by their address (build_known): a Sphinx inventory lists every
     page (std:doc). One without pages (mkdocstrings: FastAPI, pydantic) lists only the API:
     its pages are read from it, then the rest of the site page by page. No inventory: the
-    site page by page."""
-    site = {"kind": "website", "start": root, "prefix": root}
+    site page by page, from the pages its own lists name (`read`: site.reading)."""
+    site = {"kind": "website", "start": root, "prefix": root, **(read or {})}
     if kind != "sphinx":
         return {"found": "website", "root": root, **site}
     objs = parse_objects_inv(inv)[2]
@@ -2988,6 +2998,9 @@ def build_known(name: str, sid: str, plan: dict, workers: int, max_pages: int | 
             extra = {k_: v for k_, v in extra.items() if k_ != "version"}    # (a guide has no version)
         meta["failed_pages"] = meta.get("failed_pages", 0) + extra.get("failed_pages", 0)
         meta["unread"] = meta.get("unread", []) + extra.get("unread", [])    # (pages about the project)
+        if extra.get("expected_pages"):                 # (read, of the pages its own lists name)
+            meta["read_pages"] = meta.get("read_pages", 0) + extra.get("read_pages", 0)
+            meta["expected_pages"] = meta.get("expected_pages", 0) + extra["expected_pages"]
         for key, v in (extra.get("failures") or {}).items():         # the causes, over all parts
             have = meta.setdefault("failures", {}).setdefault(key, {"count": 0, "example": v["example"]})
             have["count"] += v["count"]
@@ -3093,9 +3106,22 @@ def web_docs(name: str, spec: str, want: str, override: str, args, check_copy: b
             source = {**source, "older": have}
     if check_copy and have_copy(spec, name, want, have, args):
         return None
+    read = {}
+    if kind != "sphinx":                             # what the site lists, and how to read it (site.py)
+        from docsearch import site as sites
+        surveyed = sites.survey(root)
+        if surveyed is not None and surveyed.expected:
+            root = surveyed.root
+            saved = config_values(name)
+            pages, said = sites.choose(surveyed, name, saved.get("sections") if isinstance(saved, dict) else None)
+            if said is not None:
+                SECTIONS_SAID[name] = said
+            read = sites.reading(surveyed, pages)
+            say(f"  {len(pages):,} pages listed by the site ({', '.join(k for k in surveyed.lists if k != 'links')})"
+                + (", read as Markdown" if read.get("markdown") else ""))
     from docsearch import guides                     # (their official guides: more parts of them)
-    return guides.plan_with({**docs_plan(kind, root, inv), **{k: v for k, v in source.items() if v}},   # (repo,
-                            name, args, newest=not want)                                         # about)
+    return guides.plan_with({**docs_plan(kind, root, inv, read), **{k: v for k, v in source.items() if v}},
+                            name, args, newest=not want, pypi=not override)   # (repo, about)
 
 
 DEV_SEGMENTS = {"main", "master", "trunk", "dev", "devdocs", "develop", "nightly"}
@@ -3269,9 +3295,8 @@ def add_each(args, outer: str) -> None:
         if not entries and meta.get("partial"):
             say(f"  stopped before a page was read. To start again: {continue_with(name)}")
             continue
-        if not entries and meta.get("failures") and str(meta.get("root", "")).startswith("http"):
-            entries, extra = try_alternatives(name, sid, meta, args)
-            meta.update(extra)
+        if read is not None and short(meta) and not meta.get("partial"):
+            entries, meta = other_form(name, sid, spec, read, entries, meta, args)
         if not entries:
             say(f"  No entries for '{spec}'. Nothing saved.")
             causes = sorted((meta.get("failures") or {}).items(), key=lambda kv: -kv[1]["count"])
@@ -3288,6 +3313,9 @@ def add_each(args, outer: str) -> None:
         if str(meta.get("root", "")).startswith("http") and meta.get("kind") not in ("local", "readme"):
             from docsearch import order
             meta["nav"] = order.fetch_nav(meta)        # the docs' sidebar: their reading order
+        outline = {p: c for part in (read or {}).get("parts") or [read or {}] for p, c in (part.get("outline") or {}).items()}
+        if outline:                                # the site's own sections of its pages (site.py)
+            write_atomic(source_dir(sid) / "outline.json", json.dumps(outline).encode())
         from docsearch import organize
         entries, _ = organize.organize(sid, entries, meta)   # learn, do, look up, understand
         meta["count"] = len(entries)
@@ -3306,6 +3334,10 @@ def add_each(args, outer: str) -> None:
                 f"saved the rest. To try again later: search upgrade {name} --force")
         if getattr(args, "record", True):
             remember(spec)
+            if name in SECTIONS_SAID:                # the sections you chose: asked once
+                remember_sections(name, SECTIONS_SAID.pop(name))
+        if short(meta):
+            say(f"  Note: {short(meta)}")
         if not staged and not meta.get("partial"):      # finished: kept under its version
             copy_hint(sid.split("@")[0], keep_copy(sid, want, replace=getattr(args, "force", False)))
 
@@ -3337,41 +3369,48 @@ LOCAL_TIP = ("Another way, which always works: download the docs yourself (many 
              "search add {name}=/path/to/folder-or.zip")
 
 
-def try_alternatives(name: str, sid: str, meta: dict, args) -> tuple[list[Entry], dict]:
-    """When the pages could not be read one way, the other official ways a site offers:
-    its llms.txt (a list of its pages for programs) and its sitemap."""
-    from docsearch import importers
-    root = meta["root"]
-    causes = meta.get("failures") or {}
-    if causes and all(k.partition(":")[0] in ("dns", "offline", "certificate", "bot-check", "login") for k in causes):
-        return [], {}                                  # the same site: no other way in
-    origin = "{0.scheme}://{0.netloc}/".format(urllib.parse.urlparse(root))
-    tries = dict.fromkeys([(("llms.txt", "llms", urllib.parse.urljoin(root, "llms.txt"))),
-                           ("llms.txt", "llms", origin + "llms.txt"), ("sitemap", "sitemap", origin + "sitemap.xml")])
-    for label, key, url in tries:
-        try:
-            data, _ = http_get(url, timeout=15)
-        except urllib.error.URLError as e:
-            say(f"  Alternative: {url}: {getattr(e, 'reason', e)}")
-            continue
-        if key == "sitemap" and b"<urlset" not in data[:4096] and b"<sitemapindex" not in data[:4096]:
-            continue
-        say(f"  Alternative: the site's {label} at {url}")
-        plan = {"kind": "website", "root": root, "prefix": root, key: url}
-        if key == "llms":                        # its pages may live on a sister site of the same
-            org = organization(urllib.parse.urlparse(url).netloc)        # organization only
-            hosts = sorted({h for h in (urllib.parse.urlparse(u).netloc for u in
-                                        importers.MD_LINK.findall(data.decode("utf-8", "replace")))
-                            if h and organization(h) == org})
-            plan["prefix"] = [f"https://{h}/" for h in hosts] or [origin]
-            plan["root"] = plan["prefix"][0] if len(plan["prefix"]) == 1 else "https://"
-        store = importers.Store(sid, root)
-        store.reset()
-        entries, extra = importers.build_website(name, sid, plan, store, args.workers, args.max_pages)
-        store.finish(args.workers)
-        if entries:
-            return entries, {**extra, "kind": "website", "root": plan["root"], "pages": True, "via": url}
-    return [], {}
+def short(meta: dict) -> str:
+    """How far a download fell short of the pages the site's own lists name (site.py), in
+    words; "" when it read nine in ten of them or more."""
+    expected, got = meta.get("expected_pages") or 0, meta.get("read_pages") or 0
+    if expected < 20 or got >= 0.9 * expected:
+        return ""
+    return f"read {got:,} of the {expected:,} pages the site's own lists name"
+
+
+def other_form(name: str, sid: str, spec: str, plan: dict, entries: list[Entry], meta: dict,
+               args) -> tuple[list[Entry], dict]:
+    """A download that read under nine in ten of the listed pages: read again in the site's
+    other form (its pages as Markdown, or as HTML), and the one that read more kept."""
+    parts = plan.get("parts") or [plan]
+    if not any(p.get("can_markdown") for p in parts if p.get("kind") == "website"):
+        return entries, meta
+    say(f"  {short(meta)}; reading its pages in their other form (Markdown or HTML)")
+    other = {**plan, "parts": [{**p, "markdown": not p.get("markdown")} if p.get("can_markdown") else p
+                               for p in parts]}
+    pages, aside = HOME / sid / "pages", HOME / sid / "pages.first"
+    shutil.rmtree(aside, ignore_errors=True)
+    if pages.exists():
+        pages.rename(aside)
+    more, extra = build_known(name, sid, other, args.workers, args.max_pages, False, spec)
+    if (extra.get("read_pages") or 0) > (meta.get("read_pages") or 0) and more:
+        shutil.rmtree(aside, ignore_errors=True)
+        return more, {**meta, **extra, "kind": meta.get("kind"), "root": meta.get("root")}
+    shutil.rmtree(pages, ignore_errors=True)
+    if aside.exists():
+        aside.rename(pages)
+    return entries, meta
+
+
+SECTIONS_SAID: dict[str, object] = {}      # package -> the sections you chose this run (site.choose)
+
+
+def remember_sections(name: str, sections) -> None:
+    """The sections of its docs site you chose to read, kept in packages.toml (sync asks no more)."""
+    old = config_values(name)
+    if old is None or isinstance(old, list):
+        return
+    config_set(name, {**(old if isinstance(old, dict) else {"version": old}), "sections": sections})
 
 
 def known_site(url: str) -> str | None:
@@ -3485,7 +3524,7 @@ def read_config() -> list[tuple[str, bool]]:
         if not PKG_NAME.fullmatch(name):
             die(f"{CONFIG}: '{name}' is not a package name.")
         opts = val if isinstance(val, dict) else {"version": val}
-        unknown = set(opts) - {"version", "url", "path", "embed"}
+        unknown = set(opts) - {"version", "url", "path", "embed", "sections"}
         if unknown:
             die(f"{CONFIG}: [{name}] has unknown keys: {', '.join(sorted(unknown))}")
         version, url = str(opts.get("version", "latest")), opts.get("url")

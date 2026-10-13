@@ -109,9 +109,34 @@ MD_LINK = re.compile(r"\]\((\S+?)\)")
 def from_llms(url: str, prefixes: list[str], limit: int) -> list[str]:
     """Pages listed in an llms.txt index (and the section indexes it points to): web pages,
     or Markdown pages (.md)."""
-    seen_idx, pages, todo = set(), [], [url]
+    pages, _, md_of = read_llms(url, prefixes, limit)
+    return [md_of.get(p, p) for p in pages]
+
+
+NOT_A_PAGE = re.compile(r"\.(json|ya?ml|xml|png|jpe?g|gif|svg|webp|pdf|zip|gz|ipynb|py|csv)(\?|$)", re.I)
+LLMS_INDEX = re.compile(r"/(llms[\w-]*\.txt|_llms/.+\.txt)$")      # a section index (LangChain: /_llms/...)
+LLMS_LINK = re.compile(r"\[([^\]]*)\]\((\S+?)\)")
+LLMS_HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+
+
+def plain_heading(text: str) -> str:
+    """'[Get started](/get-started)' -> 'Get started'; 'Build / Python (242 pages)' -> as is."""
+    return " ".join(LLMS_LINK.sub(r"\1", text).replace("`", "").split())
+
+
+def read_llms(url: str, prefixes: list[str], limit: int) -> tuple[list[str], dict[str, list[str]], dict[str, str]]:
+    """What an llms.txt index lists (and the section indexes it points to): (the pages, each
+    page's sections, its Markdown address). A page's sections are the names it is under: the
+    section indexes it was reached through ("Build / Python") and the headings above its link
+    ("## Python", "### Deep Agents", "#### Get started"). A page listed as Markdown
+    (guide/x.md) is the page at guide/x, read as Markdown (md_of)."""
+    pages: list[str] = []
+    crumbs: dict[str, list[str]] = {}
+    md_of: dict[str, str] = {}
+    seen_idx: set[str] = set()
+    todo: list[tuple[str, list[str]]] = [(url, [])]
     while todo and len(pages) < limit:
-        idx = todo.pop(0)
+        idx, outer = todo.pop(0)
         if idx in seen_idx:
             continue
         seen_idx.add(idx)
@@ -119,18 +144,38 @@ def from_llms(url: str, prefixes: list[str], limit: int) -> list[str]:
             text = cli.http_get(idx)[0].decode("utf-8", "replace")
         except Exception:  # noqa: BLE001
             continue
-        for href in MD_LINK.findall(text):
-            # absolute links only: relative ones are cross-references inside full-text files
-            if not href.startswith(("http://", "https://", "/")):
-                continue
-            u = urllib.parse.urljoin(idx, href).split("#")[0]
-            if not cli.safe_url(u) or (prefixes and not any(u.startswith(p) for p in prefixes)):
-                continue
-            if re.search(r"/llms[\w-]*\.txt$", u):
-                todo.append(u)                           # a section index
-            elif not u.endswith(".txt") and u not in pages:
-                pages.append(u)
-    return pages[:limit]
+        heads: list[tuple[int, str]] = []            # the headings above, by level
+        for line in text.splitlines():
+            h = LLMS_HEADING.match(line)
+            under = outer + [n for _, n in heads]
+            if h:                                    # (the file's own title, level 1, names nothing)
+                level = len(h.group(1))
+                if level > 1:
+                    heads = [x for x in heads if x[0] < level] + [(level, plain_heading(h.group(2)))]
+            for label, href in LLMS_LINK.findall(line):
+                # absolute links only: relative ones are cross-references inside full-text files
+                if not href.startswith(("http://", "https://", "/")):
+                    continue
+                u = urllib.parse.urljoin(idx, href).split("#")[0]
+                if not cli.safe_url(u) or (prefixes and not any(u.startswith(p) for p in prefixes)):
+                    continue
+                if LLMS_INDEX.search(u):             # a section index: its pages are under its name
+                    path = re.sub(r"\s*\(\d[\d,]* pages?\)\s*$", "", plain_heading(label))
+                    todo.append((u, [x.strip() for x in path.split(" / ") if x.strip()]))
+                    continue
+                if u.endswith(".txt") or NOT_A_PAGE.search(u):
+                    continue                         # (an OpenAPI spec, an image: not a page)
+                page = u[:-3] if u.endswith(".md") else u
+                if page in crumbs:
+                    continue
+                if page != u:
+                    md_of[page] = u
+                pages.append(page)
+                names = [n for k, n in enumerate(under) if k == 0 or n.lower() != under[k - 1].lower()]
+                crumbs[page] = names
+                if len(pages) >= limit:
+                    break
+    return pages[:limit], crumbs, md_of
 
 
 def sitemap_locs(body: bytes) -> tuple[list[str], list[str]]:
@@ -141,10 +186,11 @@ def sitemap_locs(body: bytes) -> tuple[list[str], list[str]]:
     return [u for u in locs if u.endswith((".xml", ".xml.gz"))], [u for u in locs if not u.endswith((".xml", ".xml.gz"))]
 
 
-def from_sitemap(url: str, prefixes: list[str], limit: int) -> list[str]:
-    """Pages in a sitemap (or sitemap index), inside the prefixes."""
-    out, todo, seen = [], [url], set()
-    while todo and len(out) < limit:
+def from_sitemap(url: str, prefixes: list[str], limit: int, files: int = 10**6) -> list[str]:
+    """Pages in a sitemap (or sitemap index), inside the prefixes; at most `files` sitemap
+    files read (a host's index can list hundreds: Hugging Face's, of every model)."""
+    out, have, todo, seen = [], set(), [url], set()
+    while todo and len(out) < limit and len(seen) < files:
         sm = todo.pop(0)
         if sm in seen:
             continue
@@ -154,7 +200,10 @@ def from_sitemap(url: str, prefixes: list[str], limit: int) -> list[str]:
         except Exception:  # noqa: BLE001
             continue
         todo += maps
-        out += [u for u in pages if cli.safe_url(u) and any(u.startswith(p) for p in prefixes) and u not in out]
+        for u in pages:
+            if u not in have and cli.safe_url(u) and any(u.startswith(p) for p in prefixes):
+                have.add(u)
+                out.append(u)
     return out[:limit]
 
 
@@ -303,21 +352,9 @@ def section_parts(main):
     return out
 
 
-def website_page(sid: str, name: str, root: str, pages_dir: Path, url: str, html: bytes,
-                 real_url: str, spec: dict) -> tuple[list[Entry], dict[str, str], list[str]]:
-    """Cut one HTML page into entries, store it, and return the links it has (worker)."""
-    soup = cli.make_soup(html)
-    hrefs = [a["href"] for a in soup.find_all(["a", "area"], href=True) if not PRINT_LINK.search(
-        " ".join((a.get_text(" ", strip=True), a.get("title") or "", a.get("aria-label") or "")))]
-    # books whose table of contents is not a link: <link rel="contents" href="toc.htm"> and
-    # rel="next" (Oracle, DocBook), or the frames of a frameset (old Javadoc; not an <iframe>:
-    # mdBook's is its sidebar again)
-    hrefs += [ln["href"] for ln in soup.find_all("link", href=True) if NAV_RELS & {r.lower() for r in ln.get("rel") or []}]
-    hrefs += [f["src"] for f in soup.find_all("frame", src=True)]
-    links = [normal(urllib.parse.urljoin(real_url, h)) for h in hrefs]
-    cli.clean_soup(soup)                       # (after the links: chapter lists live in <nav>)
-    for el in soup.select(DROP + (", " + spec["drop"] if spec.get("drop") else "")):
-        el.decompose()
+def main_part(soup, spec: dict | None = None):
+    """A page's main part, without the site around it (its menus already dropped)."""
+    spec = spec or {}
     # a saved article: its text without the site around it (a general method, see article.py)
     main = article.extract(soup) if spec.get("article") else None
     if main is None and spec.get("main"):
@@ -334,8 +371,25 @@ def website_page(sid: str, name: str, root: str, pages_dir: Path, url: str, html
         if main is not None and (not vague or len(main.get_text(" ", strip=True)) >= least):
             break
         main = None
-    if main is None:
-        main = body
+    return body if main is None else main
+
+
+def website_page(sid: str, name: str, root: str, pages_dir: Path, url: str, html: bytes,
+                 real_url: str, spec: dict) -> tuple[list[Entry], dict[str, str], list[str]]:
+    """Cut one HTML page into entries, store it, and return the links it has (worker)."""
+    soup = cli.make_soup(html)
+    hrefs = [a["href"] for a in soup.find_all(["a", "area"], href=True) if not PRINT_LINK.search(
+        " ".join((a.get_text(" ", strip=True), a.get("title") or "", a.get("aria-label") or "")))]
+    # books whose table of contents is not a link: <link rel="contents" href="toc.htm"> and
+    # rel="next" (Oracle, DocBook), or the frames of a frameset (old Javadoc; not an <iframe>:
+    # mdBook's is its sidebar again)
+    hrefs += [ln["href"] for ln in soup.find_all("link", href=True) if NAV_RELS & {r.lower() for r in ln.get("rel") or []}]
+    hrefs += [f["src"] for f in soup.find_all("frame", src=True)]
+    links = [normal(urllib.parse.urljoin(real_url, h)) for h in hrefs]
+    cli.clean_soup(soup)                       # (after the links: chapter lists live in <nav>)
+    for el in soup.select(DROP + (", " + spec["drop"] if spec.get("drop") else "")):
+        el.decompose()
+    main = main_part(soup, spec)
     h1 = main.find("h1") or soup.find("h1")
     title = heading_text(h1) if h1 else (soup.title.get_text(strip=True) if soup.title else url)
     entries: list[Entry] = []
@@ -491,6 +545,47 @@ def next_part(html: bytes, base: str) -> str | None:
     return normal(urllib.parse.urljoin(base, el["href"])) if el is not None and el.get("href") else None
 
 
+COMPONENT = re.compile(r"<(/?)([A-Z][\w.]*)((?:\s+[\w:.-]+(?:=(?:\"[^\"]*\"|'[^']*'|\{[^{}]*\}))?)*)\s*(/?)>")
+ATTR = re.compile(r"""([\w:.-]+)=(?:"([^"]*)"|'([^']*)')""")
+ASIDES = {"Note", "Tip", "Warning", "Info", "Callout", "Check", "Danger", "Important"}
+
+
+def mdx_to_md(md: str) -> str:
+    """MDX (Mintlify's Markdown: docs.langchain.com) as plain Markdown: its components' tags
+    dropped, what they hold kept and no longer indented (it would read as code); a card's
+    title and link a link, a tab's or an accordion's title a bold line, a note's word kept.
+    Code blocks stay as they are. A notice before the page's title (Mintlify's "Fetch the
+    complete documentation index") is not the page's."""
+    lines = md.splitlines()
+    first = next((k for k, ln in enumerate(lines) if ln.startswith("# ")), 0)
+    if all(not ln.strip() or ln.lstrip().startswith(">") for ln in lines[:first]):
+        lines = lines[first:]
+    out, depth, fence = [], 0, False
+
+    def tag(m: re.Match) -> str:
+        nonlocal depth
+        closing, name, attrs, selfclose = m.groups()
+        if closing:
+            depth = max(0, depth - 1)
+            return ""
+        if not selfclose:
+            depth += 1
+        a = {k: v1 or v2 for k, v1, v2 in ATTR.findall(attrs)}
+        if a.get("title") and a.get("href"):
+            return f"- [{a['title']}]({a['href']}) "
+        if a.get("title"):
+            return f"**{a['title']}**"
+        return f"**{name}:** " if name in ASIDES else ""
+    for ln in lines:
+        body = ln[min(len(ln) - len(ln.lstrip(" ")), 2 * depth):]
+        if fence or body.lstrip().startswith("```"):
+            fence = fence != body.lstrip().startswith("```") if not fence else not body.lstrip().startswith("```")
+            out.append(body)
+            continue
+        out.append(re.sub(r"</?div\b[^>]*>", "", COMPONENT.sub(tag, body)))
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out))
+
+
 def markdown_page(sid: str, name: str, root: str, pages_dir: Path, url: str, md_bytes: bytes,
                   spec: dict) -> tuple[list[Entry], dict[str, str], list[str]]:
     """A Markdown page from an llms.txt site: entries, plus an HTML copy for reading (worker)."""
@@ -501,6 +596,7 @@ def markdown_page(sid: str, name: str, root: str, pages_dir: Path, url: str, md_
 
     md = md_bytes.decode("utf-8", "replace")
     md = re.sub(r"\A---\n.*?\n---\n", "", md, flags=re.S)        # front matter
+    md = mdx_to_md(md)
     title_m = re.search(r"^#\s+(.+)$", md, re.M)
     title = title_m.group(1).strip() if title_m else Path(urllib.parse.urlparse(url).path).stem
 
@@ -658,6 +754,8 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
             say(f"  {len(listed)} pages listed in {spec['llms']}")
         if spec.get("sitemap"):
             listed += from_sitemap(spec["sitemap"], prefixes, cap)
+        listed += [u for u in spec.get("listed") or []          # the pages its own lists name
+                   if any(u.startswith(p) for p in prefixes) and not exclude.search(u)][:cap]
         if not starts and not listed:                      # its list could not be read: the docs'
             starts = prefixes[:1] or [store.root]          # own address (and a failure, if it fails)
         todo = [[u, 0] for u in dict.fromkeys(starts + listed) if not exclude.search(u)
@@ -684,6 +782,7 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
         say(f"  continuing: {pages(len(state['read']))} read before"
             + (f", about {state['about']:,} in all" if state["about"] else ""))
     allowed = lambda u: rp.can_fetch(cli.USER_AGENT, u)  # noqa: E731
+    as_markdown: set[str] = set()                         # pages read as Markdown
     todo, seen, read = state["retry"] + state["todo"], set(state["seen"]), set(state["read"])
     retry: list = []                            # pages that failed for a reason that may pass
     tries: dict = state.setdefault("tries", {})      # how often each such page failed
@@ -694,7 +793,18 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
             f.truncate(state.get("entries_bytes", 0))
     got_bytes = [state["bytes"]]
 
+    md_of = spec.get("md_of") or {}
+
     def fetch(u: str):
+        if spec.get("markdown") and not u.endswith(".md"):     # the page as the site gives it in
+            try:                                               # Markdown (its HTML is drawn by
+                body = cli.get_page_at(md_of.get(u) or u.rstrip("/") + ".md")[0]   # JavaScript, or
+                if body[:1] not in (b"<", b"{") and len(body) > 50:            # is far bigger)
+                    got_bytes[0] += len(body)
+                    as_markdown.add(u)
+                    return u, (body, u), None
+            except Exception:  # noqa: BLE001 - not there as Markdown: its HTML
+                pass
         try:
             page = cli.get_page_at(u)
             got_bytes[0] += len(page[0])
@@ -786,7 +896,7 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
                     depth_of[real] = depth_of[u]
                     u = real                                 # its own address: one entry per page
                 cut_key[u] = same
-                if u.endswith(".md"):
+                if u.endswith(".md") or u in as_markdown:
                     jobs.append((u, cpu.submit(markdown_page, sid, name, store.root, store.dir, u, got[0], spec)))
                 else:
                     jobs.append((u, cpu.submit(website_page, sid, name, store.root, store.dir, u, got[0], got[1],
@@ -877,14 +987,18 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
             + f". They are {cli.kept()}; to continue: {cli.continue_with(name)}")
         return entries, {"failed_pages": len(fails), "failures": fails.as_meta(),
                          "partial": {"pages": len(read), "about": about, "again": len(retry)}}
+    # (how many pages its links reached, and how many its sitemap lists: a site whose links are
+    # drawn by JavaScript reaches few of them, see cli.few_pages)
+    reach = {"read_pages": len(read), "expected_pages": spec.get("expected")}
     if resume:                                               # read to its end: kept as such
-        finish_part(folder, {"failed_pages": len(fails), "failures": fails.as_meta()}, store.images, store.root)
+        finish_part(folder, {"failed_pages": len(fails), "failures": fails.as_meta(), **reach}, store.images,
+                    store.root)
     else:
         shutil.rmtree(folder, ignore_errors=True)
     say(f"  {done()} pages ({len(fails)} failed) in {time.time() - t0:.0f} s")
     if fails:
         fails.report()
-    return entries, {"failed_pages": len(fails), "failures": fails.as_meta()}
+    return entries, {"failed_pages": len(fails), "failures": fails.as_meta(), **reach}
 
 
 # --------------------------------------------------------------------------- local copies

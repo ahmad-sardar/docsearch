@@ -88,7 +88,10 @@ SUBPARTS = {"parameters", "return value", "return values", "returns", "exception
             "helper variable template", "helper variable templates", "helper templates", "helper concepts",
             "deduction guides", "specializations", "protected member functions", "public member functions",
             "member variables", "types", "constants", "functions", "classes", "macros", "macro constants",
-            "objects", "keywords", "includes", "type requirements", "requirements", "error handling"}
+            "objects", "keywords", "includes", "type requirements", "requirements", "error handling",
+            "next steps", "what's next", "related", "related pages", "related content", "learn more",
+            "further reading", "additional resources", "resources"}
+LINK_LINE = re.compile(r"^\s*(?:[-*+]|\d+\.)?\s*\[[^\]]+\]\([^)]+\)\s*(?:[:—–-]?\s*.{0,200})?$")
 
 
 RELEASES = re.compile(r"(.* )?release notes?( .*)?|(.* )?(what'?s|what is) new( in( .*)?)?|whatsnew|change ?log( .*)?|"
@@ -163,6 +166,7 @@ class Pages(NamedTuple):
     up: dict[str, str | None]        # the page above it (in the contents, else by its address)
     parent: dict[str, str | None]    # the page whose contents list it
     title: dict[str, str]
+    first: dict[str, str]            # a section of the site's outline -> its first page
 
 
 def classify(sid: str, meta: dict, entries: list[cli.Entry]) -> Pages:
@@ -209,9 +213,34 @@ def classify(sid: str, meta: dict, entries: list[cli.Entry]) -> Pages:
     label = {r: None if r in named else label_of(title.get(r, ""), names, r in lists or contents.parent.get(r) is None)
              for r in pages}
     label.update({r: "removed" for r in unread})
+    # A page no contents list has, in the site's own outline (site.py: its llms.txt headings, its
+    # search index, its sidebar): above it are its sections ("§Get started"), as if they were
+    # pages, named as the site names them; then its address.
+    keys_of: dict[str, list[str]] = {}
+    first: dict[str, str] = {}
+    for rel, crumbs in outline_of(sid, meta, stored).items():
+        if rel not in pages or contents.parent.get(rel) is not None or not crumbs:
+            continue
+        keys = ["§" + " / ".join(crumbs[:k]) for k in range(1, len(crumbs) + 1)]
+        keys_of[rel] = keys
+        for k, key in enumerate(keys):
+            if key not in up:
+                up[key] = keys[k - 1] if k else above(rel)
+                title[key] = crumbs[k]
+                label[key] = label_of(crumbs[k], names)
+        up[rel] = keys[-1]
+        if rel not in named:                     # a page of the outline is a leaf: its sections name
+            label[rel] = label_of(title.get(rel, ""), names, part=False)    # parts, not its title
+    order_ = []
+    for r in contents.order + sorted(pages - stored, key=order.natural):
+        for key in keys_of.get(r, []):
+            if key not in first:
+                first[key] = r
+                order_.append(key)
+        order_.append(r)
     purpose: dict[str, str] = {}
     anchor: dict[str, str | None] = {}
-    for rel in pages:
+    for rel in pages | set(first):
         cur, seen, said = rel, set(), []
         while cur is not None and cur not in seen:   # the page, then the pages above it
             seen.add(cur)
@@ -224,17 +253,29 @@ def classify(sid: str, meta: dict, entries: list[cli.Entry]) -> Pages:
             purpose[rel], anchor[rel] = "removed", None   # (a guide's page, or one no contents list: its
             continue                                      # folder says, as development/ in polars' guide)
         at = next((r for r in said if label.get(r)), None)
-        first = own.split("/")[0] if "/" in own else ""
+        top = own.split("/")[0] if "/" in own else ""
         if at is not None:
             purpose[rel], anchor[rel] = label[at], at
         elif guide is not None:                  # a guide's page: the guide's purpose
             purpose[rel], anchor[rel] = guide["purpose"], page_of(guide["root"], meta, stored)
+        elif rel in keys_of or rel.startswith("§"):     # in the site's outline, and no section says
+            purpose[rel] = "do"                           # reference, tutorial or explanation: a guide
+            anchor[rel] = next((r for r in reversed(said) if r.startswith("§")), None)
         else:                                    # named by its folder: the part is the folder's
-            purpose[rel] = FOLDER_OF.get(first.lower()) or "lookup"   # first page (extending/index.html)
-            anchor[rel] = next((r for r in reversed(said) if r.startswith(first + "/")), None) \
-                if first.lower() in FOLDER_OF else None
-    rest = sorted(pages - stored, key=order.natural)
-    return Pages(contents.order + rest, purpose, anchor, up, dict(contents.parent), title)
+            purpose[rel] = FOLDER_OF.get(top.lower()) or "lookup"   # first page (extending/index.html)
+            anchor[rel] = next((r for r in reversed(said) if r.startswith(top + "/")), None) \
+                if top.lower() in FOLDER_OF else None
+    return Pages(order_, purpose, anchor, up, dict(contents.parent), title, first)
+
+
+def outline_of(sid: str, meta: dict, stored: set[str]) -> dict[str, list[str]]:
+    """Each page's sections in the site's own outline (outline.json: site.py), by its place
+    among the stored pages."""
+    try:
+        found = json.loads((cli.HOME / sid / "outline.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {rel: crumbs for url, crumbs in found.items() if (rel := page_of(url, meta, stored))}
 
 
 def page_purposes(sid: str, meta: dict, entries: list[cli.Entry]) -> dict[str, str]:
@@ -297,9 +338,11 @@ def contents(sid: str) -> list[dict]:
     pages_dir = d / "pages"
 
     def item(rel: str) -> dict:
-        """A page to open; for one that stands for a guide with no first page, its first page."""
-        at = rel if offline.page_file(pages_dir, rel) is None or offline.page_file(pages_dir, rel).exists() \
-            else next(iter(kids.get(rel, [])), rel)
+        """A page to open; for a section of the site's outline, or one that stands for a guide
+        with no first page, its first page."""
+        at = pages.first.get(rel, rel)
+        if offline.page_file(pages_dir, at) is not None and not offline.page_file(pages_dir, at).exists():
+            at = next(iter(kids.get(rel, [])), at)
         return {"title": pages.title.get(rel) or rel, "path": f"{sid}/{at}"}
     out = []
     for p in PURPOSES:
@@ -324,16 +367,35 @@ def contents(sid: str) -> list[dict]:
 
 
 def subpart(e: cli.Entry) -> str | None:
-    """The heading of a section that only parts its page: "Return value" of "std::format › Return value"."""
+    """The heading of a section that only parts its page: "Return value" of "std::format › Return value";
+    one that only lists links to other pages ("Next steps", a grid of cards): its heading too."""
     if e.kind not in ("section", "label") or " › " not in e.title:
         return None
     head = e.title.rsplit(" › ", 1)[1].strip().lower()
-    return head if head in SUBPARTS or head.startswith("inherited from") else None
+    if head in SUBPARTS or head.startswith("inherited from"):
+        return head
+    return head if links_only(e.text) else None
 
 
 def body(text: str) -> str:
     """A section's own text, without its heading: what its page's entry must hold."""
     return re.sub(r"^#+ [^\n]*(\n+|$)", "", text.strip(), count=1)[:300]
+
+
+def links_only(text: str) -> bool:
+    """Is a section's text only links to other pages (a list of them, cards)?"""
+    lines = [ln for ln in re.sub(r"^#+ [^\n]*(\n+|$)", "", text.strip(), count=1).splitlines()
+             if ln.strip() and not ln.lstrip().startswith("#")]
+    links = linked = 0
+    after = False                                    # (a card's description, on the line after its link)
+    for ln in lines:
+        if LINK_LINE.match(ln):
+            links, linked, after = links + 1, linked + 1, True
+        elif after and len(ln) < 200 and not re.match(r"\s*([-*+]|\d+\.)\s", ln):
+            linked, after = linked + 1, False
+        else:
+            after = False
+    return links >= 2 and linked >= 0.8 * len(lines)
 
 
 def organize(sid: str, entries: list[cli.Entry], meta: dict) -> tuple[list[cli.Entry], list[int]]:

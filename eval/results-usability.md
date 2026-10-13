@@ -271,3 +271,26 @@ Questions that changed from T1 (`eval/runs/usability-t2.json`):
 Worse: three answers that were first now lose to API names close to the words (fileinput's
 functions, CUDA's launch enum constants, C's copysign). Speed: how mode searches twice, 66 ms
 a search (median) against 34 ms for plain search.
+
+# T3: one result per thing (2026-10-12)
+
+- **One section reached by two labels is one entry** (same page, same title, same text), kept at
+  the docs' own label (`#io-parquet`, what cross-references and links elsewhere use) rather
+  than the id its heading got from its words (`#parquet`). Organizing version 4 folded pandas
+  433, Python 58, langchain 198, CUDA 2, numpy 1; no vector made again.
+- **Two results of one name say where each is**, by the first of these that tells them all
+  apart: the page's title (pandas' Sorting: "Comparison with R", "Essential basic
+  functionality"), the folder (polars' GroupBy: reference/dataframe, reference/lazyframe; C's
+  strndup: c/string/byte, c/experimental/dynamic), the parameters (CUDA's cudaMallocAsync
+  overloads). 121 results in the usability run's top 10 now carry it.
+- **A heading said twice on a page has two places**: Markdown pages (`#example`,
+  `#example-1`, cut by the page's own headings, so `## x` in a code block is not one) and the
+  copies kept of HTML pages (keras). Your copies other than langchain share no anchor.
+
+Repeated results in the usability run's top 10 (same name, same place): 26 questions before,
+13 now, all in your langchain copy, which holds most pages twice (as `.md` and as HTML, 9,304
+entries) and both languages: it is replaced in T10.
+
+Usability: how 27 / 33 / 35 / 2, what 20 / 25 / 25 / 2 (as T2); three ranks moved by one
+(merge 4 → 5, coroutines 2 → 3, to_csv 3 → 2). Stack Overflow dev, paired with T2 (141
+questions): plain +0.001 (p=1.0), how +0.004 (p=0.57), names 0.938 both.

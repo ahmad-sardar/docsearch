@@ -30,6 +30,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -63,6 +64,12 @@ def pygments_css() -> str:
 
 # --------------------------------------------------------------------------- the library
 
+
+def shown_name(e: cli.Entry) -> str:
+    """An entry's name in the results: an API object's without its kind (numpy.sum)."""
+    return cli.api_name(e.title) if e.kind not in cli.PAGE_KINDS else e.title
+
+
 class Library:
     """Everything that is indexed, searchable, with its offline pages. Of each package the copy
     search uses is loaded (cli.in_use; with several and none chosen, the newest until you choose
@@ -83,6 +90,7 @@ class Library:
         self.lock = threading.Lock()                 # one search at a time (the model), one load
         self.order: list[str] = []                   # the copies loaded, in the order they came
         self._browse_pos: tuple = (None, {})         # (index, entry -> place in index.browse)
+        self._page_titles: tuple = (None, {})        # (index, a page's address -> its title)
         self._browse: tuple = (None, [])             # ((index, packages), the list before you type)
         self.summaries: dict[int, str] = {}
         self._covers: dict[str, dict] = {}          # copy -> what it describes
@@ -182,7 +190,7 @@ class Library:
             text = self.summaries[i]
         else:                                        # a page's snippet is the query's: made each time
             text = cli.snippet(e, q)
-        return {"id": i, "name": cli.api_name(e.title) if is_api else e.title, "kind": e.kind,
+        return {"id": i, "name": shown_name(e), "kind": e.kind,
                 "source": self.sid_of[i], "api": is_api, "summary": text, "purpose": e.purpose,
                 "complete": self.complete(i), **self.versioned(i, self.sid_of[i], project)}
 
@@ -255,8 +263,47 @@ class Library:
                 state = "ranked"
         with self.lock:
             fixed = index.correction(plain_q) if plain_q else None
-        return {"q": q, "total": len(ids), "ai": state, "corrected": fixed, "mode": mode,
-                "items": [self.item(i, q, project) for i in ids[offset:offset + limit]]}
+        items = [self.item(i, q, project) for i in ids[offset:offset + limit]]
+        where = self.where(index, ids[:offset + limit])
+        for it in items:                             # two of one name: where each is
+            if it["id"] in where:
+                it["where"] = where[it["id"]]
+        return {"q": q, "total": len(ids), "ai": state, "corrected": fixed, "mode": mode, "items": items}
+
+    def where(self, index, ids: list[int]) -> dict[int, str]:
+        """Where each result is that has another of its name (in its package) in the list: its
+        page's title (pandas' Sorting sections: Comparison with R, Essential basic
+        functionality); else its folder (polars' GroupBy: reference/dataframe and
+        reference/lazyframe); else its parameters (CUDA's cudaMallocAsync overloads). The first
+        of these that tells them all apart."""
+        if self._page_titles[0] is not index:
+            self._page_titles = (index, {e.location: re.sub(r" \(page\)$", "", e.title)
+                                         for e in index.entries if "#" not in e.location})
+        named: dict[tuple[str, str], list[int]] = {}
+        for i in ids:
+            named.setdefault((shown_name(index.entries[i]), self.sid_of[i]), []).append(i)
+        out = {}
+        for (name, sid), same in named.items():
+            if len(same) < 2:
+                continue
+            ways = [[self.place(index, i, name, way) for i in same] for way in ("page", "folder", "params")]
+            best = next((w for w in ways if len(set(w)) == len(w)), max(ways, key=lambda w: len(set(w))))
+            out.update(zip(same, best))
+        return out
+
+    def place(self, index, i: int, name: str, way: str) -> str:
+        e = index.entries[i]
+        page, _, part = e.location.partition("#")
+        if way == "params":
+            sig = re.search(r"```\w*\n(.*?)\n", e.text)
+            m = re.search(re.escape(name.rsplit(".", 1)[-1]) + r"\s*(\(.*\))", sig.group(1)) if sig else None
+            return m.group(1) if m else ""
+        title = self._page_titles[1].get(page) if part else None
+        if way == "page" and title and title != name:
+            return title
+        root = self.meta[self.sid_of[i]].get("root") or ""
+        path = (page[len(root):] if root and page.startswith(root) else urllib.parse.urlparse(page).path).strip("/")
+        return "/".join(path.split("/")[:-1]) or path
 
     def browse(self, index, sid_of: list[str], srcs: set[str]) -> list[int]:
         """The entries listed before you type: each package's learn, do, look up and understand

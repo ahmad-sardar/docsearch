@@ -317,8 +317,28 @@ def main() -> None:
           f"ctrl+c while a slow page is awaited: stopped {took:.1f} s later, not when the page came")
     every_kind(site)
     finding_docs(site)
+    anchors()
     server.shutdown()
     print("all good")
+
+
+def anchors() -> None:
+    """A heading said twice on a page: each section opens at its own place (Markdown and HTML),
+    and "## x" in a code block is not a heading."""
+    import tempfile
+    from pathlib import Path
+    out = Path(tempfile.mkdtemp())
+    md = b"# T\n\n## Example\n\nOne.\n\n```bash\n## a comment\n```\n\n## Example\n\nTwo.\n"
+    es, _, _ = importers.markdown_page("an", "an", "https://an.example/", out, "https://an.example/p", md, {})
+    got = [(e.title, e.location.split("#")[-1]) for e in es if e.kind == "section"]
+    check(got == [("T › Example", "example"), ("T › Example", "example-1")] and "a comment" in es[1].text,
+          f"Markdown: a heading said twice has two places; a code block's ## is not a heading ({got})")
+    html = (b"<html><body><main><h1>T</h1><h2 id='ex'>Example</h2><p>a</p><h2 id='ex'>Example</h2><p>b</p>"
+            b"</main></body></html>")
+    es, _, _ = importers.website_page("an2", "an2", "https://an.example/", out, "https://an.example/q", html,
+                                      "https://an.example/q", {})
+    got = [(e.location.split("#")[-1], e.text.split("\n")[-1]) for e in es if e.kind == "section"]
+    check(got == [("ex", "a"), ("ex-1", "b")], f"HTML: two headings of one id, two places ({got})")
 
 
 def finding_docs(site: str) -> None:

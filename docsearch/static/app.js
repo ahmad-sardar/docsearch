@@ -223,6 +223,7 @@ function renderResults(items, start) {
     li.append(name);
     const meta = el("div", "meta");
     meta.append(el("span", "kind", it.kind));
+    if (it.where) meta.append(el("span", "where", it.where));   // (two of one name: where each is)
     if (state.q && it.purpose && it.purpose !== "lookup" && PURPOSE[it.purpose]) {
       meta.append(el("span", `purpose ${it.purpose}`, PURPOSE[it.purpose]));
     }

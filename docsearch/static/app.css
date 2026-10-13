@@ -139,6 +139,7 @@ kbd {
 .vm.warn { color: var(--warn); font-weight: 600; }                 /* newer than your project */
 .pill.vm.warn { border-color: var(--warn); }
 .r .src { color: var(--faint); flex: none; }
+.r .where { color: var(--soft); flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .r .sum { color: var(--soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .r:hover .sum, .r[aria-selected="true"] .sum { white-space: normal; }
 .more { text-align: center; color: var(--faint); font-size: 13px; padding: 10px; }

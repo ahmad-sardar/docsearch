@@ -30,8 +30,9 @@ from typing import NamedTuple
 from docsearch import cli
 from docsearch import pages as offline
 
-VERSION = 3                       # meta["organized"]: the rules a copy was organized with (2: examples;
-                                  # 3: examples keep their purpose, only real ones, no placeholders)
+VERSION = 4                       # meta["organized"]: the rules a copy was organized with (2: examples;
+                                  # 3: examples keep their purpose, only real ones, no placeholders,
+                                  # whole sections; 4: a section reached by two labels, once)
 PURPOSES = {"learn": "Learn", "do": "Do", "lookup": "Look up", "understand": "Understand"}
 
 # The sites' own names for their parts, on a title made plain (lower case, without the
@@ -384,6 +385,13 @@ def body(text: str) -> str:
     return re.sub(r"^#+ [^\n]*(\n+|$)", "", text.strip(), count=1)[:300]
 
 
+def heading_id(e: cli.Entry) -> bool:
+    """Is a section's anchor the id its heading got from its words (#parquet), not a label the
+    docs named it by (#io-parquet: what their cross-references and links elsewhere use)?"""
+    title = re.sub(r" \((section|page)\)$", "", e.title.rsplit(" › ", 1)[-1])
+    return e.location.partition("#")[2] == re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+
+
 def links_only(text: str) -> bool:
     """Is a section's text only links to other pages (a list of them, cards)?"""
     lines = [ln for ln in re.sub(r"^#+ [^\n]*(\n+|$)", "", text.strip(), count=1).splitlines()
@@ -428,7 +436,8 @@ def organize(sid: str, entries: list[cli.Entry], meta: dict) -> tuple[list[cli.E
         whole = [i for i in ids if "#" not in entries[i].location]
         page_title = {re.sub(r" \(page\)$", "", entries[i].title) for i in whole}
         api_names = {cli.api_name(entries[i].title).lower() for i in api}
-        for i in ids:
+        seen: set[tuple[str, str]] = set()          # (a section reached by two of its labels: the
+        for i in sorted(ids, key=lambda i: heading_id(entries[i])):     # docs' own label kept)
             e = entries[i]
             e.purpose = "lookup" if e.kind not in cli.PAGE_KINDS else (
                 "lookup" if page_purpose == "removed" else page_purpose)
@@ -441,10 +450,15 @@ def organize(sid: str, entries: list[cli.Entry], meta: dict) -> tuple[list[cli.E
             elif e.kind == "label" and re.sub(r" \(section\)$", "", e.title) in page_title:
                 drop.add(i)                          # (the page under its own title again)
                 folded += 1
+            elif e.kind in cli.PAGE_KINDS and e.kind != "example" and (e.title, e.text) in seen:
+                drop.add(i)                          # (one section twice: pandas' "Pure Python" is
+                folded += 1                          # #pure-python and #enhancingperf-pure)
             elif e.kind == "doc" and "#" not in e.location and \
                     re.sub(r" \(page\)$", "", e.title).lower() in api_names:
                 drop.add(i)                          # (numpy.sum's page: the object numpy.sum)
                 folded += 1
+            if i not in drop:
+                seen.add((e.title, e.text))
     pages_dir = cli.HOME / sid / "pages"
     for rel in removed_pages:
         f = offline.page_file(pages_dir, rel)

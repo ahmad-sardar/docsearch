@@ -138,6 +138,7 @@ def main() -> None:
     completeness()
     examples_kept()
     sections_whole()
+    one_per_thing()
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Site)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     site = f"http://127.0.0.1:{server.server_address[1]}"
@@ -351,6 +352,36 @@ def sections_whole() -> None:
           and cli.load_meta("tut")["organized"] == organize.VERSION,
           f"organized again (version 3): a section cut as its first paragraph is cut whole from its stored page, "
           f"nothing downloaded ({got})")
+
+
+def one_per_thing() -> None:
+    """One section reached by two labels is one entry; results of one name say where each is."""
+    root = "https://twins.example/"
+    sec = "## Pure Python\n\nApply a function row-wise."
+    entries = [cli.Entry("Enhancing performance (page)", "doc", root + "perf.html", "Speed.", "twins"),
+               cli.Entry("Pure Python (section)", "label", root + "perf.html#pure-python", sec, "twins"),
+               cli.Entry("Pure Python (section)", "label", root + "perf.html#enhancingperf-pure", sec, "twins"),
+               cli.Entry("Comparison with R (page)", "doc", root + "compare/r.html", "R.", "twins"),
+               cli.Entry("Sorting (section)", "label", root + "compare/r.html#sorting", "Sort in R.", "twins"),
+               cli.Entry("Basics (page)", "doc", root + "basics.html", "Basics.", "twins"),
+               cli.Entry("Sorting (section)", "label", root + "basics.html#sorting", "Sort it.", "twins"),
+               cli.Entry("GroupBy (page)", "doc", root + "reference/dataframe/group_by.html", "Group a frame.", "twins"),
+               cli.Entry("GroupBy (page)", "doc", root + "reference/lazyframe/group_by.html", "Group lazily.", "twins")]
+    kept, _ = organize.organize("twins", entries, {"name": "twins", "kind": "sphinx", "root": root})
+    check([e.location.split("#")[-1] for e in kept if e.title == "Pure Python (section)"] == ["enhancingperf-pure"],
+          f"one section reached by two labels: one entry, at the docs' own label ({[e.location for e in kept]})")
+    cli.save("twins", kept, {"name": "twins", "spec": "twins", "kind": "sphinx", "root": root, "count": len(kept),
+                             "organized": organize.VERSION, "created": "2026-10-12 10:00", "model": None})
+    with contextlib.redirect_stderr(io.StringIO()):
+        cli.make_search_caches("twins")
+    where = {}
+    for q in ("sorting", "groupby"):
+        for it in web.Library().search(q, {"twins"}, 0, 20)["items"] + web.Library().search(q, {"twins"}, 0, 20, mode="how")["items"]:
+            where.setdefault(it["name"], set()).add(it.get("where"))
+    run("remove", "twins")
+    check(where.get("Sorting (section)") == {"Comparison with R", "Basics"}
+          and where.get("GroupBy (page)") == {"reference/dataframe", "reference/lazyframe"},
+          f"two results of one name: each says where it is, its page or its folder ({where})")
 
 
 def folding() -> None:

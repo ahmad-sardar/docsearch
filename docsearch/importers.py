@@ -323,6 +323,20 @@ def api_title(title: str, pattern: str | None) -> str | None:
     return re.sub(r"(?<!operator)\(\)$", "", name.strip()) or None
 
 
+def unique_ids(main) -> None:
+    """A page's ids made unique in the copy kept of it (keras: two "Example" headings, both
+    #example): the second is #example-1, so each section opens at its own place."""
+    seen: dict[str, int] = {}
+    for el in main.find_all(id=True):
+        hid = el["id"]
+        if hid in seen:
+            seen[hid] += 1
+            while f"{hid}-{seen[hid]}" in seen:
+                seen[hid] += 1
+            el["id"] = f"{hid}-{seen[hid]}"
+        seen.setdefault(el["id"], 0)
+
+
 def section_parts(main):
     """(id, heading, html, level, parent h2 heading) for every h2/h3 that can be linked to."""
     out, current_h2 = [], ""
@@ -390,6 +404,7 @@ def website_page(sid: str, name: str, root: str, pages_dir: Path, url: str, html
     for el in soup.select(DROP + (", " + spec["drop"] if spec.get("drop") else "")):
         el.decompose()
     main = main_part(soup, spec)
+    unique_ids(main)
     h1 = main.find("h1") or soup.find("h1")
     title = heading_text(h1) if h1 else (soup.title.get_text(strip=True) if soup.title else url)
     entries: list[Entry] = []
@@ -611,9 +626,15 @@ def markdown_page(sid: str, name: str, root: str, pages_dir: Path, url: str, md_
         return highlight(code, lexer, HtmlFormatter(cssclass="highlight"))
     mdi = MarkdownIt("commonmark", {"html": False, "highlight": fence}).enable("table")
     tokens = mdi.parse(md)
-    for i, t in enumerate(tokens):                                   # ids on headings
+    heads, seen = [], {}                             # each heading: its line, level, text, id
+    for i, t in enumerate(tokens):                   # (a heading said twice: example, example-1)
         if t.type == "heading_open" and i + 1 < len(tokens):
-            t.attrSet("id", slug(tokens[i + 1].content))
+            hid = slug(tokens[i + 1].content)
+            n, seen[hid] = seen.get(hid, 0), seen.get(hid, 0) + 1
+            hid = f"{hid}-{n}" if n else hid
+            t.attrSet("id", hid)
+            if t.map:
+                heads.append((t.map[0], t.tag, tokens[i + 1].content.strip(), hid))
     html = mdi.renderer.render(tokens, mdi.options, {})
     page_url = url
     api = api_title(title, spec.get("api")) if spec.get("api") else None
@@ -621,14 +642,15 @@ def markdown_page(sid: str, name: str, root: str, pages_dir: Path, url: str, md_
         api = title
     entries = [Entry(title=api or title, kind="api" if api else "page", location=page_url,
                      text=md[:cli.PREVIEW_CHARS], source=name)]
-    parts = re.split(r"^(#{2,3})\s+(.+)$", md, flags=re.M)
-    for k in range(1, len(parts) - 2, 3):
-        head, body = parts[k + 1].strip(), parts[k + 2]
+    lines = md.splitlines()                          # sections: h2 and h3, as the page's headings
+    cuts = [h for h in heads if h[1] in ("h2", "h3")]           # (not "## x" in a code block)
+    for k, (at, tag, head, hid) in enumerate(cuts):
+        body = "\n".join(lines[at + 1:cuts[k + 1][0] if k + 1 < len(cuts) else len(lines)])
         clean_head = re.sub(r"`", "", head).removesuffix("()")
-        member = api and parts[k] == "###" and IDENT.fullmatch(clean_head)
+        member = api and tag == "h3" and IDENT.fullmatch(clean_head)
         entries.append(Entry(title=f"{api}.{clean_head}" if member else f"{api or title} › {head}",
                              kind="method" if member else "section",
-                             location=f"{page_url}#{slug(head)}", text=f"## {head}\n{body}"[:cli.PREVIEW_CHARS],
+                             location=f"{page_url}#{hid}", text=f"## {head}\n{body}"[:cli.PREVIEW_CHARS],
                              source=name))
     images: dict[str, str] = {}
     from bs4 import BeautifulSoup

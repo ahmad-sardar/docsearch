@@ -56,7 +56,7 @@ top 5, missing.
   - Stack Overflow how mode does not drop on how-to answers;
   - plain search is unchanged (names within 0.01).
 
-### T3 One result per thing
+### T3 One result per thing (done: `eval/results-usability.md`)
 - **Change:**
   - one Sphinx section reached by two labels (same page, same heading) is one entry;
   - one name on two pages is told apart (`std::vector<bool>`) or shown once;

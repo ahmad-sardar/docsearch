@@ -18,6 +18,8 @@ which may be `version_now`: where to read which version is in that state now (py
 beta: the one in pre-release), then filled in as "{version}".
 
 `repo`: where the source code is (the docs link to it). None for docs without public source.
+`language`: the language the docs are for ("" for a tool's): searching every package from a
+project in a language, its docs come first (web.py). Packages from PyPI are Python.
 
 What docs describe (see versions.py): a release, unless `standards`: a site of every standard
 of a language at once (cppreference: C++98 to C++29, each entry marked), kept as one copy per
@@ -47,6 +49,7 @@ def channel(version: str) -> str | None:
 KNOWN: dict[str, dict] = {
     "python": {
         "about": "Python: the language reference, tutorial and standard library",
+        "language": "python",
         "repo": "github.com/python/cpython",
         "kind": "sphinx", "url": "https://docs.python.org/{version}/", "version": "3",
         "channels": {"nightly": "dev",           # docs.python.org/dev/: the main branch
@@ -55,6 +58,7 @@ KNOWN: dict[str, dict] = {
     },
     "rust": {
         "about": "Rust: the standard library, The Rust Book and The Rust Reference",
+        "language": "rust",
         "repo": "github.com/rust-lang/rust",
         "root": "https://doc.rust-lang.org/{version}/", "version": "stable",
         "channels": {"beta": "beta", "nightly": "nightly"},
@@ -69,6 +73,7 @@ KNOWN: dict[str, dict] = {
     },
     "ocaml": {
         "about": "OCaml: the manual and the standard library API",
+        "language": "ocaml",
         "repo": "github.com/ocaml/ocaml",
         "kind": "website", "version": "5.5", "root": "https://ocaml.org/manual/{version}/",
         "version_from": ["https://ocaml.org/manual/latest/", r"/manual/(\d+\.\d+)/", "address"],
@@ -77,6 +82,7 @@ KNOWN: dict[str, dict] = {
     },
     "cpp": {
         "about": "C++: the language and standard library (cppreference.com)",
+        "language": "c++",
         "standards": "C++", "since": "C++98", "current": "23", "edition_page": "cpp/{}",
         "editions": ["98", "03", "11", "14", "17", "20", "23", "26", "29"],
         "kind": "website", "root": "https://en.cppreference.com/",
@@ -86,6 +92,7 @@ KNOWN: dict[str, dict] = {
     },
     "c": {
         "about": "C: the language and standard library (cppreference.com)",
+        "language": "c",
         "standards": "C", "since": "C89", "current": "23", "edition_page": "c/{}",
         "editions": ["89", "95", "99", "11", "17", "23"],
         "kind": "website", "root": "https://en.cppreference.com/",
@@ -95,6 +102,7 @@ KNOWN: dict[str, dict] = {
     },
     "cuda": {
         "about": "CUDA: programming guide, best practices, runtime and driver APIs",
+        "language": "c++",
         "root": "https://docs.nvidia.com/cuda/",
         "version_from": ["https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html",
                          r"CUDA Toolkit (\d+\.\d+(?: Update \d+)?)"],
@@ -107,6 +115,7 @@ KNOWN: dict[str, dict] = {
     },
     "mojo": {
         "about": "Mojo: the manual, language reference and standard library (mojolang.org)",
+        "language": "mojo",
         "repo": "github.com/modular/modular",
         "kind": "website", "root": "https://mojolang.org/", "llms": "https://mojolang.org/llms.txt",
         "version_from": ["https://mojolang.org/llms.txt", r"(?m)^Version: *(\S+)"],
@@ -117,6 +126,7 @@ KNOWN: dict[str, dict] = {
     },
     "max": {
         "about": "MAX: Modular's AI serving and modeling platform (max.modular.com)",
+        "language": "mojo",
         "repo": "github.com/modular/modular",
         "kind": "website", "root": "https://max.modular.com/", "llms": "https://max.modular.com/stable/llms.txt",
         "version_from": ["https://max.modular.com/stable/llms.txt", r"(?m)^Version: *(\S+)"],
@@ -128,6 +138,7 @@ KNOWN: dict[str, dict] = {
     },
     "go": {
         "about": "Go: the language specification, Effective Go and the standard library",
+        "language": "go",
         "repo": "github.com/golang/go",
         "root": "https://",                      # two sites: go.dev and pkg.go.dev
         "version_from": ["https://go.dev/VERSION?m=text", r"go(\d+\.\d+(?:\.\d+)?)"],
@@ -142,6 +153,7 @@ KNOWN: dict[str, dict] = {
     },
     "git": {
         "about": "Git: the reference (every command and option) and the Pro Git book (git-scm.com)",
+        "language": "",
         "repo": "github.com/git/git",
         "root": "https://git-scm.com/",
         "version_from": ["https://git-scm.com/docs/git", r"last updated in (\d+\.\d+\.\d+)"],
@@ -155,6 +167,7 @@ KNOWN: dict[str, dict] = {
     },
     "javascript": {
         "about": "JavaScript: the language reference and guide (MDN)",
+        "language": "javascript",
         "living": "MDN describes JavaScript as browsers support it now; it has no versions",
         "repo": "github.com/mdn/content",
         "kind": "website", "root": "https://developer.mozilla.org/",

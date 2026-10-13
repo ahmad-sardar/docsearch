@@ -63,7 +63,7 @@ top 5, missing.
   - repeated headings get their own anchors.
 - **Done when:** no repeated result in the usability run; anchors are unique per page.
 
-### T4 Your project's packages first
+### T4 Your project's packages first (done: `eval/results-usability.md`)
 - **Change:** searching all packages puts the packages of your project (its languages: Python,
   C++…) first. Others follow, never mixed into the first results.
 - **Done when:** the cross-package usability questions have their language's answer first.

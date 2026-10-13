@@ -139,6 +139,7 @@ def main() -> None:
     examples_kept()
     sections_whole()
     one_per_thing()
+    yours_first()
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Site)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     site = f"http://127.0.0.1:{server.server_address[1]}"
@@ -382,6 +383,33 @@ def one_per_thing() -> None:
     check(where.get("Sorting (section)") == {"Comparison with R", "Basics"}
           and where.get("GroupBy (page)") == {"reference/dataframe", "reference/lazyframe"},
           f"two results of one name: each says where it is, its page or its folder ({where})")
+
+
+def yours_first() -> None:
+    """Every package searched from a project: what is named as asked, then the project's own
+    packages, then its languages' other docs, then the rest. One package searched: as it was."""
+    made = {"cpp": [cli.Entry("std::list::sort", "api", "https://cpp.example/list/sort",
+                              "Sorts a list. Sort a list of elements in a list.", "cpp")],
+            "pyx": [cli.Entry("Sorting how to (page)", "doc", "https://pyx.example/sorting.html",
+                              "How to sort: sorted() returns a new list.", "pyx", "do")],
+            "pyz": [cli.Entry("pyz.sort_list (function)", "function", "https://pyz.example/sort.html#pyz.sort_list",
+                              "Sort a list, in place.", "pyz")]}
+    for name, es in made.items():
+        cli.save(name, es, {"name": name, "spec": name, "kind": "sphinx", "root": es[0].location.rsplit("/", 1)[0] + "/",
+                            "count": 1, "organized": organize.VERSION, "created": "2026-10-12 10:00", "model": None})
+        with contextlib.redirect_stderr(io.StringIO()):
+            cli.make_search_caches(name)
+    lib = web.Library()
+    order = lambda q, **kw: [it["source"] for it in lib.search(q, set(), 0, 50, **kw)["items"]
+                             if it["source"] in made]                                       # noqa: E731
+    yours = order("sort a list", mode="how", project={"pyx": "1.0"})
+    exact = order("std::list::sort", project={"pyx": "1.0"})
+    one = [it["source"] for it in lib.search("sort a list", {"cpp"}, 0, 50, project={"pyx": "1.0"})["items"]]
+    for name in made:
+        run("remove", name)
+    check(yours == ["pyx", "pyz", "cpp"] and exact[0] == "cpp" and one == ["cpp"],
+          f"every package from a Python project: its package, Python's others, then C++; a name asked "
+          f"exactly first; one package as it was ({yours}, {exact}, {one})")
 
 
 def folding() -> None:

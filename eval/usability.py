@@ -39,7 +39,9 @@ def main() -> None:
         if q["package"] and q["package"] not in groups:
             continue
         srcs = {groups[q["package"]]} if q["package"] else set()
-        got = lib.search(q["q"], srcs, 0, 50, ai=a.ai, mode=q["mode"])
+        project = ({g: sid.split("@")[1] for g, sid in groups.items()          # (a project in that
+                    if "@" in sid and web.language_of(g) == q["language"]} if q.get("language") else None)  # language)
+        got = lib.search(q["q"], srcs, 0, 50, ai=a.ai, mode=q["mode"], project=project)
         want = [w.lower() for w in q["want"]]
         rank = next((k for k, it in enumerate(got["items"], 1) if any(w in it["name"].lower() for w in want)), None)
         rows.append({**q, "rank": rank, "first": got["items"][0]["name"] if got["items"] else None,

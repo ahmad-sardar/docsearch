@@ -65,6 +65,14 @@ def pygments_css() -> str:
 # --------------------------------------------------------------------------- the library
 
 
+def language_of(group: str) -> str:
+    """The language a package's docs are for: a known language's own (sources.py), else Python
+    (packages come from PyPI)."""
+    from docsearch import sources
+    known = sources.KNOWN.get(group)
+    return known.get("language", "") if known else "python"
+
+
 def shown_name(e: cli.Entry) -> str:
     """An entry's name in the results: an API object's without its kind (numpy.sum)."""
     return cli.api_name(e.title) if e.kind not in cli.PAGE_KINDS else e.title
@@ -216,6 +224,7 @@ class Library:
         guides, how-tos, examples and the functions that do it first): cli.MODES. With no
         query, the docs organized (how: its learn and do parts)."""
         q = q.strip()
+        every = not srcs                             # (every package: your project's languages first)
         mode = mode if mode in cli.MODES else "what"
         m = re.match(r"how\s+(?=\S)", q, re.I)          # "how merge two tables": how, as search how
         if m:
@@ -261,6 +270,8 @@ class Library:
                     exact = set(index.rank_name(plain_q)[0])
                 ids = rerank.reorder(ids, s, exact)
                 state = "ranked"
+        if every and project and plain_q:
+            ids = self.yours_first(index, sid_of, ids, plain_q, project)
         with self.lock:
             fixed = index.correction(plain_q) if plain_q else None
         items = [self.item(i, q, project) for i in ids[offset:offset + limit]]
@@ -269,6 +280,23 @@ class Library:
             if it["id"] in where:
                 it["where"] = where[it["id"]]
         return {"q": q, "total": len(ids), "ai": state, "corrected": fixed, "mode": mode, "items": items}
+
+    def yours_first(self, index, sid_of: list[str], ids: list[int], q: str, project: dict[str, str]) -> list[int]:
+        """Every package searched from a project: what is named exactly as asked first (malloc,
+        from a Python project too), then the project's own packages, then the other docs of
+        its languages (and docs of no language: git's), then the others (C++'s
+        std::list::sort after Python's sorting). Each in its order."""
+        langs = {language_of(g) for g in project} | {""}
+        with self.lock:
+            exact = set(index.rank_name(q)[0])
+        asked = q.strip().lower()
+
+        def tier(i: int) -> int:
+            group = sid_of[i].split("@")[0]
+            if i in exact or shown_name(index.entries[i]).lower() == asked:
+                return 0
+            return 1 if group in project else 2 if language_of(group) in langs else 3
+        return sorted(ids, key=tier)
 
     def where(self, index, ids: list[int]) -> dict[int, str]:
         """Where each result is that has another of its name (in its package) in the list: its

@@ -294,3 +294,25 @@ entries) and both languages: it is replaced in T10.
 Usability: how 27 / 33 / 35 / 2, what 20 / 25 / 25 / 2 (as T2); three ranks moved by one
 (merge 4 → 5, coroutines 2 → 3, to_csv 3 → 2). Stack Overflow dev, paired with T2 (141
 questions): plain +0.001 (p=1.0), how +0.004 (p=0.57), names 0.938 both.
+
+# T4: your project's packages first (2026-10-12)
+
+Searching every package from a project now ranks: what is named exactly as asked first
+(`malloc` from a Python project: C's and C++'s malloc stay on top), then the project's own
+packages, then the other docs of its languages (and docs of no language, git's), then the rest.
+Each known language's docs say their language (sources.py); packages from PyPI are Python.
+Searching one package is unchanged.
+
+Usability (a question with `language` is asked from a project using every package of that
+language you have): the four cross-package questions 3 / 4 / 4 / 0 (#1 / top 3 / top 5 /
+missing), as before. "sort a list" from a Python project:
+
+| project | #1 | #2 | #3 |
+|---|---|---|---|
+| none | polars.Expr.list.sort › Examples | std::forward_list::sort (C++) | list.sort |
+| python, numpy, pandas, polars | polars.Expr.list.sort › Examples | list.sort | polars.Series.list.sort › Examples |
+| python, numpy, pandas | list.sort | Sorting Techniques | sorted |
+
+C++ no longer comes before Python's answers. Still open (not a language question): "remove
+duplicates from a list" gives pandas' drop_duplicates first and no answer from Python's own docs.
+The Stack Overflow benchmark searches one package at a time: not affected.

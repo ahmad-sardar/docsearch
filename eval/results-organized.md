@@ -441,3 +441,37 @@ How mode is its own entries (learn, do, examples) and the API objects, fused wit
 | Names (21) | 0.000 | 0.938 | +0.938 | <0.001 |
 
 Plain search is not changed (0.211 on Stack Overflow, names 0.938).
+
+## Organizing by the site's structure, T8 (2026-10-14), organizing version 5
+
+A page's purpose comes from its own title, its docs' contents (a table of contents) and its
+sections in the site's outline; not from the page above it by its address, nor from a page
+whose sidebar lists it under its folder, unless that page names a collection ("API reference",
+"Advanced User Guide"); a place ("Overview", "Introduction") names its own page only. A page no
+structure places is named by its nearest meaningful folder (docs/learn/: learn). Changelogs are
+left out whatever their title starts with ("Agent Server changelog"), and blog folders. A top
+section of the outline holding over a third of the site, with 3+ sections of its own, is parted
+by them; each part counts its own purpose's entries; parts with none, or named "index" or by an
+address, are not shown.
+
+Temp copies, organized from the same pages with version 4 rules, then version 5 (entries by
+purpose):
+
+| copy | version 4 | version 5 | read by hand |
+|---|---|---|---|
+| litellm | learn 7,535, lookup 1,719, do 120 | do 6,425, learn 1,144, lookup 516; blog left out (1,369 entries) | 20 pages: each as its sidebar section says |
+| spacy | lookup 1,392, do 199 | lookup 1,324, do 267 (usage/ guides) | 20 pages: right |
+| langchain (new copy) | Do: one part of 6,789 | Do: Build, Products and setup, Monitor, Deploy, Test, Migration guides; 704 changelog entries left out | — |
+| streamlit | 46 pages changed | its Community Cloud and Snowflake deploy pages lookup → do; a few concept examples → understand | — |
+| httpx | 4 pages changed | Async support, HTTP/2, Transports, Requests compatibility: lookup → do (guides, as its sidebar says) | — |
+| fastapi | 8 pages changed | its Chinese tutorial pages: lookup → learn | — |
+| numpy, polars, keras | — | unchanged | — |
+
+Your data (a copy, organized again): only the old langchain copy changes (its changelogs left
+out, 1,060 entries; 30 pages). Usability: the same on every question. Stack Overflow dev, paired
+(141): every number the same (plain 0.212, how 0.268, names 0.938).
+
+Measured and dropped: concept sections of guides ("Conceptual overviews") as understand. "What
+is a checkpointer" did not find langchain's checkpointer page with it (its #1 is a match of the
+word in an environment variable's name: the changelog is no longer first, that is all), and
+"use a different model provider" fell from #2 to #26. S6 stays open.

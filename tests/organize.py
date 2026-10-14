@@ -141,6 +141,7 @@ def main() -> None:
     one_per_thing()
     yours_first()
     sections_kept()
+    by_structure()
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Site)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     site = f"http://127.0.0.1:{server.server_address[1]}"
@@ -424,6 +425,48 @@ def sections_kept() -> None:
     check(kept["sections"] == {"": "default", "https://guide.example/": ["Build", "+"]}
           and got == ("default", ["Build", "+"], None),
           f"the sections chosen, per site: the docs' (from before) and the guide's, each read back ({kept}, {got})")
+
+
+def by_structure() -> None:
+    """Purposes by the site's own structure (organizing version 5): a page's purpose comes from
+    its title, its contents and its sections in the site's outline, not from the page above it by
+    address (a first page "Getting Started" is not what the pages under it are), unless that
+    page names a collection ("API reference"); a place ("Overview") names its own page only;
+    changelogs and blog pages are left out; a top section holding much of the site is parted by
+    its own sections; each part counts its own purpose's entries."""
+    from docsearch import pages as offline
+    root = "https://struct.example/"
+    rels = ["", "docs/", "docs/proxy/keys", "docs/proxy/spend", "api/", "api/client", "guides/a", "guides/b",
+            "guides/c", "guides/d", "guides/e", "guides/f", "overview/create-agent", "changelog/agent-server",
+            "blog/post"]
+    titles = {"": "Struct", "docs/": "Getting Started", "docs/proxy/keys": "Virtual keys",
+              "docs/proxy/spend": "Spend tracking", "api/": "API reference", "api/client": "Client",
+              "guides/a": "Build agents", "guides/b": "Use tools", "guides/c": "Add memory", "guides/d": "Stream",
+              "guides/e": "Deploy it", "guides/f": "Monitor it", "overview/create-agent": "Create an agent",
+              "changelog/agent-server": "Agent Server changelog", "blog/post": "A post"}
+    entries = [cli.Entry(f"{titles[r]} (page)" if r else "Struct (page)", "page", root + r, f"About {titles[r]}.", "struct")
+               for r in rels]
+    cli.save("struct", entries, {"name": "struct", "spec": "struct", "kind": "website", "root": root, "pages": True,
+                                 "count": len(entries), "created": "2026-10-14 10:00", "model": None})
+    for r in rels:
+        offline.save_page(cli.HOME / "struct" / "pages", r or "index.html",
+                          f"<html><body><main><h1>{titles[r]}</h1><p>Text.</p></main></body></html>")
+    outline = {root + r: c for r, c in {
+        "guides/a": ["Lifecycle", "Build"], "guides/b": ["Lifecycle", "Build"], "guides/c": ["Lifecycle", "Build"],
+        "guides/d": ["Lifecycle", "Observe"], "guides/e": ["Lifecycle", "Deploy"], "guides/f": ["Lifecycle", "Observe"],
+        "overview/create-agent": ["Overview"]}.items()}
+    cli.write_atomic(cli.HOME / "struct" / "outline.json", json.dumps(outline).encode())
+    meta = cli.load_meta("struct")
+    kept, _ = organize.organize("struct", list(cli.iter_entries("struct")), meta)
+    purpose = {e.location[len(root):]: e.purpose for e in kept}
+    cli.save("struct", kept, meta)
+    parts = {g["purpose"]: [p["title"] for p in g["parts"]] for g in organize.contents("struct")}
+    run("remove", "struct")
+    check(purpose.get("docs/proxy/keys") != "learn" and purpose.get("api/client") == "lookup"
+          and purpose.get("overview/create-agent") == "do" and "changelog/agent-server" not in purpose
+          and "blog/post" not in purpose and {"Build", "Observe", "Deploy"} <= set(parts.get("do", [])),
+          f"by the site's structure: not by address (but a collection's folder); a place names its own page; "
+          f"changelogs and blogs left out; a big section parted by its own ({purpose}, {parts})")
 
 
 def folding() -> None:

@@ -113,7 +113,7 @@ top 5, missing.
     ask again;
   - without a terminal it says what it chose.
 
-### T8 Organizing by the site's structure
+### T8 Organizing by the site's structure (done: `eval/results-organized.md`; the concept option measured and dropped)
 - **Change:**
   - **labels pass only through contents and outline**, not by address;
   - **place-name sections** label only their own page;

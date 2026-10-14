@@ -178,6 +178,8 @@ class Contents(NamedTuple):
     anchors: dict[str, dict[str, int]]   # each page's anchors and their positions
     parent: dict[str, str | None]        # the page whose contents list it (None: a start)
     title: dict[str, str]                # its first heading
+    by_nav: frozenset = frozenset()      # pages whose parent lists them only in its sidebar, below its
+                                         # folder (not a table of contents): a parent by address
 
 
 def page_order(sid: str, meta: dict) -> Contents:
@@ -213,9 +215,16 @@ def page_order(sid: str, meta: dict) -> Contents:
                 out.append(c)
         return out
 
+    by_nav: set[tuple[str, str]] = set()           # (a page, a page its sidebar lists below it)
+
     def children(rel: str) -> list[str]:
         toc, nav = page_links(text(rel))   # a hidden table of contents has no links: use the page's
-        return links(rel, toc, False) or links(rel, nav, True)
+        found = links(rel, toc, False)
+        if found:
+            return found
+        found = links(rel, nav, True)
+        by_nav.update((rel, c) for c in found)
+        return found
 
     order: list[str] = []
     seen: set[str] = set()
@@ -238,7 +247,7 @@ def page_order(sid: str, meta: dict) -> Contents:
     for rel in sorted(stored - seen, key=lambda r: (r.count("/"), natural(r))):
         walk(rel)
     anchors = {rel: found[rel] for rel in order}           # (each page in the order was read)
-    return Contents(order, anchors, parent, title)
+    return Contents(order, anchors, parent, title, frozenset(r for r, up in parent.items() if (up, r) in by_nav))
 
 
 def reading_order(sid: str, count: int | None = None) -> np.ndarray:
@@ -252,7 +261,7 @@ def reading_order(sid: str, count: int | None = None) -> np.ndarray:
             return cached
     meta = cli.load_meta(sid)
     locations = [e.location for e in cli.iter_entries(sid, keep=1)]     # (their addresses only)
-    order, anchors, _, _ = page_order(sid, meta)
+    order, anchors = page_order(sid, meta)[:2]
     rank = {rel: k for k, rel in enumerate(order)}
 
     def page(loc: str) -> str:

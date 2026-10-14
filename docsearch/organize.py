@@ -22,6 +22,7 @@ repeats its API object (numpy.sum's page, numpy.sum).
 """
 from __future__ import annotations
 
+import collections
 import gzip
 import json
 import re
@@ -30,9 +31,10 @@ from typing import NamedTuple
 from docsearch import cli
 from docsearch import pages as offline
 
-VERSION = 4                       # meta["organized"]: the rules a copy was organized with (2: examples;
+VERSION = 5                       # meta["organized"]: the rules a copy was organized with (2: examples;
                                   # 3: examples keep their purpose, only real ones, no placeholders,
-                                  # whole sections; 4: a section reached by two labels, once)
+                                  # whole sections; 4: a section reached by two labels, once;
+                                  # 5: purposes by the site's structure, not by address)
 PURPOSES = {"learn": "Learn", "do": "Do", "lookup": "Look up", "understand": "Understand"}
 
 # The sites' own names for their parts, on a title made plain (lower case, without the
@@ -42,7 +44,7 @@ PURPOSES = {"learn": "Learn", "do": "Do", "lookup": "Look up", "understand": "Un
 # say what a page is wherever it is ("Logging HOWTO", "Argparse Tutorial"), not what it is
 # about ("imp — Access the import internals", "doctest — Test interactive Python examples").
 LABELS = [
-    ("removed", r"(.* )?release notes?( .*)?|(.* )?(what'?s|what is) new( in( .*)?)?|whatsnew|change ?log( .*)?|"
+    ("removed", r"(.* )?release notes?( .*)?|(.* )?(what'?s|what is) new( in( .*)?)?|whatsnew|(.* )?change ?log( .*)?|"
                 r"release history|contributing( .*)?|(.* )?contributor'?s? guide|how to contribute( .*)?|"
                 r"code of conduct|(.* )?licen[cs]e|copyright|history and licen[cs]e|"
                 r"about( this| these)? (documents?|documentation|docs)|dealing with bugs|reporting bugs|"
@@ -67,6 +69,18 @@ PARTS = [
     ("understand", r"(.* )?fundamentals|(.* )?internals|(.* )?concepts|design( .*)?"),
 ]
 LABEL_RE = {p: re.compile(rx) for p, rx in LABELS}
+# Titles that name a place, not a kind of page: an "Overview" section holds how-tos and tutorials
+# too (langchain's "Create an agent"), so such a title labels its own page only
+PLACE_NAMES = {"overview", "introduction", "intro", "home", "welcome", "index", "start here", "about", "docs",
+               "documentation"}
+# Titles that name a collection of pages ("Advanced User Guide", "API reference", "Tutorials"):
+# such a folder's page names what its folder holds, by address too; a page named for its own
+# topic ("Getting Started", "Install spaCy") does not
+COLLECTION = re.compile(r"(.* )?(user'?s? )?guides?( .*)?|(.* )?tutorials?( .*)?|(.* )?how-?tos?|(.* )?howtos?|"
+                        r"(.* )?recipes|(.* )?examples|(.* )?gallery|(.* )?cookbook|(.* )?faqs?|"
+                        r"(.* )?reference( manual| guide)?|(.* )?api( reference| documentation| docs)?|"
+                        r"(.* )?standard library|(.* )?module index|(.* )?concepts|(.* )?internals|"
+                        r"(.* )?fundamentals|explanations?")
 PART_RE = {p: re.compile(rx) for p, rx in PARTS}
 ORDER = ("removed", "learn", "do", "lookup", "understand")      # (the first that matches)
 
@@ -75,11 +89,11 @@ FOLDERS = {
     "learn": {"tutorial", "tutorials", "getting_started", "getting-started", "quickstart", "learn"},
     "do": {"howto", "howtos", "how-to", "how_to", "user_guide", "user-guide", "userguide", "user", "guide",
            "guides", "faq", "using", "installing", "install", "installation", "distributing", "extending",
-           "examples", "cookbook"},
+           "examples", "cookbook", "usage"},
     "lookup": {"reference", "api", "library", "c-api", "capi", "builtins", "std", "ref", "generated", "cpp", "c"},
     "understand": {"concepts", "explanation", "explanations", "background", "internals"},
     "removed": {"whatsnew", "whats-new", "release", "releases", "changelog", "changes", "dev", "development",
-                "contributing", "contribute", "building"},
+                "contributing", "contribute", "building", "blog", "release_notes", "release-notes"},
 }
 FOLDER_OF = {f: p for p, fs in FOLDERS.items() for f in fs}
 
@@ -97,7 +111,7 @@ SUBPARTS = {"parameters", "return value", "return values", "returns", "exception
 LINK_LINE = re.compile(r"^\s*(?:[-*+]|\d+\.)?\s*\[[^\]]+\]\([^)]+\)\s*(?:[:—–-]?\s*.{0,200})?$")
 
 
-RELEASES = re.compile(r"(.* )?release notes?( .*)?|(.* )?(what'?s|what is) new( in( .*)?)?|whatsnew|change ?log( .*)?|"
+RELEASES = re.compile(r"(.* )?release notes?( .*)?|(.* )?(what'?s|what is) new( in( .*)?)?|whatsnew|(.* )?change ?log( .*)?|"
                       r"release history")
 
 
@@ -213,6 +227,11 @@ def classify(sid: str, meta: dict, entries: list[cli.Entry]) -> Pages:
         return None
 
     up: dict[str, str | None] = {r: contents.parent.get(r) or above(r) for r in pages}
+    # What gives a page its purpose: its own title, then what is above it in the docs' contents
+    # or the site's outline, never what is above it by its address (litellm's docs/ page,
+    # "Getting Started", is not what docs/proxy/... are; spaCy's usage page, "Install spaCy",
+    # is not what usage/... are): a page no contents nor outline places is named by its folder.
+    walk: dict[str, str | None] = {r: contents.parent.get(r) for r in pages if r not in contents.by_nav}
     label = {r: None if r in named else label_of(title.get(r, ""), names, r in lists or contents.parent.get(r) is None)
              for r in pages}
     label.update({r: "removed" for r in unread})
@@ -222,18 +241,34 @@ def classify(sid: str, meta: dict, entries: list[cli.Entry]) -> Pages:
     keys_of: dict[str, list[str]] = {}
     first: dict[str, str] = {}
     for rel, crumbs in outline_of(sid, meta, stored).items():
-        if rel not in pages or contents.parent.get(rel) is not None or not crumbs:
+        if rel not in pages or (contents.parent.get(rel) is not None and rel not in contents.by_nav) or not crumbs:
             continue
         keys = ["§" + " / ".join(crumbs[:k]) for k in range(1, len(crumbs) + 1)]
         keys_of[rel] = keys
         for k, key in enumerate(keys):
-            if key not in up:
-                up[key] = keys[k - 1] if k else above(rel)
+            if key not in up:                    # (a top section: a part of its own, not under the
+                up[key] = walk[key] = keys[k - 1] if k else None     # page its first page's address is in)
                 title[key] = crumbs[k]
                 label[key] = label_of(crumbs[k], names)
-        up[rel] = keys[-1]
+        up[rel] = walk[rel] = keys[-1]
         if rel not in named:                     # a page of the outline is a leaf: its sections name
             label[rel] = label_of(title.get(rel, ""), names, part=False)    # parts, not its title
+    # A top section of the outline that holds much of the site ("AGENT DEVELOPMENT LIFECYCLE":
+    # 4,000 of langchain's 6,800) parts the docs by its own sections (Build, Observe, Deploy)
+    tops = collections.Counter(keys[0] for keys in keys_of.values())
+    subs: dict[str, set[str]] = {}
+    for keys in keys_of.values():
+        if len(keys) > 1:
+            subs.setdefault(keys[0], set()).add(keys[1])
+    big = {t for t, n in tops.items() if n > len(keys_of) / 3 and len(subs.get(t, ())) >= 3}
+    for t in big:
+        for sub in subs[t]:
+            up[sub] = None                       # (a part of its own, in the home view)
+
+    def part_key(said: list[str]) -> str | None:
+        """The outline section that is a page's part: its top one, or the one under it, if big."""
+        keys = [r for r in reversed(said) if r.startswith("§")]
+        return keys[1] if len(keys) > 1 and keys[0] in big else (keys[0] if keys else None)
     order_ = []
     for r in contents.order + sorted(pages - stored, key=order.natural):
         for key in keys_of.get(r, []):
@@ -248,26 +283,37 @@ def classify(sid: str, meta: dict, entries: list[cli.Entry]) -> Pages:
         while cur is not None and cur not in seen:   # the page, then the pages above it
             seen.add(cur)
             said.append(cur)
-            cur = up.get(cur)
+            cur = walk.get(cur)
         guide = next((g for f, g in guides.items() if rel.startswith(f)), None)
         own = rel[len(guide["dir"]) + 1:] if guide else rel          # (its address in its part)
         if any(label.get(r) == "removed" for r in said) or (
                 (guide or contents.parent.get(rel) is None) and FOLDERS["removed"] & set(own.lower().split("/")[:-1])):
             purpose[rel], anchor[rel] = "removed", None   # (a guide's page, or one no contents list: its
             continue                                      # folder says, as development/ in polars' guide)
-        at = next((r for r in said if label.get(r)), None)
+        at = next((r for r in said if label.get(r) and (
+            r == rel or plain_title(title.get(r, ""), names) not in PLACE_NAMES)), None)   # (a place: its own page)
+        if at is None:                           # by its address: a folder's page that names a collection
+            cur, seen_ = above(rel), set()
+            while cur is not None and cur not in seen_ and at is None:
+                seen_.add(cur)
+                if label.get(cur) and COLLECTION.fullmatch(plain_title(title.get(cur, ""), names)):
+                    at = cur
+                cur = above(cur)
         top = own.split("/")[0] if "/" in own else ""
         if at is not None:
             purpose[rel], anchor[rel] = label[at], at
-        elif guide is not None:                  # a guide's page: the guide's purpose
-            purpose[rel], anchor[rel] = guide["purpose"], page_of(guide["root"], meta, stored)
+        elif guide is not None:                  # a guide's page: the guide's purpose, in its part:
+            purpose[rel] = guide["purpose"]      # its top section in the guide's outline, else the guide
+            anchor[rel] = part_key(said) or page_of(guide["root"], meta, stored)
         elif rel in keys_of or rel.startswith("§"):     # in the site's outline, and no section says
             purpose[rel] = "do"                           # reference, tutorial or explanation: a guide
-            anchor[rel] = next((r for r in reversed(said) if r.startswith("§")), None)
-        else:                                    # named by its folder: the part is the folder's
-            purpose[rel] = FOLDER_OF.get(top.lower()) or "lookup"   # first page (extending/index.html)
-            anchor[rel] = next((r for r in reversed(said) if r.startswith(top + "/")), None) \
-                if top.lower() in FOLDER_OF else None
+            anchor[rel] = part_key(said)
+        else:                                    # named by its folder (the nearest that says: docs/learn/):
+            folders = own.split("/")[:-1]        # the part is that folder's first page
+            k = next((k for k in range(len(folders) - 1, -1, -1) if folders[k].lower() in FOLDER_OF), None)
+            purpose[rel] = FOLDER_OF[folders[k].lower()] if k is not None else "lookup"
+            base = "/".join(folders[:k + 1]) + "/" if k is not None else None
+            anchor[rel] = next((r for r in reversed(said) if base and r.startswith(base)), None)
     return Pages(order_, purpose, anchor, up, dict(contents.parent), title, first)
 
 
@@ -302,11 +348,11 @@ def contents(sid: str) -> list[dict]:
     entries = list(cli.iter_entries(sid, keep=1))
     pages = classify(sid, meta, entries)
     stored = set(pages.order)
-    count: dict[str, int] = {}
+    count: dict[tuple[str, str], int] = {}           # (a page, a purpose) -> its entries of that purpose
     prose: set[str] = set()                          # pages with more than API objects on them
     for e in entries:
         rel = page_of(e.location, meta, stored) or e.location
-        count[rel] = count.get(rel, 0) + 1
+        count[(rel, e.purpose)] = count.get((rel, e.purpose), 0) + 1
         if e.kind in cli.PAGE_KINDS:
             prose.add(rel)
 
@@ -330,7 +376,8 @@ def contents(sid: str) -> list[dict]:
             continue
         if h == rel:
             heads[p].append(rel)
-        under[h] = under.get(h, 0) + count.get(rel, 0)
+        under[h] = under.get(h, 0) + count.get((rel, p), 0)    # (its own purpose's: not the examples
+                                                                  # of a Look up part)
     kids: dict[str, list[str]] = {}                  # a page's contents; by address, the pages that
     sections = {u for u in pages.up.values() if u}   # have pages under them, or prose (not numpy.sum's)
     for rel in pages.order:
@@ -357,6 +404,8 @@ def contents(sid: str) -> list[dict]:
                                     | ({"note": f"official guide, as of {g.get('asof', '')}"} if g else {}))
             part["entries"] += under.get(h, 0)
             part["pages"] += [item(k) for k in kids.get(h, [])]
+        for title in [t for t, part in parts.items() if junk_part(t, part)]:
+            del parts[title]                         # (no entries, or named "index" or by an address)
         for part in parts.values():
             pages_ = list({x["title"]: x for x in reversed(part["pages"])}.values())[::-1]   # (one of a title)
             part["more"], part["pages"] = max(0, len(pages_) - 80), pages_[:80]
@@ -367,6 +416,13 @@ def contents(sid: str) -> list[dict]:
     except OSError:
         pass
     return out
+
+
+def junk_part(title: str, part: dict) -> bool:
+    """A part the home view leaves out: one with no entries of its purpose, or named as no part
+    is ("index"; an address: keras' "getting-started/faq")."""
+    t = title.strip().lower()
+    return not part["entries"] or t in ("index", "") or (" " not in t and ("/" in t or t.endswith((".html", ".md"))))
 
 
 def subpart(e: cli.Entry) -> str | None:

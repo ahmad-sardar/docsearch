@@ -126,6 +126,13 @@ DROP: set[str] = set()                            # no answer at all (the connec
 SITE["/slow/"] = (200, page("Slow", '<a href="late.html">late</a> <a href="p0.html">0</a>'))
 SITE["/slow/late.html"] = SITE["/slow/p0.html"] = (200, page("Late", ""))
 LATE = {"/slow/late.html": 8.0}                   # answers after this many seconds
+SITE["/pause/"] = (200, page("Pause", "".join(f'<a href="p{n}.html">{n}</a> ' for n in range(6))))
+SITE["/quota/"] = (200, page("Quota", "".join(f'<a href="q{n}.html">{n}</a> ' for n in range(3))))
+for _n in range(6):
+    SITE[f"/pause/p{_n}.html"] = (200, page(f"Paused {_n}", ""))
+    SITE[f"/quota/q{_n}.html"] = (200, page(f"Quota {_n}", ""))
+PAUSE = {"/pause/p2.html": 1}                     # answers "come back in an hour" this many times
+HEADERS: dict[str, dict[str, str]] = {}           # a folder's own headers (RateLimit)
 LATE.update({f"/far/p{n}.html": 0.5 for n in range(40)})
 LATE.update({f"/pics/i{n}-{k}.png": 0.2 for n in range(3) for k in range(10)})
 
@@ -149,6 +156,11 @@ class Site(http.server.BaseHTTPRequestHandler):
         if BUSY.get(self.path):
             BUSY[self.path] -= 1
             code, body = 429, b"<html><head><title>Too Many Requests</title></head></html>"
+        extra = dict(HEADERS.get(self.path.rsplit("/", 1)[0] + "/", {}))
+        if PAUSE.get(self.path):
+            PAUSE[self.path] -= 1
+            code, body = 429, b"<html><head><title>Too Many Requests</title></head></html>"
+            extra["Retry-After"] = "3600"
         cloudflare = self.path.startswith("/limited/") or self.path in CHALLENGE
         if self.path in CHALLENGE:
             code, body = CHALLENGE[self.path], b"<html><head><title>Just a moment...</title></head></html>"
@@ -156,6 +168,8 @@ class Site(http.server.BaseHTTPRequestHandler):
         self.send_header("Server", "cloudflare" if cloudflare else "AkamaiGHost")
         if self.path in CHALLENGE:
             self.send_header("cf-mitigated", "challenge")
+        for k, v in extra.items():
+            self.send_header(k, v)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -318,8 +332,109 @@ def main() -> None:
     every_kind(site)
     finding_docs(site)
     anchors()
+    politeness(site)
+    docs_links()
+    hf_archive()
     server.shutdown()
     print("all good")
+
+
+def politeness(site: str) -> None:
+    """A site's own limits kept (notes/fetching-policy.md): a long pause it asks for stops the
+    download, kept, to go on after it; the requests it says are left are spread to the end of
+    its window; a robots.txt that cannot be read allows nothing (RFC 9309)."""
+    import contextlib
+    import io
+    cli.PACE.clear()
+    said = io.StringIO()
+    plan = {"kind": "website", "root": f"{site}/pause/", "start": f"{site}/pause/", "prefix": f"{site}/pause/"}
+    with contextlib.redirect_stderr(said):
+        _, meta = cli.build_known("pz", "pz", plan, 2, None, resumable=True)
+    first = meta.get("partial")
+    cli.PAUSED.clear()                               # (the hour is over)
+    with contextlib.redirect_stderr(said):
+        entries, meta = cli.build_known("pz", "pz", plan, 2, None, resumable=True)
+    titles = {e.title for e in entries if e.kind == "page"}
+    check(bool(first) and "asks programs to wait until" in said.getvalue() and not meta.get("partial")
+          and {f"Paused {n}" for n in range(6)} <= titles,
+          f"a site that asks for an hour's pause: stopped, kept, and read to the end after it ({first})")
+    cli.PACE.clear()
+    HEADERS["/quota/"] = {"RateLimit": '"pages";r=1;t=2', "RateLimit-Policy": '"fixed window";"pages";q=3;w=2'}
+    LOG.clear()
+    plan = {"kind": "website", "root": f"{site}/quota/", "start": f"{site}/quota/", "prefix": f"{site}/quota/"}
+    with contextlib.redirect_stderr(io.StringIO()):
+        cli.build_known("qz", "qz", plan, 4, None)
+    times = [t for t, path in LOG if path.startswith("/quota/")]
+    gaps = [b - a for a, b in zip(times, times[1:])]
+    check(len(times) >= 4 and min(gaps[1:]) >= 1.8,
+          f"a site's RateLimit header: once it has said it, what is left is spread to the end of its window "
+          f"({[round(g, 1) for g in gaps]})")
+    HEADERS.clear()
+    cli.PACE.clear()
+    SITE["/robots.txt"], before = (500, b"oops"), SITE.get("/robots.txt")
+    said = io.StringIO()
+    with contextlib.redirect_stderr(said):
+        entries, _ = cli.build_known("rz", "rz", {"kind": "website", "root": f"{site}/far/", "start": f"{site}/far/",
+                                                  "prefix": f"{site}/far/"}, 4, None)
+    SITE["/robots.txt"] = before
+    check(not [e for e in entries if e.kind == "page"] and "RFC 9309" in said.getvalue(),
+          f"a robots.txt that cannot be read (500): nothing read, said ({len(entries)} entries)")
+
+
+def docs_links() -> None:
+    """A home page's links to its docs: by their address or their whole text, never its
+    contributing or community pages; on other sites only from a home page (PyPI's, numba's)."""
+    page = ("<a href='/community/contribute/docs'>Contribute to the docs</a> <a href='/api_docs/'>API</a> "
+            "<a href='/guide/'>User guide</a> "
+            "<a href='/blog/'>Docs news</a> <a href='https://numba.readthedocs.io/en/stable/'>Documentation</a> "
+            "<a href='https://github.com/x/y'>Docs on GitHub</a> <a href='/learn-more/'>Learn more</a>")
+    page += " <a href='https://docs.python.org/3/c-api/'>Documentation</a>"     # (another project's docs)
+    here = [u for u, _ in cli.docs_links(page, "https://home.example/", "numba")]
+    elsewhere = [u for u, _ in cli.docs_links(page, "https://home.example/", "numba", elsewhere=True)]
+    check(here == ["https://home.example/guide/"]
+          and elsewhere == ["https://home.example/guide/", "https://numba.readthedocs.io/en/stable/"],
+          f"docs links: named by address or whole text (not \"API\": a part of them), never contribute or blog "
+          f"pages; another site's from a home page, if it names the package ({here}, {elsewhere})")
+
+
+def hf_archive() -> None:
+    """Hugging Face's libraries: their docs from Hugging Face's own copy, one file, no page asked
+    for; API objects named by their headings' ids; the site's outline from its _toctree.yml."""
+    import contextlib
+    import io
+    import zipfile
+    from docsearch import hfdocs
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("lib/v1.2.0/en/index.md", "# Lib\n\nLib does things.\n")
+        z.writestr("lib/v1.2.0/en/api/main.md", "# Main API[[lib.load]]\n\n#### lib.load[[lib.load]]\n\n"
+                   "```python\nlib.load(path)\n```\n\nLoads a file.\n\n#### lib.save[[lib.save]]\n\n"
+                   "```python\nlib.save(path)\n```\n\nSaves it.\n")
+        z.writestr("lib/v1.2.0/en/_toctree.yml", "- sections:\n  - local: index\n    title: Lib\n  title: Get started\n"
+                   "- sections:\n  - local: api/main\n    title: Main API\n  title: Reference\n")
+    asked = []
+
+    def fake(url, timeout=20, guess=False, limit=None):
+        asked.append(url)
+        if url.endswith("_versions.yml"):
+            return b"- version: main\n- version: v1.2.0\n- version: v1.1.0\n", url
+        return buf.getvalue(), url
+    real, cli.http_get = cli.http_get, fake
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            plan = hfdocs.plan("lib", "lib", "", "1.2.0")
+            entries, meta = cli.build_known("lib", "lib", plan, 2, None)
+    finally:
+        cli.http_get = real
+    api = {e.title: e.location.split("#")[1] for e in entries if e.kind == "api"}
+    check(plan["archive"] == "v1.2.0" and api == {"lib.load": "lib.load", "lib.save": "lib.save"}
+          and plan["outline"] == {"https://huggingface.co/docs/lib/v1.2.0/en/index": ["Get started"],
+                                  "https://huggingface.co/docs/lib/v1.2.0/en/api/main": ["Reference"]}
+          and len(asked) == 2 and all("hf-doc-build" in u for u in asked),
+          f"Hugging Face's docs: two files, no page; API objects by their ids; the site's outline ({api}, {asked})")
+    check(hfdocs.choose(["main", "v0.5.0-rc.0", "v0.3.2"], "", "0.5.2") == "main"
+          and hfdocs.choose(["main", "v5.9.0"], "", "5.9.1") == "v5.9.0" and hfdocs.choose(["main", "v5.9.0"], "4.0", "") is None,
+          "its version: PyPI's newest if kept; main for a newer minor version; the one asked, or none")
 
 
 def anchors() -> None:

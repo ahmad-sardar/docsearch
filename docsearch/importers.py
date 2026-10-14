@@ -86,14 +86,22 @@ def store_page(sid: str, root: str, pages_dir: Path, url: str, main, real_url: s
 # --------------------------------------------------------------------------- finding pages
 
 def robots(root: str):
-    """The site's robots.txt rules (a missing file allows everything), and the pause it asks
-    for between pages (Crawl-delay; AWS: 5 s), which every download from it then keeps."""
+    """The site's robots.txt rules, and the pause it asks for between pages (Crawl-delay; AWS:
+    5 s), which every download from it then keeps. As RFC 9309 says: a robots.txt that is not
+    there (4xx) allows everything; one that cannot be read (5xx, no answer) allows nothing."""
     rp = urllib.robotparser.RobotFileParser()
     u = urllib.parse.urlparse(root)
     try:
         body, _ = cli.http_get(f"{u.scheme}://{u.netloc}/robots.txt", timeout=10)
         rp.parse(body.decode("utf-8", "replace").splitlines())
-    except Exception:  # noqa: BLE001 - no robots.txt: everything allowed
+    except cli.Failed as e:
+        if e.kind in ("server-error", "timeout", "dropped", "offline", "other"):
+            say(f"  {u.netloc}: its robots.txt could not be read ({cli.WHY[e.kind].format(detail=e.detail)}), so nothing of it is "
+                f"read now (RFC 9309). Try again later.")
+            rp.parse(["User-agent: *", "Disallow: /"])
+        else:                                        # (not there, or not for us: no rules)
+            rp.parse([])
+    except Exception:  # noqa: BLE001 - an answer that is not a robots.txt: no rules
         rp.parse([])
     delay = rp.crawl_delay(cli.USER_AGENT)
     if delay:
@@ -124,12 +132,14 @@ def plain_heading(text: str) -> str:
     return " ".join(LLMS_LINK.sub(r"\1", text).replace("`", "").split())
 
 
-def read_llms(url: str, prefixes: list[str], limit: int) -> tuple[list[str], dict[str, list[str]], dict[str, str]]:
+def read_llms(url: str, prefixes: list[str], limit: int, fetch=None) -> tuple[list[str], dict[str, list[str]], dict[str, str]]:
     """What an llms.txt index lists (and the section indexes it points to): (the pages, each
     page's sections, its Markdown address). A page's sections are the names it is under: the
     section indexes it was reached through ("Build / Python") and the headings above its link
     ("## Python", "### Deep Agents", "#### Get started"). A page listed as Markdown
-    (guide/x.md) is the page at guide/x, read as Markdown (md_of)."""
+    (guide/x.md) is the page at guide/x, read as Markdown (md_of). `fetch(url)`: how each
+    list is asked for (the survey's: no retries, see site.get)."""
+    fetch = fetch or cli.http_get
     pages: list[str] = []
     crumbs: dict[str, list[str]] = {}
     md_of: dict[str, str] = {}
@@ -141,7 +151,7 @@ def read_llms(url: str, prefixes: list[str], limit: int) -> tuple[list[str], dic
             continue
         seen_idx.add(idx)
         try:
-            text = cli.http_get(idx)[0].decode("utf-8", "replace")
+            text = fetch(idx)[0].decode("utf-8", "replace")
         except Exception:  # noqa: BLE001
             continue
         heads: list[tuple[int, str]] = []            # the headings above, by level
@@ -186,9 +196,10 @@ def sitemap_locs(body: bytes) -> tuple[list[str], list[str]]:
     return [u for u in locs if u.endswith((".xml", ".xml.gz"))], [u for u in locs if not u.endswith((".xml", ".xml.gz"))]
 
 
-def from_sitemap(url: str, prefixes: list[str], limit: int, files: int = 10**6) -> list[str]:
+def from_sitemap(url: str, prefixes: list[str], limit: int, files: int = 10**6, fetch=None) -> list[str]:
     """Pages in a sitemap (or sitemap index), inside the prefixes; at most `files` sitemap
     files read (a host's index can list hundreds: Hugging Face's, of every model)."""
+    fetch = fetch or cli.http_get
     out, have, todo, seen = [], set(), [url], set()
     while todo and len(out) < limit and len(seen) < files:
         sm = todo.pop(0)
@@ -196,7 +207,7 @@ def from_sitemap(url: str, prefixes: list[str], limit: int, files: int = 10**6) 
             continue
         seen.add(sm)
         try:
-            maps, pages = sitemap_locs(cli.http_get(sm)[0])
+            maps, pages = sitemap_locs(fetch(sm)[0])
         except Exception:  # noqa: BLE001
             continue
         todo += maps
@@ -601,6 +612,10 @@ def mdx_to_md(md: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(out))
 
 
+NAMED_HEADING = re.compile(r"^(#{1,6})\s+(.*?)\[\[([^\]\s]+)\]\]\s*$")    # "## Title[[its-id]]"
+DOTTED = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)+")                          # transformers.AutoModel
+
+
 def markdown_page(sid: str, name: str, root: str, pages_dir: Path, url: str, md_bytes: bytes,
                   spec: dict) -> tuple[list[Entry], dict[str, str], list[str]]:
     """A Markdown page from an llms.txt site: entries, plus an HTML copy for reading (worker)."""
@@ -612,6 +627,15 @@ def markdown_page(sid: str, name: str, root: str, pages_dir: Path, url: str, md_
     md = md_bytes.decode("utf-8", "replace")
     md = re.sub(r"\A---\n.*?\n---\n", "", md, flags=re.S)        # front matter
     md = mdx_to_md(md)
+    named: dict[int, str] = {}                       # a heading's own id, as Hugging Face's docs
+    lines = md.splitlines()                          # write it: "## AutoModel[[transformers.AutoModel]]"
+    for n, line in enumerate(lines):
+        m = NAMED_HEADING.match(line)
+        if m:
+            lines[n] = f"{m.group(1)} {m.group(2).rstrip()}"
+            if len(m.group(1)) > 1:                  # (the page's title: its own)
+                named[n] = m.group(3)
+    md = "\n".join(lines)
     title_m = re.search(r"^#\s+(.+)$", md, re.M)
     title = title_m.group(1).strip() if title_m else Path(urllib.parse.urlparse(url).path).stem
 
@@ -629,7 +653,8 @@ def markdown_page(sid: str, name: str, root: str, pages_dir: Path, url: str, md_
     heads, seen = [], {}                             # each heading: its line, level, text, id
     for i, t in enumerate(tokens):                   # (a heading said twice: example, example-1)
         if t.type == "heading_open" and i + 1 < len(tokens):
-            hid = slug(tokens[i + 1].content)
+            hid = named.get(t.map[0]) if t.map else None
+            hid = hid or slug(tokens[i + 1].content)
             n, seen[hid] = seen.get(hid, 0), seen.get(hid, 0) + 1
             hid = f"{hid}-{n}" if n else hid
             t.attrSet("id", hid)
@@ -643,11 +668,22 @@ def markdown_page(sid: str, name: str, root: str, pages_dir: Path, url: str, md_
     entries = [Entry(title=api or title, kind="api" if api else "page", location=page_url,
                      text=md[:cli.PREVIEW_CHARS], source=name)]
     lines = md.splitlines()                          # sections: h2 and h3, as the page's headings
-    cuts = [h for h in heads if h[1] in ("h2", "h3")]           # (not "## x" in a code block)
+    levels = ("h2", "h3", "h4") if spec.get("api_ids") else ("h2", "h3")    # (not "## x" in a code block)
+    cuts = [h for h in heads if h[1] in levels]
     for k, (at, tag, head, hid) in enumerate(cuts):
-        body = "\n".join(lines[at + 1:cuts[k + 1][0] if k + 1 < len(cuts) else len(lines)])
+        named_api = spec.get("api_ids") and DOTTED.fullmatch(hid) and at in named
+        if named_api:                                # an API object (Hugging Face: its id is its name):
+            end = next((c[0] for c in cuts[k + 1:] if c[1] <= tag), len(lines))     # to the next as high
+        else:
+            end = cuts[k + 1][0] if k + 1 < len(cuts) else len(lines)
+        body = "\n".join(lines[at + 1:end])
         clean_head = re.sub(r"`", "", head).removesuffix("()")
         member = api and tag == "h3" and IDENT.fullmatch(clean_head)
+        if named_api:
+            text = body.strip() if body.lstrip().startswith("```") else f"```python\n{hid}\n```\n\n{body.strip()}"
+            entries.append(Entry(title=hid, kind="api", location=f"{page_url}#{hid}",
+                                 text=text[:cli.PREVIEW_CHARS], source=name))
+            continue
         entries.append(Entry(title=f"{api}.{clean_head}" if member else f"{api or title} › {head}",
                              kind="method" if member else "section",
                              location=f"{page_url}#{hid}", text=f"## {head}\n{body}"[:cli.PREVIEW_CHARS],
@@ -662,7 +698,7 @@ def markdown_page(sid: str, name: str, root: str, pages_dir: Path, url: str, md_
 # --------------------------------------------------------------------------- the website importer
 
 ROUND = 200                 # pages read, cut into entries and saved before the next ones
-AGAIN = cli.TRANSIENT | {"offline", "dns"}       # failures a later try may not have
+AGAIN = cli.TRANSIENT | {"offline", "dns", "paused"}   # failures a later try may not have
 TRIES = 3                   # a page failing so goes back in the queue, up to this many tries in all
 GONE = 10                   # a round whose pages all failed so (at least this many): the site is gone
 
@@ -952,12 +988,17 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
                 cli.stop_workers(cpu)
             kinds = [err.kind if isinstance(err, cli.Failed) else "other" for _, err in failed]
             for (u, err), kind in zip(failed, kinds):        # what failed, and why
-                if kind in AGAIN and tries.get(u, 0) < TRIES - 1:
+                if kind == "paused":                         # (not asked: the site asked for a pause)
+                    again.append([u, depth_of[u]])
+                elif kind in AGAIN and tries.get(u, 0) < TRIES - 1:
                     tries[u] = tries.get(u, 0) + 1
                     again.append([u, depth_of[u]])           # it may pass: later (TRIES in all)
                 else:
                     fails.add(u, err)
-            if resume and any(k_ in ("offline", "dns") for k_ in kinds):
+            if resume and "paused" in kinds:
+                stop["why"] = "paused"                       # the site asked for a pause: stop, keep it
+                stop["until"] = next(e.detail for _, e in failed if isinstance(e, cli.Failed) and e.kind == "paused")
+            elif resume and any(k_ in ("offline", "dns") for k_ in kinds):
                 stop["why"] = "offline"                      # the connection is gone: stop, keep it
             elif resume and len(failed) >= GONE and len(failed) == len(taken) and all(k_ in AGAIN for k_ in kinds):
                 stop["why"] = "unreachable"                  # a whole round, and none answered
@@ -1002,7 +1043,9 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
     entries = [Entry(**r) for r in cli.read_jsonl(entries_file)] if entries_file.exists() else []
     if stop["why"] and resume:
         why = (f"the site stopped answering ({cli.describe(kinds[-1])}); stopped" if stop["why"] == "unreachable"
-               else "the connection is gone; stopped" if stop["why"] == "offline" else "stopped")
+               else "the connection is gone; stopped" if stop["why"] == "offline"
+               else f"the site asks programs to wait until {stop.get('until')}; stopped" if stop["why"] == "paused"
+               else "stopped")
         about = total() if state["about"] else None           # a guess from the sitemap, or none
         say(f"  {why}: {pages(len(read))} read" + (f" of about {about:,}" if about else
                                                     f"; {len(todo) + len(retry):,} more found so far")

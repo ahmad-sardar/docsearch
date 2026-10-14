@@ -40,6 +40,7 @@ import concurrent.futures as cf
 import contextlib
 import functools
 import gzip
+import html as html_lib
 import json
 import os
 import re
@@ -312,6 +313,7 @@ WHY = {
     "not-found": "no page at this address (HTTP 404): wrong, or moved",
     "gone": "the page is gone (HTTP {detail})",
     "rate-limited": "the site asked to slow down (HTTP 429), even after waiting",
+    "paused": "the site asks programs to wait until {detail} before more requests",
     "server-error": "the site had a server error (HTTP {detail}), even after retrying",
     "too-large": "the file is larger than the limit ({detail})",
     "not-https": "not an https:// address ({detail}); docsearch only downloads over HTTPS",
@@ -330,10 +332,17 @@ DEAD_HOSTS: dict[str, Failed] = {}   # hosts that failed for good this run: fail
 # for a while each time it answers "too many requests" (429) or "overloaded" (503): half as
 # many requests a second, then a tenth of a request a second more after each normal answer
 # (pkg.go.dev answers 429 after ~55 quick requests: a few seconds of this and it reads on).
+# A site that says its limit (RateLimit headers: huggingface.co, 100 pages in 5 minutes) is
+# never asked faster than what it has left until its window ends allows, and when nothing is
+# left, not until then: no request is sent that it would refuse (notes/fetching-policy.md).
 PACE: dict[str, dict] = {}       # host -> next: when it may be asked again, gap, floor, slowed
 _PACE_LOCK = __import__("threading").Lock()
 MAX_GAP = 10.0                   # seconds between requests at the slowest (unless Retry-After says)
-MAX_WAIT = 60.0                  # the longest Retry-After kept
+MAX_WAIT = 300.0                 # the longest wait a site asks for that is kept (a 5-minute window)
+PAUSED: dict[str, float] = {}    # host -> until when (time.time()) it asked not to be asked: a longer
+                                 # wait than MAX_WAIT stops the download, kept, to go on after it
+RATE_LEFT = re.compile(r"\br=(\d+)")              # RateLimit: "pages";r=97;t=240 (IETF draft)
+RATE_RESET = re.compile(r"\bt=(\d+)")
 STOPPING = False                 # a download is stopping (ctrl+c): no more waiting or retrying
 
 
@@ -344,6 +353,14 @@ def set_crawl_delay(host: str, seconds: float) -> None:
         p["gap"] = max(p["gap"], seconds)
 
 
+def paused(host: str, url: str) -> None:
+    """A site that asked not to be asked for a while (longer than MAX_WAIT) is not asked until
+    then: Failed("paused"), which a download keeps to go on with (importers.AGAIN)."""
+    until = PAUSED.get(host)
+    if until is not None and time.time() < until:
+        raise Failed("paused", url, time.strftime("%H:%M", time.localtime(until)))
+
+
 def wait_turn(host: str) -> None:
     """Wait until this host may be asked again: one request per `gap` seconds, over all threads."""
     with _PACE_LOCK:
@@ -352,7 +369,7 @@ def wait_turn(host: str) -> None:
             return
         now = time.monotonic()
         at = max(now, p["next"])
-        p["next"] = at + p["gap"]
+        p["next"] = at + max(p["gap"], p.get("quota", 0.0))
     while time.monotonic() < at:                   # (a download that stops asks nothing more)
         if STOPPING:
             raise Failed("dropped", f"https://{host}/", "stopped")
@@ -366,12 +383,20 @@ def turn_in(host: str) -> float:
         return max(0.0, p["next"] - time.monotonic()) if p else 0.0
 
 
-def paced(host: str, busy: bool, retry_after: float | None = None) -> None:
-    """After an answer from `host`: slow down if it said it is busy, else speed up a little."""
+def paced(host: str, busy: bool, retry_after: float | None = None, left: int | None = None,
+          reset: float | None = None) -> None:
+    """After an answer from `host`: slow down if it said it is busy, else speed up a little.
+    `left`, `reset`: what its RateLimit header says is left, and in how many seconds the
+    window ends: what is left is spread over that time, and at none, nothing until then."""
     with _PACE_LOCK:
         p = PACE.get(host)
-        if p is None and not busy:
+        if p is None and not busy and left is None:
             return
+        p = p or PACE.setdefault(host, {"next": 0.0, "gap": 0.0, "floor": 0.0, "slowed": -MAX_GAP})
+        if left is not None and reset:
+            p["quota"] = reset / max(left, 1)
+            if left == 0 or busy:
+                retry_after = max(retry_after or 0.0, reset)
         p = p or PACE.setdefault(host, {"next": 0.0, "gap": 0.0, "floor": 0.0, "slowed": -MAX_GAP})
         now = time.monotonic()
         if not busy:
@@ -382,8 +407,13 @@ def paced(host: str, busy: bool, retry_after: float | None = None) -> None:
         if now - p["slowed"] > max(1.0, p["gap"]):   # once for all the requests already under way
             p["gap"] = max(p["floor"], min(MAX_GAP, max(0.5, p["gap"] * 2)))   # never under the crawl delay
             p["slowed"] = now
+        if retry_after and retry_after > MAX_WAIT:  # "come back in an hour": not waited for here
+            PAUSED[host] = time.time() + retry_after
         if retry_after:                            # "come back in N seconds": everyone waits
-            p["next"] = max(p["next"], now + min(retry_after, MAX_WAIT))
+            until = now + min(retry_after, MAX_WAIT)
+            if until - max(p["next"], now) > 30:
+                say(f"  {host} asks to wait {min(retry_after, MAX_WAIT):.0f} s before more requests: waiting")
+            p["next"] = max(p["next"], until)
 
 
 def connect_failure(url: str, e: Exception) -> Failed:
@@ -419,21 +449,22 @@ def bot_check(r, head: bytes) -> str | None:
     return None
 
 
-def http_get(url: str, timeout: float = 20, guess: bool = False) -> tuple[bytes, str]:
+def http_get(url: str, timeout: float = 20, guess: bool = False, limit: int | None = None) -> tuple[bytes, str]:
     """Return (body, final URL after redirects). HTTPS only, certificate checked, at most
     MAX_DOWNLOAD bytes, at most 5 redirects and only to other HTTPS addresses. Failures are
     Failed, with their kind; the transient ones are tried again (RETRY_WAITS), and a host
     that failed for good (no such name, bad certificate, bot check) is not tried again.
     guess: an address that may not exist (where objects.inv may be). A bot check there says
     nothing of the site's real pages (docs.pytorch.org shows one for a missing file), so the
-    host is tried again."""
+    host is tried again. limit: bytes at most (MAX_DOWNLOAD; an archive of a site's docs: more)."""
     host = urllib.parse.urlparse(url).netloc
     if host in DEAD_HOSTS:
         old = DEAD_HOSTS[host]
         raise Failed(old.kind, url, old.detail)
+    paused(host, url)
     for wait in (*RETRY_WAITS, None):
         try:
-            return http_get_once(url, timeout)
+            return http_get_once(url, timeout, limit)
         except Failed as e:
             if e.kind in ("dns", "certificate", "offline") or (e.kind == "bot-check" and not guess):
                 DEAD_HOSTS[host] = e
@@ -445,17 +476,21 @@ def http_get(url: str, timeout: float = 20, guess: bool = False) -> tuple[bytes,
     raise AssertionError("unreachable")
 
 
-def http_get_once(url: str, timeout: float = 20) -> tuple[bytes, str]:
+def http_get_once(url: str, timeout: float = 20, limit: int | None = None) -> tuple[bytes, str]:
     import httpx
     for _ in range(6):
         if not safe_url(url):
             raise Failed("not-https", url, url.split(":", 1)[0] + ":")
         host = urllib.parse.urlparse(url).netloc
+        paused(host, url)
         wait_turn(host)
         try:
             with http_client().stream("GET", url, timeout=timeout) as r:
                 after = r.headers.get("retry-after", "")
-                paced(host, r.status_code in (429, 503), float(after) if after.isdigit() else None)
+                rate = r.headers.get("ratelimit", "")
+                left, reset = RATE_LEFT.search(rate), RATE_RESET.search(rate)
+                paced(host, r.status_code in (429, 503), float(after) if after.isdigit() else None,
+                      int(left.group(1)) if left and reset else None, float(reset.group(1)) if left and reset else None)
                 if r.is_redirect:
                     nxt = urllib.parse.urljoin(url, r.headers.get("location", ""))
                     if url.startswith("https:") and nxt.startswith("http:") and not ALLOW_HTTP:
@@ -482,8 +517,8 @@ def http_get_once(url: str, timeout: float = 20) -> tuple[bytes, str]:
                 body = bytearray()
                 for chunk in r.iter_bytes():
                     body += chunk
-                    if len(body) > MAX_DOWNLOAD:
-                        raise Failed("too-large", url, f"{MAX_DOWNLOAD // 2**20} MB")
+                    if len(body) > (limit or MAX_DOWNLOAD):
+                        raise Failed("too-large", url, f"{(limit or MAX_DOWNLOAD) // 2**20} MB")
                 return bytes(body), str(r.url)
         except httpx.TransportError as e:            # no connection, or it dropped
             raise connect_failure(url, e) from e
@@ -741,6 +776,9 @@ def read_listed(keys: list[str], urls: dict[str, str], fetch, cut, workers: int,
     entries = [Entry(**{k: v for k, v in r.items() if k != "page"}) for r in lines]
     if any(k not in done for k in keys) and (stop["why"] or unread or len(now) < len(left)):
         why = {"offline": "the connection is gone; stopped"}.get(stop["why"], "stopped")
+        pause = next((key.partition(":")[2] for key in fails.by_kind if key.startswith("paused")), None)
+        if pause:
+            why = f"the site asks programs to wait until {pause}; stopped"
         say(f"  {why}: {len(done):,} of {len(keys):,} pages read. They are {kept()}; "
             f"to continue: {continue_with(name)}")
         return entries, {"pages": len(done), "about": len(keys)}, images
@@ -1363,7 +1401,10 @@ SITE_INDEXES = (("objects.inv", "sphinx"), ("search/search_index.json", "website
 
 def repo_of(url: str) -> str | None:
     """github.com/numpy/numpy, for any address in a repository (its page, a file in it, .git)."""
-    u = urllib.parse.urlparse(url if "//" in url else "https://" + url)
+    try:
+        u = urllib.parse.urlparse(url if "//" in url else "https://" + url)
+    except ValueError:                               # (not an address: "[x]" reads as an IPv6 one)
+        return None
     host = u.netloc.lower().removeprefix("www.")
     parts = [p for p in u.path.split("/") if p]
     if host not in CODE_HOSTS or len(parts) < 2 or parts[0].lower() in NOT_A_REPO:
@@ -1585,23 +1626,64 @@ def find_docs(candidate: str, fallback: bool = False, lists: bool = False) -> tu
 MIN_LISTED = 10          # pages a site must list (sitemap, llms.txt...) to be taken as docs by its lists
 
 
-def docs_links(page: str, url: str, name: str) -> list[tuple[str, bool]]:
-    """A project's home page's links to docs on its own site (sympy.org: docs.sympy.org), the
-    ones that name the package first, and whether they do (a site many packages share:
-    Google's, /python/docs/reference/bigquery/ for google-cloud-bigquery)."""
+# A link that names docs by its whole text ("Docs", "User guide"; not "API" or "Reference",
+# which name a part of them: spacy.io's /api/ without its usage guides), and the pages a home
+# page links that are never its docs (tensorflow.org: /community/contribute/docs)
+DOCS_TEXT = re.compile(r"(docs|documentation|user guide|user's guide|manual|guide|tutorials?|learn|read the docs)",
+                       re.I)
+NOT_DOCS = re.compile(r"/(contribut\w*|community|blog|about|news|events?|careers|jobs|press|team|governance|"
+                      r"donate|sponsors?|pricing|enterprise|solutions|showcase|forum|discuss)(/|\.|$)", re.I)
+
+
+def docs_links(page: str, url: str, name: str, elsewhere: bool = False) -> list[tuple[str, bool]]:
+    """A project's home page's links to its docs (sympy.org: docs.sympy.org), the ones that
+    name the package first, and whether they do (a site many packages share: Google's,
+    /python/docs/reference/bigquery/ for google-cloud-bigquery). A link names docs by its
+    address (a docs. host, a /docs folder) or by its whole text ("Documentation", "API");
+    never a contributing, community, blog or about page. `elsewhere`: on other sites too (a
+    home page PyPI names: numba.pydata.org links numba.readthedocs.io)."""
     host = urllib.parse.urlparse(url).netloc.lower()
     section = urllib.parse.urlparse(url).path.rstrip("/").rsplit("/", 1)[0] + "/"     # (where it is)
     words = [w for w in re.split(r"[-_.]+", name.lower()) if len(w) > 2 and w not in host]
+    name_words = [w for w in re.split(r"[-_.]+", name.lower()) if len(w) > 2]
     out: dict[str, bool] = {}
     for href, text in re.findall(r"""<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)</a>""", page, re.S | re.I):
         link = urllib.parse.urljoin(url, href).split("#")[0]
         u = urllib.parse.urlparse(link)
-        if on_site(link, url) and link.rstrip("/") != url.rstrip("/") and (
-                u.netloc.startswith("docs.") or re.search(r"/docs?(/|\.html?$|$)", u.path)
-                or re.search(r"\bdoc(s|umentation)\b", re.sub(r"<[^>]+>", " ", text), re.I)):
+        words_of = re.sub(r"^\W+|\W+$", "", " ".join(html_lib.unescape(re.sub(r"<[^>]+>", " ", text)).split()))
+        if not u.scheme.startswith("http") or link.rstrip("/") == url.rstrip("/") or NOT_DOCS.search(u.path):
+            continue
+        if not (on_site(link, url) or (elsewhere and u.netloc.lower() not in SKIP_HOSTS and not
+                                       re.search(r"(^|\.)(github|gitlab|pypi|twitter|x|youtube|linkedin)\.", u.netloc.lower())
+                                       and any(w in link.lower() for w in name_words))):
+            continue                                 # (another site: its address names the package)
+        if u.netloc.lower().startswith("docs.") or u.netloc.lower().endswith(".readthedocs.io") \
+                or re.search(r"(^|/)docs?(/|\.html?$|$)", u.path) or DOCS_TEXT.fullmatch(words_of):
             out[link] = out.get(link, False) or (u.path.startswith(section) and any(
                 re.search(rf"(^|/){re.escape(w)}(/|$)", u.path.lower()) for w in words))
     return sorted(out.items(), key=lambda kv: not kv[1])[:3]
+
+
+def readme_docs(name: str) -> list[str]:
+    """Docs a package's PyPI description links to by their address (a docs. host, Read the Docs,
+    a /docs folder): opencv-python's README, docs.opencv.org. The description is the package's
+    own words, as its home page: what it links counts as its docs (package_docs: vouched)."""
+    text = (PYPI_INFO.get(name) or {}).get("description") or ""
+    words = [w for w in re.split(r"[-_.]+", name.lower()) if len(w) > 2]
+    out: list[str] = []
+    for m in re.finditer(r"https://[^\s)\]>\"'`<]+", text):
+        u = urllib.parse.urlparse(m.group(0).rstrip(".,;"))
+        host = u.netloc.lower()
+        if host in SKIP_HOSTS or re.search(r"(^|\.)(github|gitlab|pypi|shields|badge|readthedocs\.org)", host) \
+                or NOT_DOCS.search(u.path):
+            continue
+        if not any(w in host or w in u.path.lower() for w in words):
+            continue                                 # (another project's docs: Python's, for onnx)
+        if host.startswith("docs.") or host.endswith(".readthedocs.io") or re.search(r"(^|/)docs?(/|$)", u.path):
+            link = f"{u.scheme}://{u.netloc}{u.path}"
+            if link not in out:
+                out.append(link)
+    return out[:3]
 
 
 def package_docs(name: str, yes: bool) -> tuple[str, str, bytes | None, dict] | None:
@@ -1619,9 +1701,13 @@ def package_docs(name: str, yes: bool) -> tuple[str, str, bytes | None, dict] | 
     dead_before = set(DEAD_HOSTS)
     later = [lambda: [(w, "website") for w in [(repo_facts(repo) or {}).get("website") if repo else None] if w],
              lambda: [(u, "home") for u in p["home"]],      # (the repository is asked only if PyPI's
-             lambda: [(f"https://{norm}.readthedocs.io/", "guess")]]          # docs links were not it)
+             lambda: [(u, "home") for u in readme_docs(name)                 # (docs its PyPI description
+                      if vouched.setdefault(u, "PyPI's description of the package links to them")],   # links)
+             lambda: [(f"https://{norm}.readthedocs.io/", "guess")]         # docs links were not it)
+             + [(h.rstrip("/") + f"/{norm}/", "guess") for h in p["home"]]]   # (onnx.ai/onnx/)
     queue = [(u, "docs") for u in p["docs"]]
     tried: set[tuple[str, bool]] = set()              # addresses looked at (and at their lists)
+    vouched: dict[str, str] = {}                      # docs links -> who links them (the project's home page, PyPI)
     roots: set[str] = set()                           # docs found (several addresses may lead there)
     first = None                                      # the first docs found that could not be checked
     while queue or later:
@@ -1634,17 +1720,22 @@ def package_docs(name: str, yes: bool) -> tuple[str, str, bytes | None, dict] | 
         tried.add((url, how == "listed"))
         if how != "listed":
             say(f"  looking at {url}" + (" (a guess)" if how == "guess" else ""))
-        found = find_docs(url, fallback=how == "docs", lists=how == "listed")
+        found = find_docs(url, fallback=how == "docs", lists=how == "listed" or url in vouched)
         if found is None:
-            if how in ("website", "home"):           # a project's home page: its links to its docs
-                page = probe_roots(url)[1]           # (one that names the package: its docs address),
-                links = [(link, "docs" if named else "home") for link, named in docs_links(page, url, name)]
+            if how in ("website", "home") and url not in vouched:      # a project's home page (PyPI's,
+                page = probe_roots(url)[1]           # its repository's): its links to its docs (one that
+                links = [(link, "docs" if named else "home")              # names the package: its docs
+                         for link, named in docs_links(page, url, name, elsewhere=True)]   # address),
+                vouched.update({link: f"{url}, the project's home page, links to them"
+                                for link, _ in links if link not in vouched})
                 queue[:0] = links + [(url, "listed")]    # then the pages it lists itself (keras.io)
             continue
         if found[1] in roots:
             continue
         roots.add(found[1])
         why = checked(found[1], found[3], repo, url if how == "website" else "")
+        if not why and url in vouched:               # the project's own home page (or PyPI) links them
+            why = vouched[url]
         if why:
             say(f"  found {found[0]} docs at {found[1]} ({why})")
             return *found[:3], {"repo": repo, "verified": why, "about": summary}
@@ -1652,6 +1743,11 @@ def package_docs(name: str, yes: bool) -> tuple[str, str, bytes | None, dict] | 
             first = found
     unreached = {**{u: e for u, e in UNREACHED.items()},
                  **{h: e for h, e in DEAD_HOSTS.items() if h not in dead_before}}
+    refused = {u: e for u, e in unreached.items() if e.kind in ("bot-check", "forbidden", "login")}
+    for host, e in {urllib.parse.urlparse(u).netloc or u: e for u, e in refused.items()}.items():
+        say(f"  {host}: {WHY[e.kind].format(detail=e.detail)}")      # (it will not let programs read it:
+                                                                     # for good, not later: its README)
+    unreached = {u: e for u, e in unreached.items() if u not in refused}
     if unreached:                                    # the checked docs may be there: never the README
         if first is not None:                        # or unchecked docs instead (not even --yes)
             say(f"  found {first[0]} docs at {first[1]}, which could not be checked against the source")
@@ -3005,6 +3101,9 @@ def build_known(name: str, sid: str, plan: dict, workers: int, max_pages: int | 
             found, extra = importers.build_website(name, sid, part, into, workers, max_pages, folder)
         elif kind == "rustdoc":
             found, extra = importers.build_rustdoc(name, sid, part, store, workers, max_pages, folder)
+        elif kind == "hf-archive":
+            from docsearch import hfdocs
+            found, extra = hfdocs.build(name, sid, part, into)
         elif kind == "readme":
             found, extra = importers.build_readme(name, sid, part, store)
         else:
@@ -3086,6 +3185,15 @@ def web_docs(name: str, spec: str, want: str, override: str, args, check_copy: b
         if got is None:
             return None
         kind, root, inv, source = got
+    from docsearch import hfdocs                     # Hugging Face's libraries: from its own copy of
+    lib = hfdocs.library(root) if kind == "website" else None      # their docs (notes/fetching-policy.md)
+    hf = lib and hfdocs.plan(name, lib, want, (PYPI_INFO.get(name) or {}).get("version") or "")
+    if hf:
+        if check_copy and have_copy(spec, name, want, hf["version"], args):
+            return None
+        from docsearch import guides
+        return guides.plan_with({**hf, **{k: v for k, v in source.items() if v}}, name, args,
+                                newest=not want, pypi=not override)
     if kind == "readme":                             # the README of a release: the newest, or the one asked
         version = want or (PYPI_INFO.get(name) or {}).get("version") or ""
         if not version or (want and not release_info(name, want)):
@@ -3196,6 +3304,11 @@ def add_each(args, outer: str) -> None:
         spec_ = spec[len("pypi:"):] if forced_pypi else spec
         name, want = spec_.split("==", 1) if "==" in spec_ else (spec_, "")
         name, _, override = name.partition("=")
+        saved = config_values(name) if not override and not want and not forced_pypi else None
+        if isinstance(saved, dict) and isinstance(saved.get("url") or saved.get("path"), str):
+            override = saved.get("url") or saved.get("path")      # its address in packages.toml (as sync)
+            spec = f"{name}={override}"
+            say(f"  {name}: its docs at {override}, as packages.toml says")
         if not override and not forced_pypi and not getattr(args, "standards_base", False):
             from docsearch import standards
             if standards.profile(name):                  # cpp==17: one copy per standard (standards.py)
@@ -3371,6 +3484,7 @@ NEXT = {
     "timeout": "The site is slow or overloaded. Try again later, or more gently: --workers 2",
     "dropped": "The site is slow or overloaded. Try again later, or more gently: --workers 2",
     "rate-limited": "The site limits how fast it may be read. Try again later, more gently: --workers 2",
+    "paused": "What was read is kept: run the same command after that time, and it goes on from there.",
     "server-error": "The site has a problem of its own. Try again later.",
     "certificate": "The site's certificate is broken; docsearch will not download from it.",
     "bot-check": "The site does not allow programs to read it.",

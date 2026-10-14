@@ -69,7 +69,7 @@ top 5, missing.
 - **Done when:** the cross-package usability questions have their language's answer first.
   Searching one package is unchanged.
 
-### T5 Finding the docs: trusted paths, fewer requests
+### T5 Finding the docs: trusted paths, fewer requests (done: `eval/results-finding.md`, `notes/fetching-policy.md`)
 - **Change:**
   - **The survey:**
     - its requests never mark a place unreached;

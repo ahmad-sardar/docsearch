@@ -1,0 +1,1458 @@
+[
+ {
+  "package": "requests",
+  "found": "sphinx",
+  "root": "https://requests.readthedocs.io/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://requests.readthedocs.io/en/stable/"
+   }
+  ],
+  "verified": "they link to github.com/psf/requests",
+  "said": [
+   "looking at https://requests.readthedocs.io",
+   "  found sphinx docs at https://requests.readthedocs.io/en/latest/ (they link to github.com/psf/requests)"
+  ]
+ },
+ {
+  "package": "flask",
+  "found": "sphinx",
+  "root": "https://flask.palletsprojects.com/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://flask.palletsprojects.com/en/stable/"
+   }
+  ],
+  "verified": "they link to github.com/pallets/flask",
+  "said": [
+   "looking at https://flask.palletsprojects.com/",
+   "  found sphinx docs at https://flask.palletsprojects.com/en/stable/ (they link to github.com/pallets/flask)"
+  ]
+ },
+ {
+  "package": "django",
+  "found": "sphinx",
+  "root": "https://docs.djangoproject.com/en/6.1/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://docs.djangoproject.com/en/6.1/"
+   }
+  ],
+  "verified": "they link to github.com/django/django",
+  "said": [
+   "looking at https://docs.djangoproject.com/",
+   "  found sphinx docs at https://docs.djangoproject.com/en/6.1/ (they link to github.com/django/django)"
+  ]
+ },
+ {
+  "package": "fastapi",
+  "found": "sphinx",
+  "root": "https://fastapi.tiangolo.com/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://fastapi.tiangolo.com/"
+   },
+   {
+    "kind": "website",
+    "start": "https://fastapi.tiangolo.com/"
+   }
+  ],
+  "verified": "they link to github.com/fastapi/fastapi",
+  "said": [
+   "looking at https://fastapi.tiangolo.com/",
+   "  found sphinx docs at https://fastapi.tiangolo.com/ (they link to github.com/fastapi/fastapi)"
+  ]
+ },
+ {
+  "package": "pydantic",
+  "found": "sphinx",
+  "root": "https://pydantic.dev/docs/validation/latest/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://pydantic.dev/docs/validation/latest/"
+   },
+   {
+    "kind": "website",
+    "start": "https://pydantic.dev/docs/validation/latest/"
+   }
+  ],
+  "verified": "they link to github.com/pydantic/pydantic",
+  "said": [
+   "looking at https://pydantic.dev/docs/validation/latest/get-started/",
+   "  found sphinx docs at https://pydantic.dev/docs/validation/latest/ (they link to github.com/pydantic/pydantic)"
+  ]
+ },
+ {
+  "package": "sqlalchemy",
+  "found": "sphinx",
+  "root": "https://docs.sqlalchemy.org/en/21/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://docs.sqlalchemy.org/en/21/"
+   }
+  ],
+  "verified": "they link to github.com/sqlalchemy/sqlalchemy",
+  "said": [
+   "looking at https://docs.sqlalchemy.org",
+   "  found sphinx docs at https://docs.sqlalchemy.org/en/21/ (they link to github.com/sqlalchemy/sqlalchemy)"
+  ]
+ },
+ {
+  "package": "numpy",
+  "found": "sphinx",
+  "root": "https://numpy.org/doc/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://numpy.org/doc/stable/"
+   },
+   {
+    "kind": "sphinx",
+    "url": "https://numpy.org/numpy-tutorials/"
+   }
+  ],
+  "verified": "they link to github.com/numpy/numpy",
+  "said": [
+   "looking at https://numpy.org/doc/",
+   "  found sphinx docs at https://numpy.org/doc/stable/ (they link to github.com/numpy/numpy)",
+   "  numpy: its docs link an official guide, \"Learn\" (https://numpy.org/numpy-tutorials/, on the docs' own site): read with them"
+  ]
+ },
+ {
+  "package": "pandas",
+  "found": "sphinx",
+  "root": "https://pandas.pydata.org/docs/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://pandas.pydata.org/docs/"
+   }
+  ],
+  "verified": "they link to github.com/pandas-dev/pandas",
+  "said": [
+   "looking at https://pandas.pydata.org/docs/",
+   "  found sphinx docs at https://pandas.pydata.org/docs/ (they link to github.com/pandas-dev/pandas)"
+  ]
+ },
+ {
+  "package": "polars",
+  "found": "sphinx",
+  "root": "https://docs.pola.rs/api/python/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://docs.pola.rs/api/python/stable/"
+   },
+   {
+    "kind": "website",
+    "start": "https://docs.pola.rs/"
+   }
+  ],
+  "verified": "they link to github.com/pola-rs/polars",
+  "said": [
+   "looking at https://docs.pola.rs/api/python/stable/reference/index.html",
+   "  found sphinx docs at https://docs.pola.rs/api/python/stable/ (they link to github.com/pola-rs/polars)",
+   "  polars: its docs link an official guide, \"User guide\" (https://docs.pola.rs/, on the docs' own site): read with them"
+  ]
+ },
+ {
+  "package": "scipy",
+  "found": "sphinx",
+  "root": "https://docs.scipy.org/doc/scipy/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://docs.scipy.org/doc/scipy/"
+   },
+   {
+    "kind": "website",
+    "start": "https://scipy.org/"
+   }
+  ],
+  "verified": "they link to github.com/scipy/scipy",
+  "said": [
+   "looking at https://docs.scipy.org/doc/scipy/",
+   "  found sphinx docs at https://docs.scipy.org/doc/scipy/ (they link to github.com/scipy/scipy)",
+   "  scipy: its docs link an official guide, \"Installing\" (https://scipy.org/, they link to github.com/scipy/scipy): read with them"
+  ]
+ },
+ {
+  "package": "matplotlib",
+  "found": "sphinx",
+  "root": "https://matplotlib.org/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://matplotlib.org/stable/"
+   }
+  ],
+  "verified": "they link to github.com/matplotlib/matplotlib",
+  "said": [
+   "looking at https://matplotlib.org",
+   "  found sphinx docs at https://matplotlib.org/stable/ (they link to github.com/matplotlib/matplotlib)"
+  ]
+ },
+ {
+  "package": "seaborn",
+  "found": "sphinx",
+  "root": "https://seaborn.pydata.org/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://seaborn.pydata.org/"
+   }
+  ],
+  "verified": "they link to github.com/mwaskom/seaborn",
+  "said": [
+   "looking at http://seaborn.pydata.org",
+   "  found sphinx docs at https://seaborn.pydata.org/ (they link to github.com/mwaskom/seaborn)"
+  ]
+ },
+ {
+  "package": "scikit-learn",
+  "found": "sphinx",
+  "root": "https://scikit-learn.org/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://scikit-learn.org/stable/"
+   }
+  ],
+  "verified": "they link to github.com/scikit-learn/scikit-learn",
+  "said": [
+   "looking at https://scikit-learn.org",
+   "  found sphinx docs at https://scikit-learn.org/stable/ (they link to github.com/scikit-learn/scikit-learn)"
+  ]
+ },
+ {
+  "package": "torch",
+  "found": "sphinx",
+  "root": "https://docs.pytorch.org/docs/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://docs.pytorch.org/docs/stable/"
+   }
+  ],
+  "verified": "github.com/pytorch/pytorch names this site",
+  "said": [
+   "looking at https://pytorch.org/docs",
+   "  found sphinx docs at https://docs.pytorch.org/docs/stable/ (github.com/pytorch/pytorch names this site)"
+  ]
+ },
+ {
+  "package": "tensorflow",
+  "found": "website",
+  "root": "https://www.tensorflow.org/",
+  "parts": [
+   {
+    "kind": "website",
+    "start": "https://www.tensorflow.org/"
+   }
+  ],
+  "verified": "they link to github.com/tensorflow/tensorflow",
+  "seconds": 33,
+  "said": [
+   "looking at https://tensorflow.org",
+   "  looking at https://www.tensorflow.org/learn",
+   "  found website docs at https://www.tensorflow.org/ (they link to github.com/tensorflow/tensorflow)",
+   "  https://www.tensorflow.org/: 18,807 pages; reading 14,612 (left out: 4,195 for java, js, node). To choose its sections: search add tensorflow, in a terminal",
+   "  14,612 pages listed by the site (sitemap)"
+  ]
+ },
+ {
+  "package": "jax",
+  "found": "sphinx",
+  "root": "https://docs.jax.dev/en/latest/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://docs.jax.dev/en/latest/"
+   }
+  ],
+  "verified": "they link to github.com/jax-ml/jax",
+  "said": [
+   "looking at https://docs.jax.dev",
+   "  found sphinx docs at https://docs.jax.dev/en/latest/ (they link to github.com/jax-ml/jax)"
+  ]
+ },
+ {
+  "package": "transformers",
+  "found": "website",
+  "root": "https://huggingface.co/docs/transformers/v5.19.0/en/",
+  "parts": [
+   {
+    "kind": "hf-archive",
+    "url": "https://huggingface.co/docs/transformers/v5.19.0/en/"
+   },
+   {
+    "kind": "website",
+    "start": "https://huggingface.co/learn/"
+   }
+  ],
+  "verified": "they link to github.com/huggingface/transformers",
+  "said": [
+   "  found website docs at https://huggingface.co/docs/transformers/ (they link to github.com/huggingface/transformers)",
+   "  transformers: Hugging Face's own copy of its docs (transformers v5.19.0): one download, no page asked for",
+   "  transformers: its docs link an official guide, \"Learn\" (https://huggingface.co/learn/, on the docs' own site): read with them"
+  ]
+ },
+ {
+  "package": "langchain",
+  "found": "website",
+  "root": "https://reference.langchain.com/python/langchain/",
+  "parts": [
+   {
+    "kind": "website",
+    "start": "https://reference.langchain.com/python/langchain/"
+   },
+   {
+    "kind": "website",
+    "start": "https://docs.langchain.com/"
+   }
+  ],
+  "verified": "they link to github.com/langchain-ai/langchain",
+  "said": [
+   "  found website docs at https://reference.langchain.com/python/langchain/langchain/ (they link to github.com/langchain-ai/langchain)",
+   "  116 pages listed by the site (llms.txt, sitemap), read as Markdown",
+   "  langchain: its PyPI record names more official docs, \"Docs by LangChain\" (https://docs.langchain.com/, github.com/langchain-ai/langchain names this site): read with them"
+  ]
+ },
+ {
+  "package": "llama-index",
+  "found": "website",
+  "root": "https://developers.llamaindex.ai/python/framework/",
+  "parts": [
+   {
+    "kind": "website",
+    "start": "https://developers.llamaindex.ai/python/framework/"
+   }
+  ],
+  "verified": "they link to github.com/run-llama/llama_index",
+  "said": [
+   "looking at https://docs.llamaindex.ai/en/stable/",
+   "  found website docs at https://developers.llamaindex.ai/python/framework/ (they link to github.com/run-llama/llama_index)",
+   "  432 pages listed by the site (llms.txt)"
+  ]
+ },
+ {
+  "package": "openai",
+  "found": "website",
+  "root": "https://developers.openai.com/api/reference/",
+  "parts": [
+   {
+    "kind": "website",
+    "start": "https://developers.openai.com/api/reference/"
+   },
+   {
+    "kind": "website",
+    "start": "https://developers.openai.com/learn/"
+   },
+   {
+    "kind": "website",
+    "start": "https://developers.openai.com/cookbook/"
+   },
+   {
+    "kind": "website",
+    "start": "https://developers.openai.com/learn/"
+   }
+  ],
+  "verified": "PyPI's description of the package links to them",
+  "said": [
+   "  openai: its docs link an official guide, \"Learn Docs, videos, and demo apps for building with OpenAI\" (https://developers.openai.com/learn/, on the docs' own site): read with them",
+   "  openai: its docs link an official guide, \"Cookbook\" (https://developers.openai.com/cookbook/, on the docs' own site): read with them",
+   "  openai: its docs link an official guide, \"Learn\" (https://developers.openai.com/learn/, on the docs' own site): read with them"
+  ]
+ },
+ {
+  "package": "anthropic",
+  "found": "website",
+  "root": "https://platform.claude.com/docs/en/api/",
+  "parts": [
+   {
+    "kind": "website",
+    "start": "https://platform.claude.com/docs/en/api/"
+   }
+  ],
+  "verified": "PyPI's description of the package links to them",
+  "said": [
+   "looking at https://docs.anthropic.com/en/api/",
+   "  found website docs at https://platform.claude.com/docs/en/api/ (PyPI's description of the package links to them)",
+   "  527 pages listed by the site (llms.txt), read as Markdown"
+  ]
+ },
+ {
+  "package": "httpx",
+  "found": "website",
+  "root": "https://www.python-httpx.org/",
+  "parts": [
+   {
+    "kind": "website",
+    "start": "https://www.python-httpx.org/"
+   }
+  ],
+  "verified": "they link to github.com/encode/httpx",
+  "said": [
+   "looking at https://www.python-httpx.org",
+   "  found website docs at https://www.python-httpx.org/ (they link to github.com/encode/httpx)",
+   "  23 pages listed by the site (search index)"
+  ]
+ },
+ {
+  "package": "aiohttp",
+  "found": "sphinx",
+  "root": "https://docs.aiohttp.org/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://docs.aiohttp.org/en/stable/"
+   }
+  ],
+  "verified": "they link to github.com/aio-libs/aiohttp",
+  "said": [
+   "looking at https://docs.aiohttp.org/en/stable/changes.html",
+   "  found sphinx docs at https://docs.aiohttp.org/en/stable/ (they link to github.com/aio-libs/aiohttp)"
+  ]
+ },
+ {
+  "package": "click",
+  "found": "sphinx",
+  "root": "https://click.palletsprojects.com/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://click.palletsprojects.com/en/stable/"
+   }
+  ],
+  "verified": "they link to github.com/pallets/click",
+  "said": [
+   "looking at https://click.palletsprojects.com/",
+   "  found sphinx docs at https://click.palletsprojects.com/en/stable/ (they link to github.com/pallets/click)"
+  ]
+ },
+ {
+  "package": "typer",
+  "found": "sphinx",
+  "root": "https://typer.tiangolo.com/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://typer.tiangolo.com/"
+   },
+   {
+    "kind": "website",
+    "start": "https://typer.tiangolo.com/"
+   }
+  ],
+  "verified": "they link to github.com/fastapi/typer",
+  "said": [
+   "looking at https://typer.tiangolo.com",
+   "  found sphinx docs at https://typer.tiangolo.com/ (they link to github.com/fastapi/typer)"
+  ]
+ },
+ {
+  "package": "rich",
+  "found": "sphinx",
+  "root": "https://rich.readthedocs.io/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://rich.readthedocs.io/en/stable/"
+   }
+  ],
+  "verified": "github.com/Textualize/rich names this site",
+  "said": [
+   "looking at https://rich.readthedocs.io/en/latest/",
+   "  found sphinx docs at https://rich.readthedocs.io/en/latest/ (github.com/Textualize/rich names this site)"
+  ]
+ },
+ {
+  "package": "pytest",
+  "found": "sphinx",
+  "root": "https://docs.pytest.org/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://docs.pytest.org/en/stable/"
+   },
+   {
+    "kind": "sphinx",
+    "url": "https://docs.pytest.org/en/latest/"
+   }
+  ],
+  "verified": "they link to github.com/pytest-dev/pytest",
+  "said": [
+   "looking at https://pytest.org",
+   "  found sphinx docs at https://docs.pytest.org/en/stable/ (they link to github.com/pytest-dev/pytest)",
+   "  pytest: its PyPI record names more official docs, \"pytest documentation\" (https://docs.pytest.org/en/latest/, on the docs' own site): read with them"
+  ]
+ },
+ {
+  "package": "celery",
+  "found": "sphinx",
+  "root": "https://docs.celeryq.dev/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://docs.celeryq.dev/en/stable/"
+   }
+  ],
+  "verified": "github.com/celery/celery names this site",
+  "said": [
+   "looking at https://docs.celeryq.dev/en/stable/",
+   "  found sphinx docs at https://docs.celeryq.dev/en/stable/ (github.com/celery/celery names this site)"
+  ]
+ },
+ {
+  "package": "redis",
+  "found": "sphinx",
+  "root": "https://redis.readthedocs.io/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://redis.readthedocs.io/en/stable/"
+   }
+  ],
+  "verified": "they link to github.com/redis/redis-py",
+  "said": [
+   "looking at https://redis.readthedocs.io/en/latest/",
+   "  found sphinx docs at https://redis.readthedocs.io/en/latest/ (they link to github.com/redis/redis-py)"
+  ]
+ },
+ {
+  "package": "boto3",
+  "found": "sphinx",
+  "root": "https://docs.aws.amazon.com/boto3/latest/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://docs.aws.amazon.com/boto3/latest/"
+   }
+  ],
+  "verified": "they link to github.com/boto/boto3",
+  "said": [
+   "looking at https://docs.aws.amazon.com/boto3/latest/",
+   "  found sphinx docs at https://docs.aws.amazon.com/boto3/latest/ (they link to github.com/boto/boto3)"
+  ]
+ },
+ {
+  "package": "sphinx",
+  "found": "sphinx",
+  "root": "https://www.sphinx-doc.org/en/master/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://www.sphinx-doc.org/en/master/"
+   }
+  ],
+  "verified": "they link to github.com/sphinx-doc/sphinx",
+  "said": [
+   "looking at https://www.sphinx-doc.org/",
+   "  found sphinx docs at https://www.sphinx-doc.org/en/master/ (they link to github.com/sphinx-doc/sphinx)"
+  ]
+ },
+ {
+  "package": "mkdocs",
+  "found": "sphinx",
+  "root": "https://www.mkdocs.org/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://www.mkdocs.org/"
+   },
+   {
+    "kind": "website",
+    "start": "https://www.mkdocs.org/"
+   }
+  ],
+  "verified": "they link to github.com/mkdocs/mkdocs",
+  "said": [
+   "looking at https://www.mkdocs.org/",
+   "  found sphinx docs at https://www.mkdocs.org/ (they link to github.com/mkdocs/mkdocs)"
+  ]
+ },
+ {
+  "package": "black",
+  "found": "sphinx",
+  "root": "https://black.readthedocs.io/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://black.readthedocs.io/en/stable/"
+   }
+  ],
+  "verified": "they link to github.com/psf/black",
+  "said": [
+   "looking at https://black.readthedocs.io/",
+   "  found sphinx docs at https://black.readthedocs.io/en/stable/ (they link to github.com/psf/black)"
+  ]
+ },
+ {
+  "package": "ruff",
+  "found": "website",
+  "root": "https://docs.astral.sh/ruff/",
+  "parts": [
+   {
+    "kind": "website",
+    "start": "https://docs.astral.sh/ruff/"
+   }
+  ],
+  "verified": "they link to github.com/astral-sh/ruff",
+  "said": [
+   "  found website docs at https://docs.astral.sh/ruff/ (they link to github.com/astral-sh/ruff)",
+   "  https://docs.astral.sh/ruff/: 1,007 pages; reading 1,007. To choose its sections: search add ruff, in a terminal",
+   "  1,007 pages listed by the site (search index, llms.txt)"
+  ]
+ },
+ {
+  "package": "mypy",
+  "found": "sphinx",
+  "root": "https://mypy.readthedocs.io/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://mypy.readthedocs.io/en/stable/"
+   }
+  ],
+  "verified": "they link to github.com/python/mypy",
+  "said": [
+   "looking at https://mypy.readthedocs.io/en/stable/index.html",
+   "  found sphinx docs at https://mypy.readthedocs.io/en/stable/ (they link to github.com/python/mypy)"
+  ]
+ },
+ {
+  "package": "attrs",
+  "found": "sphinx",
+  "root": "https://www.attrs.org/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://www.attrs.org/en/stable/"
+   }
+  ],
+  "verified": "they link to github.com/python-attrs/attrs",
+  "said": [
+   "looking at https://www.attrs.org/",
+   "  found sphinx docs at https://www.attrs.org/en/stable/ (they link to github.com/python-attrs/attrs)"
+  ]
+ },
+ {
+  "package": "pyarrow",
+  "found": "sphinx",
+  "root": "https://arrow.apache.org/docs/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://arrow.apache.org/docs/"
+   }
+  ],
+  "verified": "they link to github.com/apache/arrow",
+  "said": [
+   "looking at https://arrow.apache.org/docs/python",
+   "  found sphinx docs at https://arrow.apache.org/docs/ (they link to github.com/apache/arrow)",
+   "  Note: these docs are of version 25.0.1; PyPI's newest release is 26.0.0, and no docs of 26.0.0 were found next to them"
+  ]
+ },
+ {
+  "package": "dask",
+  "found": "sphinx",
+  "root": "https://docs.dask.org/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://docs.dask.org/en/stable/"
+   },
+   {
+    "kind": "sphinx",
+    "url": "https://examples.dask.org/"
+   }
+  ],
+  "verified": "github.com/dask/dask names this site",
+  "said": [
+   "  looking at https://docs.dask.org/en/stable/",
+   "  found sphinx docs at https://docs.dask.org/en/stable/ (github.com/dask/dask names this site)",
+   "  dask: its docs link an official guide, \"Examples\" (https://examples.dask.org/, github.com/dask/dask names this site): read with them"
+  ]
+ },
+ {
+  "package": "xarray",
+  "found": "sphinx",
+  "root": "https://docs.xarray.dev/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://docs.xarray.dev/en/stable/"
+   },
+   {
+    "kind": "sphinx",
+    "url": "https://tutorial.xarray.dev/"
+   }
+  ],
+  "verified": "they link to github.com/pydata/xarray",
+  "said": [
+   "looking at https://docs.xarray.dev",
+   "  found sphinx docs at https://docs.xarray.dev/en/stable/ (they link to github.com/pydata/xarray)",
+   "  xarray: its docs link an official guide, \"Tutorial\" (https://tutorial.xarray.dev/, github.com/pydata/xarray names this site): read with them"
+  ]
+ },
+ {
+  "package": "networkx",
+  "found": "sphinx",
+  "root": "https://networkx.org/documentation/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://networkx.org/documentation/stable/"
+   },
+   {
+    "kind": "sphinx",
+    "url": "https://networkx.org/nx-guides/"
+   }
+  ],
+  "verified": "they link to github.com/networkx/networkx",
+  "said": [
+   "looking at https://networkx.org/documentation/stable/",
+   "  found sphinx docs at https://networkx.org/documentation/stable/ (they link to github.com/networkx/networkx)",
+   "  networkx: its docs link an official guide, \"Guides\" (https://networkx.org/nx-guides/, on the docs' own site): read with them"
+  ]
+ },
+ {
+  "package": "sympy",
+  "found": "sphinx",
+  "root": "https://docs.sympy.org/latest/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://docs.sympy.org/latest/"
+   }
+  ],
+  "verified": "they link to github.com/sympy/sympy",
+  "said": [
+   "  looking at https://sympy.org/",
+   "  looking at https://docs.sympy.org",
+   "  found sphinx docs at https://docs.sympy.org/latest/ (they link to github.com/sympy/sympy)"
+  ]
+ },
+ {
+  "package": "statsmodels",
+  "found": "sphinx",
+  "root": "https://www.statsmodels.org/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://www.statsmodels.org/stable/"
+   }
+  ],
+  "verified": "they link to github.com/statsmodels/statsmodels",
+  "said": [
+   "looking at https://www.statsmodels.org/stable/index.html",
+   "  found sphinx docs at https://www.statsmodels.org/stable/ (they link to github.com/statsmodels/statsmodels)"
+  ]
+ },
+ {
+  "package": "plotly",
+  "found": "website",
+  "root": "https://plotly.com/python/",
+  "parts": [
+   {
+    "kind": "website",
+    "start": "https://plotly.com/python/"
+   }
+  ],
+  "verified": "they link to github.com/plotly/plotly.py",
+  "said": [
+   "looking at https://plotly.com/python/",
+   "  found website docs at https://plotly.com/python/ (they link to github.com/plotly/plotly.py)",
+   "  250 pages listed by the site (llms.txt, sitemap)"
+  ]
+ },
+ {
+  "package": "bokeh",
+  "found": "sphinx",
+  "root": "https://docs.bokeh.org/en/latest/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://docs.bokeh.org/en/latest/"
+   }
+  ],
+  "verified": "they link to github.com/bokeh/bokeh",
+  "said": [
+   "looking at https://docs.bokeh.org",
+   "  found sphinx docs at https://docs.bokeh.org/en/latest/ (they link to github.com/bokeh/bokeh)"
+  ]
+ },
+ {
+  "package": "streamlit",
+  "found": "website",
+  "root": "https://docs.streamlit.io/",
+  "parts": [
+   {
+    "kind": "website",
+    "start": "https://docs.streamlit.io/"
+   }
+  ],
+  "verified": "github.com/streamlit/streamlit names this site",
+  "said": [
+   "looking at https://docs.streamlit.io/",
+   "  found website docs at https://docs.streamlit.io/ (github.com/streamlit/streamlit names this site)",
+   "  359 pages listed by the site (llms.txt)"
+  ]
+ },
+ {
+  "package": "gradio",
+  "found": "readme",
+  "root": "https://pypi.org/project/gradio/6.30.0/",
+  "parts": [
+   {
+    "kind": "readme",
+    "url": "https://pypi.org/project/gradio/6.30.0/"
+   }
+  ],
+  "verified": "PyPI's record of the package",
+  "said": [
+   "  looking at https://www.gradio.app/docs/",
+   "  looking at https://gradio.readthedocs.io/ (a guess)",
+   "  gradio names no docs site (PyPI, its repository): its README is its documentation"
+  ]
+ },
+ {
+  "package": "opencv-python",
+  "found": "readme",
+  "root": "https://pypi.org/project/opencv-python/5.0.0.93/",
+  "parts": [
+   {
+    "kind": "readme",
+    "url": "https://pypi.org/project/opencv-python/5.0.0.93/"
+   }
+  ],
+  "verified": "PyPI's record of the package",
+  "seconds": 1,
+  "said": [
+   "looking at https://pypi.org/project/opencv-python/",
+   "  looking at https://docs.opencv.org/master/",
+   "  looking at https://opencv-python.readthedocs.io/ (a guess)",
+   "  docs.opencv.org: the site shows a bot check (Cloudflare) that only a person in a browser can pass; docsearch does not try to get around it",
+   "  docs.opencv.org: the site shows a bot check (Cloudflare) that only a person in a browser can pass; docsearch does not try to get around it",
+   "  opencv-python names no docs site (PyPI, its repository): its README is its documentation"
+  ]
+ },
+ {
+  "package": "pillow",
+  "found": "sphinx",
+  "root": "https://pillow.readthedocs.io/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://pillow.readthedocs.io/en/stable/"
+   }
+  ],
+  "verified": "they link to github.com/python-pillow/Pillow",
+  "said": [
+   "looking at https://pillow.readthedocs.io",
+   "  found sphinx docs at https://pillow.readthedocs.io/en/stable/ (they link to github.com/python-pillow/Pillow)"
+  ]
+ },
+ {
+  "package": "beautifulsoup4",
+  "found": "sphinx",
+  "root": "https://www.crummy.com/software/BeautifulSoup/bs4/docs/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://www.crummy.com/software/BeautifulSoup/bs4/docs/"
+   }
+  ],
+  "verified": "you said yes",
+  "said": [
+   "  found sphinx docs at https://www.crummy.com/software/BeautifulSoup/bs4/docs/",
+   "  They could not be checked against the source: PyPI names no source repository for 'beautifulsoup4'.",
+   "  PyPI describes 'beautifulsoup4' as: Screen-scraping library"
+  ]
+ },
+ {
+  "package": "scrapy",
+  "found": "sphinx",
+  "root": "https://docs.scrapy.org/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://docs.scrapy.org/en/stable/"
+   },
+   {
+    "kind": "sphinx",
+    "url": "https://docs.scrapy.org/en/latest/"
+   }
+  ],
+  "verified": "they link to github.com/scrapy/scrapy",
+  "said": [
+   "looking at https://docs.scrapy.org/",
+   "  found sphinx docs at https://docs.scrapy.org/en/latest/ (they link to github.com/scrapy/scrapy)",
+   "  scrapy: its PyPI record names more official docs, \"Scrapy 2.19 documentation &mdash; Scrapy 2.19.0 documentation\" (https://docs.scrapy.org/en/latest/, on the docs' own site): read with them"
+  ]
+ },
+ {
+  "package": "selenium",
+  "found": "sphinx",
+  "root": "https://www.selenium.dev/selenium/docs/api/py/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://www.selenium.dev/selenium/docs/api/py/"
+   }
+  ],
+  "verified": "PyPI's description of the package links to them",
+  "seconds": 4,
+  "said": [
+   "looking at https://www.selenium.dev",
+   "  looking at https://selenium.dev/selenium/docs/api/py",
+   "  found sphinx docs at https://www.selenium.dev/selenium/docs/api/py/ (PyPI's description of the package links to them)"
+  ]
+ },
+ {
+  "package": "playwright",
+  "found": "website",
+  "root": "https://playwright.dev/python/",
+  "parts": [
+   {
+    "kind": "website",
+    "start": "https://playwright.dev/python/"
+   }
+  ],
+  "verified": "github.com/microsoft/playwright-python names this site",
+  "said": [
+   "looking at https://playwright.dev/python/",
+   "  found website docs at https://playwright.dev/python/ (github.com/microsoft/playwright-python names this site)",
+   "  193 pages listed by the site (sitemap)"
+  ]
+ },
+ {
+  "package": "tqdm",
+  "found": "website",
+  "root": "https://tqdm.github.io/",
+  "parts": [
+   {
+    "kind": "website",
+    "start": "https://tqdm.github.io/"
+   }
+  ],
+  "verified": "they link to github.com/tqdm/tqdm",
+  "said": [
+   "looking at https://tqdm.github.io",
+   "  found website docs at https://tqdm.github.io/ (they link to github.com/tqdm/tqdm)",
+   "  33 pages listed by the site (search index)"
+  ]
+ },
+ {
+  "package": "loguru",
+  "found": "sphinx",
+  "root": "https://loguru.readthedocs.io/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://loguru.readthedocs.io/en/stable/"
+   }
+  ],
+  "verified": "they link to github.com/Delgan/loguru",
+  "said": [
+   "looking at https://loguru.readthedocs.io/en/stable/index.html",
+   "  found sphinx docs at https://loguru.readthedocs.io/en/stable/ (they link to github.com/Delgan/loguru)"
+  ]
+ },
+ {
+  "package": "jinja2",
+  "found": "sphinx",
+  "root": "https://jinja.palletsprojects.com/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://jinja.palletsprojects.com/en/stable/"
+   }
+  ],
+  "verified": "they link to github.com/pallets/jinja",
+  "said": [
+   "looking at https://jinja.palletsprojects.com/",
+   "  found sphinx docs at https://jinja.palletsprojects.com/en/stable/ (they link to github.com/pallets/jinja)"
+  ]
+ },
+ {
+  "package": "werkzeug",
+  "found": "sphinx",
+  "root": "https://werkzeug.palletsprojects.com/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://werkzeug.palletsprojects.com/en/stable/"
+   }
+  ],
+  "verified": "they link to github.com/pallets/werkzeug",
+  "said": [
+   "looking at https://werkzeug.palletsprojects.com/",
+   "  found sphinx docs at https://werkzeug.palletsprojects.com/en/stable/ (they link to github.com/pallets/werkzeug)"
+  ]
+ },
+ {
+  "package": "uvicorn",
+  "found": "sphinx",
+  "root": "https://uvicorn.dev/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://uvicorn.dev/"
+   },
+   {
+    "kind": "website",
+    "start": "https://uvicorn.dev/"
+   }
+  ],
+  "verified": "they link to github.com/Kludex/uvicorn",
+  "said": [
+   "looking at https://uvicorn.dev",
+   "  found sphinx docs at https://uvicorn.dev/ (they link to github.com/Kludex/uvicorn)"
+  ]
+ },
+ {
+  "package": "starlette",
+  "found": "sphinx",
+  "root": "https://starlette.dev/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://starlette.dev/"
+   },
+   {
+    "kind": "website",
+    "start": "https://starlette.dev/"
+   }
+  ],
+  "verified": "they link to github.com/Kludex/starlette",
+  "said": [
+   "looking at https://starlette.dev/",
+   "  found sphinx docs at https://starlette.dev/ (they link to github.com/Kludex/starlette)"
+  ]
+ },
+ {
+  "package": "sqlmodel",
+  "found": "website",
+  "root": "https://sqlmodel.tiangolo.com/",
+  "parts": [
+   {
+    "kind": "website",
+    "start": "https://sqlmodel.tiangolo.com/"
+   }
+  ],
+  "verified": "they link to github.com/fastapi/sqlmodel",
+  "said": [
+   "looking at https://sqlmodel.tiangolo.com",
+   "  found website docs at https://sqlmodel.tiangolo.com/ (they link to github.com/fastapi/sqlmodel)",
+   "  64 pages listed by the site (search index)"
+  ]
+ },
+ {
+  "package": "alembic",
+  "found": "sphinx",
+  "root": "https://alembic.sqlalchemy.org/en/latest/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://alembic.sqlalchemy.org/en/latest/"
+   }
+  ],
+  "verified": "they link to github.com/sqlalchemy/alembic",
+  "said": [
+   "looking at https://alembic.sqlalchemy.org/en/latest/",
+   "  found sphinx docs at https://alembic.sqlalchemy.org/en/latest/ (they link to github.com/sqlalchemy/alembic)"
+  ]
+ },
+ {
+  "package": "marshmallow",
+  "found": "sphinx",
+  "root": "https://marshmallow.readthedocs.io/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://marshmallow.readthedocs.io/en/stable/"
+   }
+  ],
+  "verified": "they link to github.com/marshmallow-code/marshmallow",
+  "said": [
+   "looking at https://marshmallow.readthedocs.io/en/latest/changelog.html",
+   "  found sphinx docs at https://marshmallow.readthedocs.io/en/latest/ (they link to github.com/marshmallow-code/marshmallow)"
+  ]
+ },
+ {
+  "package": "pymongo",
+  "found": "sphinx",
+  "root": "https://www.mongodb.com/docs/languages/python/pymongo-driver/current/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://www.mongodb.com/docs/languages/python/pymongo-driver/current/"
+   },
+   {
+    "kind": "website",
+    "start": "https://www.mongodb.com/solutions/use-cases/"
+   },
+   {
+    "kind": "website",
+    "start": "https://www.mongodb.com/solutions/"
+   }
+  ],
+  "verified": "github.com/mongodb/mongo-python-driver names this site",
+  "said": [
+   "  found sphinx docs at https://www.mongodb.com/docs/languages/python/pymongo-driver/current/ (github.com/mongodb/mongo-python-driver names this site)",
+   "  pymongo: its docs link an official guide, \"Learn more arrow-right\" (https://www.mongodb.com/solutions/use-cases/, on the docs' own site): read with them",
+   "  pymongo: its docs link an official guide, \"Learn more arrow-right\" (https://www.mongodb.com/solutions/, on the docs' own site): read with them"
+  ]
+ },
+ {
+  "package": "psycopg",
+  "found": "sphinx",
+  "root": "https://www.psycopg.org/psycopg3/docs/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://www.psycopg.org/psycopg3/docs/"
+   }
+  ],
+  "verified": "github.com/psycopg/psycopg names this site",
+  "said": [
+   "looking at https://psycopg.org/psycopg3/docs/",
+   "  found sphinx docs at https://www.psycopg.org/psycopg3/docs/ (github.com/psycopg/psycopg names this site)"
+  ]
+ },
+ {
+  "package": "numba",
+  "found": "sphinx",
+  "root": "https://numba.readthedocs.io/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://numba.readthedocs.io/en/stable/"
+   }
+  ],
+  "verified": "https://numba.pydata.org, the project's home page, links to them",
+  "said": [
+   "looking at https://numba.pydata.org",
+   "  looking at https://numba.readthedocs.io/en/stable/user/5minguide.html",
+   "  found sphinx docs at https://numba.readthedocs.io/en/stable/ (https://numba.pydata.org, the project's home page, links to them)"
+  ]
+ },
+ {
+  "package": "cython",
+  "found": "sphinx",
+  "root": "https://cython.readthedocs.io/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://cython.readthedocs.io/en/stable/"
+   }
+  ],
+  "verified": "they link to github.com/cython/cython",
+  "said": [
+   "looking at https://cython.readthedocs.io/",
+   "  found sphinx docs at https://cython.readthedocs.io/en/latest/ (they link to github.com/cython/cython)"
+  ]
+ },
+ {
+  "package": "onnx",
+  "found": "sphinx",
+  "root": "https://onnx.ai/onnx/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://onnx.ai/onnx/"
+   }
+  ],
+  "verified": "github.com/onnx/onnx names this site",
+  "said": [
+   "  looking at https://onnx.readthedocs.io/ (a guess)",
+   "  looking at https://onnx.ai/onnx/ (a guess)",
+   "  found sphinx docs at https://onnx.ai/onnx/ (github.com/onnx/onnx names this site)"
+  ]
+ },
+ {
+  "package": "lightgbm",
+  "found": "sphinx",
+  "root": "https://lightgbm.readthedocs.io/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://lightgbm.readthedocs.io/en/stable/"
+   }
+  ],
+  "verified": "github.com/lightgbm-org/LightGBM names this site",
+  "said": [
+   "looking at https://lightgbm.readthedocs.io/en/latest/",
+   "  found sphinx docs at https://lightgbm.readthedocs.io/en/latest/ (github.com/lightgbm-org/LightGBM names this site)"
+  ]
+ },
+ {
+  "package": "xgboost",
+  "found": "sphinx",
+  "root": "https://xgboost.readthedocs.io/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://xgboost.readthedocs.io/en/stable/"
+   }
+  ],
+  "verified": "they link to github.com/dmlc/xgboost",
+  "said": [
+   "looking at https://xgboost.readthedocs.io/en/stable/",
+   "  found sphinx docs at https://xgboost.readthedocs.io/en/stable/ (they link to github.com/dmlc/xgboost)"
+  ]
+ },
+ {
+  "package": "catboost",
+  "found": "website",
+  "root": "https://catboost.ai/docs/en/docs/",
+  "parts": [
+   {
+    "kind": "website",
+    "start": "https://catboost.ai/docs/en/docs/"
+   }
+  ],
+  "verified": "github.com/catboost/catboost names this site",
+  "said": [
+   "looking at https://catboost.ai/docs/",
+   "  found website docs at https://catboost.ai/docs/en/docs/ (github.com/catboost/catboost names this site)"
+  ]
+ },
+ {
+  "package": "keras",
+  "found": "website",
+  "root": "https://keras.io/",
+  "parts": [
+   {
+    "kind": "website",
+    "start": "https://keras.io/"
+   }
+  ],
+  "verified": "they link to github.com/keras-team/keras",
+  "said": [
+   "  looking at https://keras.io/api/",
+   "  found website docs at https://keras.io/ (they link to github.com/keras-team/keras)",
+   "  98 pages listed by the site (search index)"
+  ]
+ },
+ {
+  "package": "spacy",
+  "found": "website",
+  "root": "https://spacy.io/",
+  "parts": [
+   {
+    "kind": "website",
+    "start": "https://spacy.io/"
+   }
+  ],
+  "verified": "they link to github.com/explosion/spaCy",
+  "seconds": 3,
+  "said": [
+   "looking at https://spacy.io",
+   "  found website docs at https://spacy.io/ (they link to github.com/explosion/spaCy)",
+   "  295 pages listed by the site (sitemap)"
+  ]
+ },
+ {
+  "package": "nltk",
+  "found": "sphinx",
+  "root": "https://www.nltk.org/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://www.nltk.org/"
+   }
+  ],
+  "verified": "they link to github.com/nltk/nltk",
+  "said": [
+   "looking at https://www.nltk.org/",
+   "  found sphinx docs at https://www.nltk.org/ (they link to github.com/nltk/nltk)"
+  ]
+ },
+ {
+  "package": "gensim",
+  "found": "sphinx",
+  "root": "https://radimrehurek.com/gensim/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://radimrehurek.com/gensim/"
+   }
+  ],
+  "verified": "they link to github.com/RaRe-Technologies/gensim",
+  "said": [
+   "looking at https://pythonhosted.org/gensim/",
+   "  looking at https://radimrehurek.com/gensim",
+   "  found sphinx docs at https://radimrehurek.com/gensim/ (they link to github.com/RaRe-Technologies/gensim)"
+  ]
+ },
+ {
+  "package": "datasets",
+  "found": "website",
+  "root": "https://huggingface.co/docs/datasets/main/en/",
+  "parts": [
+   {
+    "kind": "hf-archive",
+    "url": "https://huggingface.co/docs/datasets/main/en/"
+   },
+   {
+    "kind": "website",
+    "start": "https://huggingface.co/learn/"
+   }
+  ],
+  "verified": "they link to github.com/huggingface/datasets",
+  "said": [
+   "  found website docs at https://huggingface.co/docs/datasets/ (they link to github.com/huggingface/datasets)",
+   "  datasets: Hugging Face's own copy of its docs (datasets main): one download, no page asked for",
+   "  datasets: its docs link an official guide, \"Learn\" (https://huggingface.co/learn/, on the docs' own site): read with them"
+  ]
+ },
+ {
+  "package": "accelerate",
+  "found": "website",
+  "root": "https://huggingface.co/docs/accelerate/v1.15.0/en/",
+  "parts": [
+   {
+    "kind": "hf-archive",
+    "url": "https://huggingface.co/docs/accelerate/v1.15.0/en/"
+   },
+   {
+    "kind": "website",
+    "start": "https://huggingface.co/learn/"
+   }
+  ],
+  "verified": "they link to github.com/huggingface/accelerate",
+  "said": [
+   "  found website docs at https://huggingface.co/docs/accelerate/ (they link to github.com/huggingface/accelerate)",
+   "  accelerate: Hugging Face's own copy of its docs (accelerate v1.15.0): one download, no page asked for",
+   "  accelerate: its docs link an official guide, \"Learn\" (https://huggingface.co/learn/, on the docs' own site): read with them"
+  ]
+ },
+ {
+  "package": "diffusers",
+  "found": "website",
+  "root": "https://huggingface.co/docs/diffusers/v0.41.0/en/",
+  "parts": [
+   {
+    "kind": "hf-archive",
+    "url": "https://huggingface.co/docs/diffusers/v0.41.0/en/"
+   },
+   {
+    "kind": "website",
+    "start": "https://huggingface.co/learn/"
+   }
+  ],
+  "verified": "they link to github.com/huggingface/diffusers",
+  "said": [
+   "  found website docs at https://huggingface.co/docs/diffusers/ (they link to github.com/huggingface/diffusers)",
+   "  diffusers: Hugging Face's own copy of its docs (diffusers v0.41.0): one download, no page asked for",
+   "  diffusers: its docs link an official guide, \"Learn\" (https://huggingface.co/learn/, on the docs' own site): read with them"
+  ]
+ },
+ {
+  "package": "vllm",
+  "found": "sphinx",
+  "root": "https://docs.vllm.ai/en/stable/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://docs.vllm.ai/en/stable/"
+   },
+   {
+    "kind": "website",
+    "start": "https://docs.vllm.ai/en/stable/"
+   },
+   {
+    "kind": "sphinx",
+    "url": "https://docs.vllm.ai/en/latest/"
+   }
+  ],
+  "verified": "they link to github.com/vllm-project/vllm",
+  "said": [
+   "looking at https://docs.vllm.ai/en/latest/",
+   "  found sphinx docs at https://docs.vllm.ai/en/latest/ (they link to github.com/vllm-project/vllm)",
+   "  vllm: its PyPI record names more official docs, \"vLLM\" (https://docs.vllm.ai/en/latest/, on the docs' own site): read with them"
+  ]
+ },
+ {
+  "package": "triton",
+  "found": "sphinx",
+  "root": "https://triton-lang.org/main/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://triton-lang.org/main/"
+   }
+  ],
+  "verified": "they link to github.com/triton-lang/triton",
+  "said": [
+   "looking at https://triton-lang.org/",
+   "  found sphinx docs at https://triton-lang.org/main/ (they link to github.com/triton-lang/triton)"
+  ]
+ },
+ {
+  "package": "litellm",
+  "found": "website",
+  "root": "https://docs.litellm.ai/",
+  "parts": [
+   {
+    "kind": "website",
+    "start": "https://docs.litellm.ai/"
+   }
+  ],
+  "verified": "github.com/BerriAI/litellm names this site",
+  "said": [
+   "  found website docs at https://docs.litellm.ai/ (github.com/BerriAI/litellm names this site)",
+   "  https://docs.litellm.ai/: 919 pages; reading 919. To choose its sections: search add litellm, in a terminal",
+   "  919 pages listed by the site (llms.txt), read as Markdown"
+  ]
+ },
+ {
+  "package": "dspy-ai",
+  "found": "sphinx",
+  "root": "https://dspy.ai/current/",
+  "parts": [
+   {
+    "kind": "sphinx",
+    "url": "https://dspy.ai/current/"
+   },
+   {
+    "kind": "website",
+    "start": "https://dspy.ai/current/"
+   }
+  ],
+  "verified": "github.com/stanfordnlp/dspy names this site",
+  "said": [
+   "looking at https://dspy.ai",
+   "  found sphinx docs at https://dspy.ai/current/ (github.com/stanfordnlp/dspy names this site)"
+  ]
+ },
+ {
+  "package": "langgraph",
+  "found": "website",
+  "root": "https://reference.langchain.com/python/langgraph/",
+  "parts": [
+   {
+    "kind": "website",
+    "start": "https://reference.langchain.com/python/langgraph/"
+   },
+   {
+    "kind": "website",
+    "start": "https://docs.langchain.com/oss/python/langgraph/"
+   }
+  ],
+  "verified": "they link to github.com/langchain-ai/langgraph",
+  "said": [
+   "  found website docs at https://reference.langchain.com/python/langgraph/ (they link to github.com/langchain-ai/langgraph)",
+   "  307 pages listed by the site (llms.txt, sitemap), read as Markdown",
+   "  langgraph: its PyPI record names more official docs, \"LangGraph overview\" (https://docs.langchain.com/oss/python/langgraph/, github.com/langchain-ai/langgraph names this site): read with them"
+  ]
+ }
+]

@@ -33,6 +33,7 @@ LANGUAGES = {"javascript", "typescript", "js", "ts", "node", "nodejs", "node.js"
 TEXT = 300                    # characters of text a page has in its HTML, when its text is there
 SAMPLE = 3                    # pages read to see whether the text is in the HTML
 SITEMAP_FILES = 30            # sitemap files read at most (a host's index can list hundreds)
+LIMITED: set[str] = set()     # hosts that said "too many requests" during a survey: asked no more
 
 
 @dataclass
@@ -159,10 +160,33 @@ def text_in(html: str) -> int:
 
 
 def get(url: str, timeout: float = 15) -> tuple[bytes, str] | None:
-    try:
-        return cli.http_get(url, timeout=timeout)
-    except Exception:  # noqa: BLE001 - a list the site does not have
+    """A file the survey asks for, or None (a list the site does not have). A host that says it
+    is asked too often (huggingface.co) is asked nothing more in this survey: what it listed so
+    far is kept, and the place is not taken as unreachable."""
+    host = urllib.parse.urlparse(url).netloc
+    if host in LIMITED:
         return None
+    try:
+        return cli.http_get_once(url, timeout=timeout)
+    except cli.Failed as e:
+        if e.kind == "rate-limited":
+            LIMITED.add(host)
+        elif e.kind in cli.TRANSIENT:                # (a dropped answer: once more, the usual way)
+            try:
+                return cli.http_get(url, timeout=timeout)
+            except Exception:  # noqa: BLE001
+                return None
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def fetched(url: str) -> tuple[bytes, str]:
+    """get, for the readers of lists (importers.read_llms, from_sitemap): an error for None."""
+    got = get(url)
+    if got is None:
+        raise cli.Failed("other", url, "not read")
+    return got
 
 
 def search_index(root: str) -> tuple[list[str], dict[str, list[str]]]:
@@ -198,6 +222,7 @@ def survey(address: str, name: str = "", root: str | None = None) -> Site | None
     roots, page, said = cli.probe_roots(address)
     if not page:
         return None
+    LIMITED.clear()
     landing = cli.PAGES_SEEN.get(address, (address,))[0] or address
     root = root or (roots[0] if said and roots else folder_of(landing))
     links = page_links(page, landing)
@@ -210,11 +235,11 @@ def survey(address: str, name: str = "", root: str | None = None) -> Site | None
     site = Site(address, landing, root)
     site.lists["links"] = [u for u in links if u.startswith(root) and u != root]
     site.outline.update({u: c for u, c in nav_outline(page, landing).items() if c and u.startswith(root)})
-    hit = cli.index_in([root], cli.SITE_INDEXES[:1])
-    if hit is not None:                              # Sphinx: its inventory names every page
-        site.inventory = hit[2]
+    got = get(root + "objects.inv")
+    if got and cli.docs_index("sphinx", got[0]):     # Sphinx: its inventory names every page
+        site.inventory = got[0]
         try:
-            objs = cli.parse_objects_inv(hit[2])[2]
+            objs = cli.parse_objects_inv(got[0])[2]
         except ValueError:
             objs = []
         docs = [o for o in objs if o["role"] == "doc"] or objs
@@ -229,19 +254,24 @@ def survey(address: str, name: str = "", root: str | None = None) -> Site | None
     llms = next((x for x in dict.fromkeys([root + "llms.txt", origin + "llms.txt"])
                  if (got := get(x)) and b"](" in got[0][:200_000] and b"<html" not in got[0][:500].lower()), None)
     if llms:
-        listed, crumbs, md_of = importers.read_llms(llms, [root], 50_000)
+        listed, crumbs, md_of = importers.read_llms(llms, [root], 50_000, fetch=fetched)
         site.lists["llms.txt"] = listed
         site.md_of.update(md_of)
         for p, c in crumbs.items():                  # (llms.txt's sections are the site's own)
             if c:
                 site.outline[p] = c
-    rp = importers.robots(root)
-    maps = list(dict.fromkeys((rp.site_maps() or []) + [root + "sitemap.xml", origin + "sitemap.xml"]))
-    listed = []
-    for sm in maps:
-        listed += [x for x in importers.from_sitemap(sm, [root], 50_000, SITEMAP_FILES) if x not in listed]
-    if listed:
-        site.lists["sitemap"] = listed
+    # The sitemaps, the costliest (a host's can be hundreds of files), only when the site's own
+    # list was not found, and the site has not said it is asked too often.
+    own = max((len(site.lists.get(k) or []) for k in ("search index", "llms.txt")), default=0)
+    if own < cli.MIN_LISTED and u.netloc not in LIMITED:
+        rp = importers.robots(root)
+        maps = list(dict.fromkeys((rp.site_maps() or []) + [root + "sitemap.xml", origin + "sitemap.xml"]))
+        listed = []
+        for sm in maps:
+            listed += [x for x in importers.from_sitemap(sm, [root], 50_000, SITEMAP_FILES, fetch=fetched)
+                       if x not in listed]
+        if listed:
+            site.lists["sitemap"] = listed
     from docsearch.importers import variants
     keep = {seg.lower() for seg in urllib.parse.urlparse(landing).path.split("/") if seg}
     for kind in ("sitemap", "llms.txt"):             # other versions' and languages' copies of pages

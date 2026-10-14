@@ -64,7 +64,7 @@ def official(url: str, root: str, repo: str | None) -> str:
     return cli.checked(url, "", repo) if repo else ""
 
 
-def part_of(guide: dict, root: str, k: int) -> dict | None:
+def part_of(guide: dict, root: str, k: int, name: str = "") -> dict | None:
     """How to read a guide, as a part of the docs (cli.build_known): its inventory's pages, or
     the pages its other lists name (site.py: sitemap, llms.txt); its own pages only (not the
     docs again, where its site holds them). None when nothing says which pages are the guide's."""
@@ -92,7 +92,9 @@ def part_of(guide: dict, root: str, k: int) -> dict | None:
         return None                                   # own list of pages, or a page that says what built it
                                                       # (or where its docs begin, as Sphinx's and MkDocs' do);
                                                       # not a site with only a sitemap (mongodb.com/solutions/)
-    pages, _ = sites.choose(surveyed, "", "default") if surveyed is not None else ([], None)
+    pages, said = sites.choose(surveyed, name, cli.site_sections(name, groot)) if surveyed is not None else ([], None)
+    if said is not None:                              # (its sections, asked once and kept, as the docs')
+        cli.SECTIONS_SAID.setdefault(name, {})[groot] = said
     pages = [p for p in pages if not p.startswith(root)]          # (its site holds the docs: not them again)
     if pages:                                         # its pages, as its lists name them (site.py)
         part.update(sites.reading(surveyed, pages))
@@ -185,7 +187,7 @@ def plan_with(plan: dict, name: str, args, newest: bool, pypi: bool = False) -> 
                 say(f"  {guide['url']}: not taken as a guide of {name}: it is not on the docs' site, and it "
                     f"does not link to {plan.get('repo') or 'their repository'}")
             continue
-        part = part_of(guide, root, sum(1 for p in parts if p.get("guide")))
+        part = part_of(guide, root, sum(1 for p in parts if p.get("guide")), name)
         if part is None:
             if guide.get("asked"):
                 say(f"  {guide['url']}: not a docs site (no objects.inv, search index or llms.txt, and its page "
@@ -259,3 +261,5 @@ def add_to_copy(sid: str, args) -> None:
         organize.save_vectors(sid, vectors, kept, keep)    # (the guide's rows made; the docs' kept)
     elif vectors is not None:
         cli.make_vectors(sid, name)
+    if name in cli.SECTIONS_SAID:                    # the sections you chose of a guide: asked once
+        cli.remember_sections(name, cli.SECTIONS_SAID.pop(name))

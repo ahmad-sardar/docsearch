@@ -102,7 +102,7 @@ top 5, missing.
   - polars' guide is 86 pages;
   - numpy's tutorials and langchain's guide are still found.
 
-### T7 Reading: complete lists, sections everywhere
+### T7 Reading: complete lists, sections everywhere (done: `eval/results-finding.md`)
 - **Change:**
   - expected pages only from complete lists;
   - the sections question for every part, once per site, kept per site in packages.toml;

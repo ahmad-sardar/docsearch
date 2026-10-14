@@ -57,3 +57,16 @@ another version, and once. Its pages come from its own list.
 | transformers, datasets, accelerate, diffusers | + "Learn" → huggingface.co/learn/ (courses) | none (no docs site there) |
 | numpy | Learn → numpy.org/numpy-tutorials/ | the same |
 | langchain | docs.langchain.com (from PyPI) | the same |
+
+## T7: complete lists, sections everywhere (2026-10-14)
+
+- **Pages expected only from a complete list**: a Sphinx inventory, llms.txt, a sitemap, or a
+  search index of MkDocs or Zensical (the page says so). keras.io's search.json lists 78 of its
+  pages: now not a count, so no shortfall is claimed (it was "98 expected", 1,355 read).
+- **The sections question for every part, kept per site**: a guide's site is asked as the docs'
+  are (in a terminal, when it has pages of other languages or many sections), and the answer is
+  kept in packages.toml by the site's address, next to the docs' own:
+  `langchain = { version = "latest", sections = { "https://docs.langchain.com/" = "default" } }`.
+- In a real terminal (a pty, `search add langchain`): docs.langchain.com's sections were asked
+  and the answer kept; planned again with it saved, nothing was asked. Without a terminal it
+  reads all but the other languages' pages and says how to choose (tests/crawl.py).

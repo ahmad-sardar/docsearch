@@ -34,6 +34,7 @@ TEXT = 300                    # characters of text a page has in its HTML, when 
 SAMPLE = 3                    # pages read to see whether the text is in the HTML
 SITEMAP_FILES = 30            # sitemap files read at most (a host's index can list hundreds)
 LIMITED: set[str] = set()     # hosts that said "too many requests" during a survey: asked no more
+MKDOCS = re.compile(r"""<meta[^>]+name=["']generator["'][^>]+content=["'][^"']*(mkdocs|zensical)""", re.I)
 
 
 @dataclass
@@ -47,6 +48,7 @@ class Site:
     html_text: bool | None = None                 # a page's text is in its HTML (None: not seen)
     markdown: bool = False                        # its pages are there as Markdown too
     inventory: bytes | None = None
+    partial: set[str] = field(default_factory=set)   # lists that are not every page (keras.io's search.json)
 
     @property
     def pages(self) -> list[str]:
@@ -58,8 +60,10 @@ class Site:
 
     @property
     def expected(self) -> int:
-        """How many pages the docs have, as the fullest list says."""
-        return max((len(set(v)) for k, v in self.lists.items() if k != "links"), default=0)
+        """How many pages the docs have, as the fullest complete list says (0: none says): not
+        the first page's links, nor a search index that is not MkDocs' or Zensical's (keras.io's
+        lists 98 of its 1,355 pages)."""
+        return max((len(set(v)) for k, v in self.lists.items() if k != "links" and k not in self.partial), default=0)
 
     def sections(self, depth: int = 0) -> list[tuple[str, int]]:
         """The site's own top-level sections and their pages, at the shallowest depth where it
@@ -249,6 +253,8 @@ def survey(address: str, name: str = "", root: str | None = None) -> Site | None
     if pages:
         site.lists["search index"] = [u for u in pages if u.startswith(root)]
         site.outline.update({u: c for u, c in crumbs.items() if c})
+        if not (MKDOCS.search(page) or cli.ROOT_HINT.search(page)):
+            site.partial.add("search index")         # (a search.json of another making: some pages)
     u = urllib.parse.urlparse(root)
     origin = f"{u.scheme}://{u.netloc}/"
     llms = next((x for x in dict.fromkeys([root + "llms.txt", origin + "llms.txt"])
@@ -262,7 +268,7 @@ def survey(address: str, name: str = "", root: str | None = None) -> Site | None
                 site.outline[p] = c
     # The sitemaps, the costliest (a host's can be hundreds of files), only when the site's own
     # list was not found, and the site has not said it is asked too often.
-    own = max((len(site.lists.get(k) or []) for k in ("search index", "llms.txt")), default=0)
+    own = max((len(site.lists.get(k) or []) for k in ("search index", "llms.txt") if k not in site.partial), default=0)
     if own < cli.MIN_LISTED and u.netloc not in LIMITED:
         rp = importers.robots(root)
         maps = list(dict.fromkeys((rp.site_maps() or []) + [root + "sitemap.xml", origin + "sitemap.xml"]))

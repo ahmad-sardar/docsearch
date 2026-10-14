@@ -3240,10 +3240,9 @@ def web_docs(name: str, spec: str, want: str, override: str, args, check_copy: b
         surveyed = sites.survey(root)
         if surveyed is not None and surveyed.expected:
             root = surveyed.root
-            saved = config_values(name)
-            pages, said = sites.choose(surveyed, name, saved.get("sections") if isinstance(saved, dict) else None)
+            pages, said = sites.choose(surveyed, name, site_sections(name, surveyed.root, main=True))
             if said is not None:
-                SECTIONS_SAID[name] = said
+                SECTIONS_SAID.setdefault(name, {})[surveyed.root] = said
             read = sites.reading(surveyed, pages)
             say(f"  {len(pages):,} pages listed by the site ({', '.join(k for k in surveyed.lists if k != 'links')})"
                 + (", read as Markdown" if read.get("markdown") else ""))
@@ -3536,15 +3535,28 @@ def other_form(name: str, sid: str, spec: str, plan: dict, entries: list[Entry],
     return entries, meta
 
 
-SECTIONS_SAID: dict[str, object] = {}      # package -> the sections you chose this run (site.choose)
+SECTIONS_SAID: dict[str, dict] = {}        # package -> {site: the sections you chose} this run (site.choose)
 
 
-def remember_sections(name: str, sections) -> None:
-    """The sections of its docs site you chose to read, kept in packages.toml (sync asks no more)."""
+def site_sections(name: str, root: str, main: bool = False):
+    """The sections you chose to read of one docs site of a package (packages.toml `sections`:
+    one answer for its docs; or one per site, by its address: its docs and its guides)."""
+    saved = config_values(name)
+    got = saved.get("sections") if isinstance(saved, dict) else None
+    if isinstance(got, dict):
+        return got.get(root, got.get("") if main else None)
+    return got if main else None
+
+
+def remember_sections(name: str, sections: dict) -> None:
+    """The sections of its docs sites you chose to read ({site: answer}), kept in packages.toml
+    with the ones chosen before (sync asks no more)."""
     old = config_values(name)
     if old is None or isinstance(old, list):
         return
-    config_set(name, {**(old if isinstance(old, dict) else {"version": old}), "sections": sections})
+    had = old.get("sections") if isinstance(old, dict) else None
+    keep = had if isinstance(had, dict) else ({"": had} if had is not None else {})
+    config_set(name, {**(old if isinstance(old, dict) else {"version": old}), "sections": {**keep, **sections}})
 
 
 def known_site(url: str) -> str | None:
@@ -4664,7 +4676,8 @@ def config_values(name: str):
 
 def toml_value(v) -> str:
     if isinstance(v, dict):
-        return "{ " + ", ".join(f"{k} = {toml_value(x)}" for k, x in v.items()) + " }"
+        return "{ " + ", ".join(f"{k if re.fullmatch(r'[A-Za-z0-9_-]+', k) else json.dumps(k)} = {toml_value(x)}"
+                                for k, x in v.items()) + " }"           # (an address as a key: quoted)
     if isinstance(v, list):
         return toml_value(v[0]) if len(v) == 1 else "[" + ", ".join(toml_value(x) for x in v) + "]"
     if isinstance(v, bool):

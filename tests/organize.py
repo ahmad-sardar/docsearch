@@ -140,6 +140,7 @@ def main() -> None:
     sections_whole()
     one_per_thing()
     yours_first()
+    sections_kept()
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Site)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     site = f"http://127.0.0.1:{server.server_address[1]}"
@@ -410,6 +411,19 @@ def yours_first() -> None:
     check(yours == ["pyx", "pyz", "cpp"] and exact[0] == "cpp" and one == ["cpp"],
           f"every package from a Python project: its package, Python's others, then C++; a name asked "
           f"exactly first; one package as it was ({yours}, {exact}, {one})")
+
+
+def sections_kept() -> None:
+    """The sections chosen of each docs site of a package, kept per site in packages.toml with
+    what was chosen before (the docs' own, from before, kept), and read back for each site."""
+    cli.config_set("twosites", {"version": "latest", "sections": "default"})
+    cli.remember_sections("twosites", {"https://guide.example/": ["Build", "+"]})
+    kept = cli.config_values("twosites")
+    got = (cli.site_sections("twosites", "https://docs.example/", main=True),
+           cli.site_sections("twosites", "https://guide.example/"), cli.site_sections("twosites", "https://other.example/"))
+    check(kept["sections"] == {"": "default", "https://guide.example/": ["Build", "+"]}
+          and got == ("default", ["Build", "+"], None),
+          f"the sections chosen, per site: the docs' (from before) and the guide's, each read back ({kept}, {got})")
 
 
 def folding() -> None:

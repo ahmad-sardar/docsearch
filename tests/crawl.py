@@ -38,6 +38,7 @@ from __future__ import annotations
 import contextlib
 import http.server
 import io
+import json
 import os
 import re
 import signal
@@ -132,6 +133,10 @@ for _n in range(6):
     SITE[f"/pause/p{_n}.html"] = (200, page(f"Paused {_n}", ""))
     SITE[f"/quota/q{_n}.html"] = (200, page(f"Quota {_n}", ""))
 PAUSE = {"/pause/p2.html": 1}                     # answers "come back in an hour" this many times
+for _site, _gen in (("kidx", ""), ("mkd", "<meta name='generator' content='mkdocs-1.6.1, mkdocs-material-9.5'>")):
+    SITE[f"/{_site}/"] = (200, page(f"Index of {_site}", "", _gen))                  # a search index: of
+    SITE[f"/{_site}/search.json"] = (200, json.dumps({"docs": [{"location": f"p{n}/", "title": str(n)}   # MkDocs,
+                                                               for n in range(12)]}).encode())       # or not
 HEADERS: dict[str, dict[str, str]] = {}           # a folder's own headers (RateLimit)
 LATE.update({f"/far/p{n}.html": 0.5 for n in range(40)})
 LATE.update({f"/pics/i{n}-{k}.png": 0.2 for n in range(3) for k in range(10)})
@@ -335,6 +340,7 @@ def main() -> None:
     politeness(site)
     docs_links()
     hf_archive()
+    lists_and_sections(site)
     server.shutdown()
     print("all good")
 
@@ -379,6 +385,50 @@ def politeness(site: str) -> None:
     SITE["/robots.txt"] = before
     check(not [e for e in entries if e.kind == "page"] and "RFC 9309" in said.getvalue(),
           f"a robots.txt that cannot be read (500): nothing read, said ({len(entries)} entries)")
+
+
+def lists_and_sections(site: str) -> None:
+    """How many pages docs have: only from a complete list (a search index of MkDocs, not a
+    search.json of another making: keras.io's lists 98 of 1,355). The sections question: asked
+    in a terminal (a real one: a pty), the answer taken; without one, not asked."""
+    import os
+    import select
+    import subprocess
+    from docsearch import site as sites
+    cli.PACE.clear()
+    with contextlib.redirect_stderr(io.StringIO()):
+        other, mkdocs = sites.survey(f"{site}/kidx/"), sites.survey(f"{site}/mkd/")
+    check(other.expected == 0 and "search index" in other.partial and mkdocs.expected == 12,
+          f"pages expected only from a complete list: a MkDocs search index (12), not another one "
+          f"({other.expected}, {mkdocs.expected})")
+    code = (
+        "import json, sys\n"
+        "from docsearch import site as s\n"
+        "r = 'https://d.example/'\n"
+        "x = s.Site(r, r, r)\n"
+        "x.lists['llms.txt'] = [f'{r}{a}/{n}' for a in ('build', 'deploy', 'learn', 'js') for n in range(200)]\n"
+        "x.outline = {p: [p.split('/')[3].title()] for p in x.lists['llms.txt']}\n"
+        "pages, said = s.choose(x, 'demo', None)\n"
+        "print(json.dumps({'n': len(pages), 'said': said}), file=sys.stderr)\n")
+    master, slave = os.openpty()
+    child = subprocess.Popen([sys.executable, "-c", code], stdin=slave, stdout=slave, stderr=subprocess.PIPE)
+    os.close(slave)
+    shown = b""
+    deadline = time.monotonic() + 30                 # (the list on the terminal; the question itself,
+    while b"left out unless" not in shown and time.monotonic() < deadline:     # as input() asks, on stderr)
+        if select.select([master], [], [], 1)[0]:
+            shown += os.read(master, 4096)
+    os.write(master, b"1\r")                         # (Enter, as a terminal sends it)
+    _, err = child.communicate(timeout=60)
+    os.close(master)
+    got = json.loads(err.decode()[err.decode().rindex("{"):])     # (after the question, on stderr too)
+    piped = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+    unasked = json.loads(piped.stderr[piped.stderr.rindex("{"):])
+    check(b"in these sections" in shown and got["n"] == 200 and got["said"] == [got["said"][0]]
+          and unasked["said"] is None and unasked["n"] == 600 and "in a terminal" in piped.stderr,
+          f"the sections question: asked in a terminal, the answer taken; without one, not asked (all but "
+          f"the other languages' pages), said "
+          f"({got}, {unasked})")
 
 
 def docs_links() -> None:

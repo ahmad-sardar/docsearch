@@ -140,7 +140,7 @@ top 5, missing.
   - no "› Signature" results;
   - langchain has example entries.
 
-### T10 Replace a copy by coverage; your data
+### T10 Replace a copy by coverage; your data (done: `eval/results-usability.md`)
 - **Change:** a re-download replaces the copy you have when it read ≥ 90% of the listed pages
   with under 5% failed. The 70% rule applies only when coverage is unknown.
 - **Then, with you at your terminal:** `search add langchain` (sections question), then

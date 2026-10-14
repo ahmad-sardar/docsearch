@@ -143,6 +143,7 @@ def main() -> None:
     sections_kept()
     by_structure()
     markdown_api()
+    replaced_by_coverage()
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Site)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     site = f"http://127.0.0.1:{server.server_address[1]}"
@@ -491,6 +492,23 @@ def markdown_api() -> None:
           and keep[0] == -1,
           f"a Markdown API reference's page: an API entry named from its address; its parts folded; its "
           f"example an entry ({got}, {keep})")
+
+
+def replaced_by_coverage() -> None:
+    """A download replaces the copy you have when it read nine in ten of the pages its site
+    lists (with few failed), whatever its count of entries; where nothing says how many pages
+    there are, when it has 70% of the entries the copy you have has."""
+    import tempfile
+    from pathlib import Path
+    d = Path(tempfile.mkdtemp())
+
+    def why(**meta):
+        cli.write_atomic(d / "meta.json", json.dumps(meta).encode())
+        return cli.incomplete(d, {"count": 28000})
+    got = (why(count=9600, expected_pages=1643, read_pages=1600), why(count=9600, expected_pages=1643, read_pages=1200),
+           why(count=9600), why(count=26000))
+    check(got[0] is None and "1,200 of the 1,643" in (got[1] or "") and "9600 entries" in (got[2] or "") and got[3] is None,
+          f"replaced by coverage: read 9 in 10 of the listed pages; else, unknown, 70% of the entries ({got})")
 
 
 def folding() -> None:

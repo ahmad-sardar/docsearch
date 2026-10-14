@@ -4368,13 +4368,18 @@ def missed_pages(meta: dict) -> int:
 
 def incomplete(new: Path, old: dict | None) -> str | None:
     """Why a fresh download should not replace the copy you have, if it should not: more
-    than 5% of its pages failed (and might not another time: missed_pages), or (same docs,
-    `old`) it has under 70% of their entries."""
+    than 5% of its pages failed (and might not another time: missed_pages); or it read under
+    nine in ten of the pages its site's own lists name; or, where nothing says how many there
+    are, (same docs, `old`) it has under 70% of their entries. (A copy read better can have far
+    fewer entries: langchain's, its pages once and in one language, 9,600 against 28,000.)"""
     meta = json.loads((new / "meta.json").read_text(encoding="utf-8"))
     failed = missed_pages(meta)
     pages = sum(1 for f in (new / "pages").rglob("*.gz") if "_images" not in f.parts) if (new / "pages").exists() else 0
     if failed > 0.05 * (failed + pages):
         return f"{failed} of {failed + pages} pages failed"
+    expected, got = meta.get("expected_pages") or 0, meta.get("read_pages") or 0
+    if expected >= 20:                               # (how many there are is known: that decides)
+        return f"it read {got:,} of the {expected:,} pages its site lists" if got < 0.9 * expected else None
     if old and meta.get("count", 0) < 0.7 * old.get("count", 0):
         return f"{meta.get('count', 0)} entries; the copy you have has {old['count']}"
     return None

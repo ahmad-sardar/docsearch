@@ -316,3 +316,31 @@ missing), as before. "sort a list" from a Python project:
 C++ no longer comes before Python's answers. Still open (not a language question): "remove
 duplicates from a list" gives pandas' drop_duplicates first and no answer from Python's own docs.
 The Stack Overflow benchmark searches one package at a time: not affected.
+
+# T10: replace a copy by coverage; your data (2026-10-14)
+
+A new download replaces the copy you have when it read nine in ten of the pages its site's own
+lists name (and under 5% failed), whatever its count of entries; the 70%-of-entries rule is
+kept only where nothing says how many pages there are.
+
+Your data:
+- **langchain** replaced (your old copy: 26,216 entries, its pages twice, both languages, its
+  root broken as "https://"): `search add pypi:langchain` read its API reference
+  (reference.langchain.com, 116 pages) and docs.langchain.com as its official guide (1,428
+  Python pages; 221 TypeScript ones left out): 1,546 of 1,544 listed pages, 8,680 entries,
+  vectors made. The 70% rule would have refused it; coverage took it. packages.toml's line was
+  changed from `{ url = "https://docs.langchain.com" }` (the guide only) to `"latest"` (as PyPI
+  names its docs, the guide with them). The old copy is backed up outside data/.
+- **Guides**: numpy has its tutorials, polars its user guide; pandas, Python, C, C++ and CUDA
+  link no guide outside their docs. Organized again to version 6 (nothing downloaded).
+
+Usability on your data, now (all of T1-T10):
+
+| | how: #1 / top 3 / top 5 / missing | what: #1 / top 3 / top 5 / missing |
+|---|---|---|
+| baseline (T0) | 20 / 26 / 28 / 9 | 21 / 25 / 25 / 2 |
+| now | 29 / 35 / 36 / 2 | 22 / 27 / 27 / 0 |
+
+langchain: 11 of 13 first (was 7), none missing (was 6). "What is a checkpointer" is #3 (was
+#1 on the old copy, by the word in another page's name; its concept page is still not first:
+S6 open). "Use a different model provider": #7 (was missing).

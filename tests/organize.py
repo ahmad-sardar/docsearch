@@ -142,6 +142,7 @@ def main() -> None:
     yours_first()
     sections_kept()
     by_structure()
+    markdown_api()
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Site)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     site = f"http://127.0.0.1:{server.server_address[1]}"
@@ -467,6 +468,29 @@ def by_structure() -> None:
           and "blog/post" not in purpose and {"Build", "Observe", "Deploy"} <= set(parts.get("do", [])),
           f"by the site's structure: not by address (but a collection's folder); a place names its own page; "
           f"changelogs and blogs left out; a big section parted by its own ({purpose}, {parts})")
+
+
+def markdown_api() -> None:
+    """A Markdown API reference's page (reference.langchain.com): an API entry named from its
+    address, of the kind it says; its Signature and Description folded into it; its example an
+    entry of its own."""
+    root = "https://ref.example/python/lib/"
+    page = ("# make_agent\n\n> **Function** in `lib`\n\nMakes an agent.\n\n## Signature\n\n```python\n"
+            "make_agent(model)\n```\n\n## Description\n\nMakes an agent.\n\nExample:\n\n```python\n"
+            "from lib.agents import make_agent\nagent = make_agent('m')\n```\n")
+    loc = root + "agents/factory/make_agent"
+    entries = [cli.Entry("make_agent", "page", loc, page, "lib"),
+               cli.Entry("make_agent › Signature", "section", loc + "#signature",
+                         "## Signature\n\n```python\nmake_agent(model)\n```", "lib"),
+               cli.Entry("make_agent › Description", "section", loc + "#description",
+                         "## Description\n\nMakes an agent.\n\nExample:\n\n```python\nfrom lib.agents import "
+                         "make_agent\nagent = make_agent('m')\n```", "lib")]
+    kept, keep = organize.organize("mdapi", entries, {"name": "lib", "kind": "website", "root": root})
+    got = [(e.title, e.kind) for e in kept]
+    check(got == [("lib.agents.factory.make_agent", "function"), ("lib.agents.factory.make_agent › Examples", "example")]
+          and keep[0] == -1,
+          f"a Markdown API reference's page: an API entry named from its address; its parts folded; its "
+          f"example an entry ({got}, {keep})")
 
 
 def folding() -> None:

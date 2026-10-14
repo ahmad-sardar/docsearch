@@ -31,10 +31,11 @@ from typing import NamedTuple
 from docsearch import cli
 from docsearch import pages as offline
 
-VERSION = 5                       # meta["organized"]: the rules a copy was organized with (2: examples;
+VERSION = 6                       # meta["organized"]: the rules a copy was organized with (2: examples;
                                   # 3: examples keep their purpose, only real ones, no placeholders,
                                   # whole sections; 4: a section reached by two labels, once;
-                                  # 5: purposes by the site's structure, not by address)
+                                  # 5: purposes by the site's structure, not by address;
+                                  # 6: Markdown API references' pages, API entries)
 PURPOSES = {"learn": "Learn", "do": "Do", "lookup": "Look up", "understand": "Understand"}
 
 # The sites' own names for their parts, on a title made plain (lower case, without the
@@ -107,7 +108,8 @@ SUBPARTS = {"parameters", "return value", "return values", "returns", "exception
             "member variables", "types", "constants", "functions", "classes", "macros", "macro constants",
             "objects", "keywords", "includes", "type requirements", "requirements", "error handling",
             "next steps", "what's next", "related", "related pages", "related content", "learn more",
-            "further reading", "additional resources", "resources"}
+            "further reading", "additional resources", "resources", "signature", "description", "properties",
+            "extends", "constructors"}
 LINK_LINE = re.compile(r"^\s*(?:[-*+]|\d+\.)?\s*\[[^\]]+\]\([^)]+\)\s*(?:[:—–-]?\s*.{0,200})?$")
 
 
@@ -441,6 +443,38 @@ def body(text: str) -> str:
     return re.sub(r"^#+ [^\n]*(\n+|$)", "", text.strip(), count=1)[:300]
 
 
+# An API reference page that says what it documents, first (reference.langchain.com, written as
+# Markdown: "> **Function** in `langchain`")
+REF_KIND = re.compile(r"^> \*\*(function|class|method|attribute|property|module|variable|constant|type alias|"
+                      r"interface|enum)\*\* in `[^`]+`", re.I | re.M)
+
+
+def named_api(entries: list[cli.Entry], meta: dict) -> set[int]:
+    """A page titled as the last part of its address that says it documents an API object
+    (create_agent at .../python/langchain/agents/factory/create_agent): an API entry, named from
+    its address under its docs' folder (langchain.agents.factory.create_agent), of its kind.
+    Returns the entries renamed (their vectors are made again)."""
+    roots = [meta.get("root") or ""] + [g["root"] for g in meta.get("guides") or []]
+    renamed = set()
+    for i, e in enumerate(entries):
+        if e.kind not in ("page", "doc") or "#" in e.location:
+            continue
+        m = REF_KIND.search(e.text[:2000])
+        last = e.location.rstrip("/").removesuffix(".md").rsplit("/", 1)[-1]
+        if not m or re.sub(r"\(\)$", "", e.title.strip()) != last:
+            continue
+        root = next((r for r in roots if r and e.location.startswith(r)), None)
+        if root is None:
+            continue
+        top = root.rstrip("/").rsplit("/", 1)[-1]
+        parts = ([top] if re.fullmatch(r"[A-Za-z_]\w*", top) else []) + \
+            [x for x in e.location[len(root):].removesuffix(".md").strip("/").split("/") if x]
+        if all(re.fullmatch(r"[A-Za-z_]\w*", x) for x in parts):
+            e.title, e.kind = ".".join(parts), m.group(1).lower()
+            renamed.add(i)
+    return renamed
+
+
 def heading_id(e: cli.Entry) -> bool:
     """Is a section's anchor the id its heading got from its words (#parquet), not a label the
     docs named it by (#io-parquet: what their cross-references and links elsewhere use)?"""
@@ -474,6 +508,7 @@ def organize(sid: str, entries: list[cli.Entry], meta: dict) -> tuple[list[cli.E
             e.purpose = said if said in PURPOSES else "lookup" if meta.get("kind") == "man" else "learn"
         meta["organized"] = VERSION
         return entries, list(range(len(entries)))
+    renamed = named_api(entries, meta)               # (Markdown API references: their pages, API entries)
     purposes = page_purposes(sid, meta, entries)
     stored_pages = set(purposes)
     by_page: dict[str, list[int]] = {}
@@ -540,7 +575,7 @@ def organize(sid: str, entries: list[cli.Entry], meta: dict) -> tuple[list[cli.E
             keep.remove(i)
     new = list(fresh.values())
     at = {entries[i].location: entries[i] for i in keep if entries[i].kind != "example"}
-    changed = set()                                  # an Example section, with what its page is
+    changed = set(renamed)                           # an Example section, with what its page is
     for i in [i for i in keep if entries[i].kind == "example" and i not in made]:     # first
         host = at.get(entries[i].location.split("#")[0])
         text = examples.with_lead(host, entries[i].text) if host else entries[i].text

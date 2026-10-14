@@ -475,3 +475,21 @@ Measured and dropped: concept sections of guides ("Conceptual overviews") as und
 is a checkpointer" did not find langchain's checkpointer page with it (its #1 is a match of the
 word in an environment variable's name: the changelog is no longer first, that is all), and
 "use a different model provider" fell from #2 to #26. S6 stays open.
+
+## Markdown API references, T9 (2026-10-14), organizing version 6
+
+A page titled as the last part of its address that says what it documents ("> **Function** in
+`langchain`": reference.langchain.com, read as Markdown) is an API entry, named from its address
+under its docs' folder and of the kind it says; its Signature, Description, Properties, Extends
+and Constructors sections fold into it (its text holds them); its examples are entries of
+their own, as any API entry's. The new langchain copy:
+
+| | before | after |
+|---|---|---|
+| reference entries | 116 pages, 340 sections (106 "› Signature") | 30 functions, 76 classes, 3 modules, 13 examples; no "› Signature" |
+| `create_agent` | not first | `langchain.agents.factory.create_agent` (function) #1 |
+| `langchain.agents.create_agent` | — | the same, #1 |
+| `init_chat_model` | `init_chat_model › Description` | `langchain.chat_models.base.init_chat_model` #1 |
+
+Your data's copy: nothing changes but 2 C++ sections named "Description" whose text their page
+holds (folded); usability the same on every question.

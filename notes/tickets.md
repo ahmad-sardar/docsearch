@@ -88,7 +88,7 @@ top 5, missing.
   - numba is found; onnx and opencv are found or the reason is said;
   - a re-run of the 81-package docs-finding is no worse anywhere.
 
-### T6 Guides: docs sites only, never twice
+### T6 Guides: docs sites only, never twice (done: `eval/results-finding.md`)
 - **Change:**
   - a guide link's whole text must name a guide;
   - a guide must be a docs site (an inventory, a search index, llms.txt, or a page saying its

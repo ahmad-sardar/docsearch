@@ -23,6 +23,16 @@ from docsearch.cli import say
 
 FOLDER = "guide"
 CHROME = "header, nav, .bd-header, .navbar, .md-tabs, .md-header, [role=navigation]"
+# What a link to a guide is named, the whole of it (or of its first words, in a menu that says
+# more under it: "Tutorials" over "Learn how to use TensorFlow..."): not "Learn more" (pymongo's
+# link to mongodb.com/solutions), not "Installing" (scipy's to scipy.org), not "Learn ML".
+GUIDE_NAME = re.compile(r"(the |our )?((user|developer)('s)? )?(guides?|tutorials?|learn|learning|getting started|"
+                        r"get started|quick ?start|how[- ]to( guides)?|how-tos|examples|cookbook|handbook|manual|"
+                        r"docs|documentation|book|courses?)", re.I)
+# What builds docs sites, as their pages say it (<meta name="generator">)
+GENERATOR = re.compile(r"""<meta[^>]+name=["']generator["'][^>]+content=["'][^"']*\b(sphinx|mkdocs|zensical|"""
+                       r"docusaurus|mintlify|vitepress|vuepress|docsify|gitbook|nextra|starlight|jupyter ?book|mdbook|"
+                       r"antora|mystmd)", re.I)
 
 
 def find_guides(root: str, page: str, names: set[str]) -> list[dict]:
@@ -33,7 +43,9 @@ def find_guides(root: str, page: str, names: set[str]) -> list[dict]:
     out: dict[str, dict] = {}
     for el in soup.select(CHROME):
         for a in el.find_all("a", href=True):
-            text = " ".join(a.get_text(" ", strip=True).split())
+            text = re.sub(r"^\W+|\W+$", "", " ".join(next(a.stripped_strings, "").split()))
+            if not GUIDE_NAME.fullmatch(text):
+                continue
             purpose = organize.label_of(text, names)
             if purpose not in ("learn", "do"):
                 continue
@@ -60,8 +72,8 @@ def part_of(guide: dict, root: str, k: int) -> dict | None:
     if found is None:
         return None
     kind, groot, _, page = found
-    if groot == root or groot.startswith(root):       # (the docs themselves, or a part of them)
-        return None
+    if groot == root or groot.startswith(root) or sibling(groot, root):   # (the docs themselves, a part
+        return None                                                      # of them, another version of them)
     title = guide["title"]
     if guide.get("asked") or guide.get("pypi"):       # (named by you, or by PyPI: as its page names itself)
         h = re.search(r"<h1\b[^>]*>(.*?)</h1>|<title>(.*?)</title>", page or "", re.S | re.I)
@@ -75,6 +87,11 @@ def part_of(guide: dict, root: str, k: int) -> dict | None:
     from docsearch import site as sites
     part = {"kind": "website", "root": groot, "start": groot, "prefix": groot, "guide": info}
     surveyed = sites.survey(groot, root=groot)
+    own = surveyed is not None and any(surveyed.lists.get(k) for k in ("search index", "llms.txt"))
+    if not (own or GENERATOR.search(page or "") or cli.ROOT_HINT.search(page or "")):   # a docs site: its
+        return None                                   # own list of pages, or a page that says what built it
+                                                      # (or where its docs begin, as Sphinx's and MkDocs' do);
+                                                      # not a site with only a sitemap (mongodb.com/solutions/)
     pages, _ = sites.choose(surveyed, "", "default") if surveyed is not None else ([], None)
     pages = [p for p in pages if not p.startswith(root)]          # (its site holds the docs: not them again)
     if pages:                                         # its pages, as its lists name them (site.py)
@@ -84,6 +101,18 @@ def part_of(guide: dict, root: str, k: int) -> dict | None:
     if root.startswith(groot):                        # its site holds the docs (docs.pola.rs/api/...)
         part["exclude"] = "^" + re.escape(root) + ("|" + part["exclude"][1:] if part.get("exclude") else "")
     return part
+
+
+def sibling(url: str, root: str) -> bool:
+    """Is this the docs at the root again, of another version (docs.pytest.org/en/latest/ next
+    to /en/stable/)?"""
+    a, b = urllib.parse.urlparse(url), urllib.parse.urlparse(root)
+    if a.netloc.lower() != b.netloc.lower():
+        return False
+
+    def bare(path: str) -> list[str]:
+        return [seg for seg in path.split("/") if seg and not cli.VERSION_SEGMENT.match(seg)]
+    return bare(a.path) == bare(b.path) and a.path.rstrip("/") != b.path.rstrip("/")
 
 
 def wanted(name: str, args) -> list[dict]:
@@ -148,6 +177,8 @@ def plan_with(plan: dict, name: str, args, newest: bool, pypi: bool = False) -> 
     for g in asked:                                  # (one you named that the header links too: said)
         candidates[g["url"]] = {**candidates[g["url"]], "asked": True} if g["url"] in candidates else g
     for guide in candidates.values():
+        if sibling(guide["url"], root):              # (these docs again, of another version)
+            continue
         why = official(guide["url"], root, plan.get("repo"))
         if not why:
             if guide.get("asked"):
@@ -157,8 +188,11 @@ def plan_with(plan: dict, name: str, args, newest: bool, pypi: bool = False) -> 
         part = part_of(guide, root, sum(1 for p in parts if p.get("guide")))
         if part is None:
             if guide.get("asked"):
-                say(f"  {guide['url']}: no docs index there (objects.inv, a search index or a sitemap); not read")
+                say(f"  {guide['url']}: not a docs site (no objects.inv, search index or llms.txt, and its page "
+                    f"does not say what built it); not read")
             continue
+        if any(p.get("guide") and p["guide"]["root"] == part["guide"]["root"] for p in parts):
+            continue                                 # (two links to one guide: once)
         say(f"  {name}: " + ("its PyPI record names more official docs" if guide.get("pypi") else
                              "its docs link an official guide")
             + f", \"{part['guide']['title']}\" ({part['guide']['root']}, {why}): read with them")

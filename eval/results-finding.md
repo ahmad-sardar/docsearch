@@ -36,3 +36,24 @@ The rest of T5 (notes/fetching-policy.md): requests paced by the site's own Rate
 a long pause it asks for stops the download, kept, to go on after it; robots.txt as RFC 9309
 (a 5xx means nothing is read); the survey asks once per list and less; `search add NAME`
 uses packages.toml's address for it.
+
+## T6: guides are docs sites, never twice (2026-10-14)
+
+A guide is taken from the docs' header only by the name it gives itself (the whole of its
+link's text, or a menu item's first words: "User guide", "Tutorials", "Learn", "Cookbook"),
+only if it is a docs site (a Sphinx inventory, a search index, llms.txt, or a page that says
+what built it or where its docs begin; not a site with only a sitemap), never these docs at
+another version, and once. Its pages come from its own list.
+
+| package | before (T5's run) | after |
+|---|---|---|
+| pytest, scrapy | + the same docs at `en/latest/` | one part |
+| vllm | + `en/latest/` | one part (and its pages beside its API inventory, as before) |
+| pymongo | + "Learn more" → mongodb.com/solutions/ | none |
+| scipy | + "Installing" → scipy.org | none |
+| tensorflow | + Install, Learn, Tutorials, Learn ML, Guide | none (its docs are the whole site now: T5) |
+| polars | "User guide": 1,440 pages (the host's sitemap: other API versions) | "User guide": 87 pages (its search index) |
+| openai | Learn, Cookbook, Learn again | Cookbook, Learn |
+| transformers, datasets, accelerate, diffusers | + "Learn" → huggingface.co/learn/ (courses) | none (no docs site there) |
+| numpy | Learn → numpy.org/numpy-tutorials/ | the same |
+| langchain | docs.langchain.com (from PyPI) | the same |

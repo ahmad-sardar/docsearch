@@ -494,7 +494,8 @@ def guide_sites(header: str) -> None:
     inv = ("index std:doc -1 index.html Lib API reference\nreference std:doc -1 reference.html Reference\n"
            "lib.join py:function 1 reference.html#lib.join -\n")
     MOCK["pypi.org"] = {"/pypi/lib/json": json.dumps({"info": {"name": "lib", "summary": "A lib.", "version": "1.0",
-                        "project_urls": {"Documentation": api, "Source": "https://github.com/lib-org/lib"}}}).encode()}
+                        "project_urls": {"Documentation": api, "Source": "https://github.com/lib-org/lib",
+                                         "Homepage": "https://docs.lib.example/api/latest/"}}}).encode()}
     MOCK["docs.lib.example"] = {
         "/api/stable/objects.inv": (b"# Sphinx inventory version 2\n# Project: Lib\n# Version: 1.0\n"
                                     b"# The remainder of this file is compressed using zlib.\n" + zlib.compress(inv.encode())),
@@ -516,6 +517,10 @@ def guide_sites(header: str) -> None:
         "/sitemap.xml": sitemap(["https://learn.lib-tutorials.example/", "https://learn.lib-tutorials.example/first-steps/"]),
         "/first-steps/": doc_page("Your first table", "<p>Make a table.</p>"),
     }
+    MOCK["shop.lib.example"] = {"/": doc_page("Lib training", "<a href='courses/'>Courses</a>"),   # (only a
+                                "/sitemap.xml": sitemap(["https://shop.lib.example/"] +
+                                                        [f"https://shop.lib.example/courses/{n}/" for n in range(12)]),
+                                "/courses/": doc_page("Paid courses", "")}                             # sitemap)
     MOCK["blog.example"] = {"/": b"<html><body><main><h1>A blog</h1><p>Posts.</p></main></body></html>",
                             "/sitemap.xml": sitemap(["https://blog.example/"])}
     MOCK["api.github.com"] = {"/repos/lib-org/lib": json.dumps({"full_name": "lib-org/lib",
@@ -536,7 +541,8 @@ def guides_found() -> None:
     from docsearch import guides as G
     from docsearch import pages
     header = ("<a href='/api/stable/'>API</a> <a href='https://docs.lib.example/'>User guide</a> "
-              "<a href='https://learn.lib-tutorials.example/'>Tutorials</a> <a href='https://blog.example/'>Learn more</a>")
+              "<a href='https://learn.lib-tutorials.example/'><span>Tutorials</span> <span>Learn it step by step</span></a> "
+              "<a href='https://blog.example/'>Learn more</a> <a href='https://shop.lib.example/'>Courses</a>")
     guide_sites(header)
     said = run("add", "lib", "--no-embed")
     m = cli.load_meta("lib@1.0")
@@ -544,7 +550,12 @@ def guides_found() -> None:
     check(got == {"https://docs.lib.example/": ("guide", "User guide", "do"),
                   "https://learn.lib-tutorials.example/": ("guide2", "Tutorials", "learn")}
           and "blog.example" not in said and "official guide" in said,
-          f"guides the docs' header links: on their site, or linking to their repository; not another site ({got})")
+          f"guides the docs' header links: named as guides (a menu's first words), on their site or linking to "
+          f"their repository; not \"Learn more\" ({got})")
+    check(not any("shop.lib.example" in r or "/api/latest/" in r for r in got)
+          and "shop.lib.example" not in str(cli.load_meta("lib@1.0").get("guides")),
+          f"not a guide: an official site with only a sitemap (no docs site), nor these docs of another version "
+          f"(PyPI's /api/latest/ next to /api/stable/) ({got})")
     es = {e.title: e for e in cli.iter_entries("lib@1.0")}
     locs = [e.location for e in es.values()]
     check(len([x for x in locs if x.endswith("#lib.join")]) == 1

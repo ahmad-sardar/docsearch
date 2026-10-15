@@ -122,6 +122,11 @@ in the page:
 before you type anything, the page shows each package's docs organized by what you read
 them for (next section), and the list goes through them in reading order.
 
+searching every package from a project: what is named as you typed comes first, then your
+project's own packages, then the other docs of its languages, then the rest (a python project
+asking "sort a list" gets python's `list.sort`, not c++'s `std::list::sort`). two results of
+one name say where each is (its page, its folder, or its parameters).
+
 ### organized by what you read them for
 
 official docs mix everything together. docsearch sorts every entry into one of four, using
@@ -149,18 +154,27 @@ programs too. each says whether its code is complete, read from the code itself:
 or what it needs first ("needs df (from earlier)", "needs import polars as pl"). numpy's and
 pandas' examples assume `np` and `pd`, as their docs say.
 
-measured on the stack overflow questions (`eval/results-organized.md`, test split): plain
-search finds what it found before (mrr 0.269 against 0.267; names 0.982, unchanged), without
-the guides in its way. on the 27 questions whose answer is a tutorial or how-to, `search how`
-scores 0.27 against 0.19: better, but too few questions to be sure.
+measured on the stack overflow questions (`eval/results-organized.md`, test split, 348
+questions, once): plain search 0.246 against 0.255 for every entry (p=0.45), names 0.958
+against 0.964; `search how` 0.267, names too (0.957). on the 27 questions whose answer is a
+tutorial or how-to, `search how` scores 0.28 against 0.18: better, but too few questions to be
+sure.
 
 pages about the project, not about using it, are left out: release notes, what's new,
 contributing and development, building from source, the license (pandas: 2,495 release-note
 entries). sphinx docs skip them before downloading. and parts listed apart from the entry
 that already holds them are folded into it: cppreference's "parameters", "return value",
 "see also" sections (in the c++ docs, 6 of every 10 entries were these), a section that
-repeats its page's title, numpy.sum's page next to numpy.sum. docs you added before are
-organized once, the next time you run `search`, with nothing downloaded.
+repeats its page's title, numpy.sum's page next to numpy.sum, one section reached by two
+names. changelogs and blog pages are left out too.
+
+a page's purpose comes from the docs' own structure: its title, their table of contents, the
+site's own sections (its sidebar, llms.txt), not from the page above it by its address
+(litellm's first page, "getting started", is not what its gateway docs are). the parts in the
+page's home are the site's own sections (langchain: build, monitor, deploy, test). an api
+reference written as markdown pages (reference.langchain.com) gives api entries named from
+their address (`langchain.agents.factory.create_agent`), so names find them. docs you added
+before are organized once, the next time you run `search`, with nothing downloaded.
 
 ### official guides, with their docs
 
@@ -169,8 +183,11 @@ user guide on docs.pola.rs, numpy's docs link their tutorials ("learn") on numpy
 package's docs link such a guide in their own header, docsearch reads it with them, as part of
 the same copy, organized the same way (polars' "getting started" is learn, its "concepts"
 understand). only official ones: on the docs' own site, or a site that links to the package's
-repository. a guide has no versions, so it says the day it was read ("user guide, as of
-2026-10-12"), and it comes only with the docs of the newest release.
+repository; only a link named as a guide ("user guide", "tutorials", "learn"; not "learn more");
+only a docs site (one that lists its pages, or says what built it; not a site with only a
+sitemap); never the same docs at another version. a guide has no versions, so it says the day
+it was read ("user guide, as of 2026-10-12"), and it comes only with the docs of the newest
+release.
 
 ```bash
 search add polars                                  # its user guide comes with it
@@ -208,8 +225,13 @@ a package's docs are found through its source code. pypi names its repository (g
 gitlab, codeberg), and docs count as the package's when they and the repository point at each
 other: the docs link to it, or it names their site as its website. that finds the right docs
 when pypi's own link is old or points elsewhere, and docs that point neither way are shown to
-you before anything is downloaded (`--yes` takes them). a package that names no docs site at
-all gets the readme of its release, which is its documentation.
+you before anything is downloaded (`--yes` takes them). the project's own home page (as pypi or
+its repository names it) vouches for the docs it links to, by their address or a link named
+"docs" or "documentation", never a "contribute" or "blog" page; so does pypi's description of
+the package. a package that names no docs site at all gets the readme of its release, which is
+its documentation, and so does one whose docs site only lets people in, not programs (a bot
+check, which docsearch never gets around). in packages.toml, `name = { url = "..." }` is where
+`search add name` and `search sync` read it.
 
 the code an entry documents comes along, where the docs link to it (numpy, pandas, torch,
 scipy, polars, matplotlib, go...): press `s` on the entry to read it, at the version the docs
@@ -227,8 +249,22 @@ search add aks=https://learn.microsoft.com/en-us/azure/aks/
   shows how many are found so far, a number that grows as pages turn up.
 - ctrl+c stops it and keeps what's read: searchable now, marked partial in `search list`.
   `search add aks` continues where it stopped.
+- docsearch reads what the site lists for programs (a sphinx inventory, an mkdocs search
+  index, llms.txt, its sitemaps), as markdown where the site offers it and its html is drawn by
+  javascript (docs.langchain.com), and says how many of the listed pages it read.
+- a site with pages for other languages than the package's (langchain's typescript next to its
+  python), or with many sections (tensorflow.org), asks which sections to read when you add it
+  in a terminal; the answer is kept in packages.toml, for that site, and sync asks no more.
+  without a terminal it reads all but the other languages' pages and says so.
 - some sites ask programs to wait between pages, and docsearch waits. aws asks for 5
-  seconds, so 700 pages take about an hour.
+  seconds, so 700 pages take about an hour. a site that says how many requests it allows
+  (huggingface.co: 100 pages in 5 minutes) is asked no faster than that; one that asks for a
+  longer pause (come back in an hour) stops the download, kept, and the same command goes on
+  after that time. a big site can take a few sittings; so can updating it.
+- a site whose robots.txt can't be read (it answers with a server error) is not read at all
+  that time, as the robots.txt standard (rfc 9309) says.
+- hugging face's libraries (transformers, datasets, diffusers...) come from hugging face's own
+  copy of their docs: one download, no page of its site asked for.
 - some sites ask programs not to read some pages at all (oracle: its old releases, 10g
   and 11g), and docsearch doesn't. download those docs yourself and add the folder or zip:
   `search add oracle11=~/Downloads/oracle11g.zip`
@@ -318,8 +354,10 @@ it keeps the article, drops the ads and menus, and makes it searchable with ever
 ## when downloads fail
 
 it tells you why (site down, blocked, moved, needs javascript...) and what to try. your
-existing docs are never touched until a new download fully works. if a site won't let
-programs in, download the docs yourself and `search add name=/path/to/folder`.
+existing docs are never touched until a new download fully works: it replaces them when it
+read nine in ten of the pages the site lists, with few failed (where nothing says how many
+there are, when it has most of the entries yours has). if a site won't let programs in,
+download the docs yourself and `search add name=/path/to/folder`.
 
 ## safe
 

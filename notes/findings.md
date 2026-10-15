@@ -1,5 +1,39 @@
 # Findings (2026-10-12)
 
+## Status (2026-10-14), after tickets T0-T11
+
+| finding | status |
+|---|---|
+| S1 how mode misses one-function answers | fixed (T2): argmax, vstack, np.save, timeit first; gather 2nd; std::sort 3rd |
+| S2 numpy's examples "look up" | fixed (T1) |
+| S3 Python's 1,477 "examples" | fixed (T1): 1,199 real ones; "Reading and writing files" #43 -> #1 |
+| S4 all packages mix languages | fixed (T4), from a project: its packages and languages first |
+| S5 the same thing twice | fixed (T3): a section once; same names say where each is |
+| S6 concept questions miss guide pages | open: a "concepts sections are understand" option was measured and dropped (T8); the changelog that came first is left out |
+| S7 Markdown API reference split | fixed (T9) |
+| S8 cppreference placeholders | fixed (T1) |
+| S9 sections cut as their first paragraph | fixed (T1) |
+| D1 Hugging Face rate limited | fixed (T5): its own copy of the docs, one download; pacing by RateLimit |
+| D2 tensorflow in /community/ | fixed (T5) |
+| D3 README only though docs exist | numba, onnx fixed (T5); opencv's docs refuse programs (a bot check): README, said; gradio's docs are drawn by JavaScript and list nothing: README (open) |
+| D4 add ignores packages.toml's url | fixed (T5) |
+| G1 loose header links as guides | fixed (T6) |
+| G2 the same docs at another version | fixed (T6) |
+| G3 polars' guide from the host's sitemap | fixed (T6): 87 pages, not 1,440 |
+| R1 expected pages from a partial list | fixed (T7) |
+| R2 the sections question never asked for parts | fixed (T7), checked in a real terminal |
+| R3 transformers slow under rate limits | moot (T5): one download |
+| O1 labels pass by address | fixed (T8) |
+| O2 place-name sections | fixed (T8) |
+| O3 a guide site as one part | fixed (T8): its sections |
+| O4 junk parts | fixed (T8) |
+| O5 part counts of other purposes | fixed (T8) |
+| O6 blog, tag pages, changelogs kept | fixed (T8) |
+| O7 repeated headings share one anchor | fixed (T3) |
+| X1 your langchain re-add refused | fixed (T10): replaced by coverage |
+| P1 Windows CI, Python 3.11 | T11: pushed; CI runs every test file on Windows, Linux, Mac, Python 3.11-3.14 |
+| page rendering in a browser | checked (T11): results, how mode, "where" labels, an API entry from a Markdown reference |
+
 From the spot check (`notes/spot-check.md`; temp copies of 15 packages; the 81-package
 docs-finding run) and the usability run (about 60 real questions on your page and on the new
 langchain copy, each result read). Evidence is from those runs.

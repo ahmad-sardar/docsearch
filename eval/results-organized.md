@@ -493,3 +493,21 @@ their own, as any API entry's. The new langchain copy:
 
 Your data's copy: nothing changes but 2 C++ sections named "Description" whose text their page
 holds (folded); usability the same on every question.
+
+## Test split, once (2026-10-14), your data after T1-T10
+
+`eval/organized.py --after data --split test --modes`: "before" is plain search over every
+entry; "what" is plain search; "how" is search how (T2). MRR@10 [95% CI], paired with "before".
+
+| questions | every entry | what | how |
+|---|---|---|---|
+| all (348) | 0.411 | 0.409 (−0.003, p=0.78) | 0.420 (+0.009, p=0.52) |
+| Stack Overflow (258) | 0.255 [0.210, 0.300] | 0.246 (−0.009, p=0.45) | 0.267 (+0.012, p=0.45) |
+| … answer is learn (10) | 0.231 | 0.025 | 0.431 |
+| … answer is do (17) | 0.153 | 0.196 | 0.198 |
+| … answer is lookup (231) | 0.264 | 0.259 | 0.265 |
+| ideas (12) | 0.174 | 0.343 | 0.215 |
+| names (78) | 0.964 | 0.958 (−0.006) | 0.957 (−0.007) |
+
+Names within 0.01 in both. The 27 questions whose answer is a tutorial or how-to: how 0.28,
+every entry 0.18 (too few to be sure).

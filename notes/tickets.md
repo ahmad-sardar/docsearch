@@ -148,7 +148,7 @@ top 5, missing.
 - **Done when:** your langchain is the new one; the others have their guides and outlines; the
   usability run on your data is re-done.
 
-### T11 Release
+### T11 Release (done: CI on the push; the test split in `eval/results-organized.md`)
 - **Deliverables:**
   - `tests/sites.py` (made-up sites of each failing kind) and the new tests, all in CI;
   - README updated;

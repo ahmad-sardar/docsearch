@@ -71,3 +71,4 @@ jobs:
           uv run python tests/source.py
           uv run python tests/versions.py
           uv run python tests/organize.py
+          uv run python tests/sites.py

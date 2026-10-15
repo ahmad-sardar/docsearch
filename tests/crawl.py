@@ -410,21 +410,23 @@ def lists_and_sections(site: str) -> None:
         "x.outline = {p: [p.split('/')[3].title()] for p in x.lists['llms.txt']}\n"
         "pages, said = s.choose(x, 'demo', None)\n"
         "print(json.dumps({'n': len(pages), 'said': said}), file=sys.stderr)\n")
-    master, slave = os.openpty()
-    child = subprocess.Popen([sys.executable, "-c", code], stdin=slave, stdout=slave, stderr=subprocess.PIPE)
-    os.close(slave)
-    shown = b""
-    deadline = time.monotonic() + 30                 # (the list on the terminal; the question itself,
-    while b"left out unless" not in shown and time.monotonic() < deadline:     # as input() asks, on stderr)
-        if select.select([master], [], [], 1)[0]:
-            shown += os.read(master, 4096)
-    os.write(master, b"1\r")                         # (Enter, as a terminal sends it)
-    _, err = child.communicate(timeout=60)
-    os.close(master)
-    got = json.loads(err.decode()[err.decode().rindex("{"):])     # (after the question, on stderr too)
+    got = None
+    if os.name != "nt":                              # (a terminal of its own: not on Windows)
+        master, slave = os.openpty()
+        child = subprocess.Popen([sys.executable, "-c", code], stdin=slave, stdout=slave, stderr=subprocess.PIPE)
+        os.close(slave)
+        shown = b""
+        deadline = time.monotonic() + 30                 # (the list on the terminal; the question itself,
+        while b"left out unless" not in shown and time.monotonic() < deadline:     # as input() asks, on stderr)
+            if select.select([master], [], [], 1)[0]:
+                shown += os.read(master, 4096)
+        os.write(master, b"1\r")                         # (Enter, as a terminal sends it)
+        _, err = child.communicate(timeout=60)
+        os.close(master)
+        got = json.loads(err.decode()[err.decode().rindex("{"):])     # (after the question, on stderr too)
     piped = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
     unasked = json.loads(piped.stderr[piped.stderr.rindex("{"):])
-    check(b"in these sections" in shown and got["n"] == 200 and got["said"] == [got["said"][0]]
+    check((got is None or (b"in these sections" in shown and got["n"] == 200 and got["said"] == [got["said"][0]]))
           and unasked["said"] is None and unasked["n"] == 600 and "in a terminal" in piped.stderr,
           f"the sections question: asked in a terminal, the answer taken; without one, not asked (all but "
           f"the other languages' pages), said "

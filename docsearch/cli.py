@@ -1606,7 +1606,12 @@ def find_docs(candidate: str, fallback: bool = False, lists: bool = False) -> tu
     other docs, a page that says it is MkDocs or Zensical, or their search index. A page that
     says where its docs begin costs one question. fallback: an address of docs (PyPI's docs
     link), whose pages are read even if nothing says what they are. None: no docs there."""
-    under, page, said = probe_roots(candidate)
+    from docsearch import hfdocs
+    lib = hfdocs.library(candidate)
+    if lib:                                       # Hugging Face's docs: its page (whose they are), and no
+        page = probe_roots(candidate)[1]          # guesses at where an inventory is (each one of the 100
+        return ("website", f"https://huggingface.co/docs/{lib}/", None, page) if page else None   # pages a
+    under, page, said = probe_roots(candidate)                                                     # visitor has)
     if said:                                      # its root is known: an inventory there, or pages
         hit = index_in(under, SITE_INDEXES[:1])  # (unless the inventory did not answer: a limit)
         hit = hit or (None if under[0] + SITE_INDEXES[0][0] in UNREACHED else ("website", under[0], None))
@@ -3191,9 +3196,8 @@ def web_docs(name: str, spec: str, want: str, override: str, args, check_copy: b
     if hf:
         if check_copy and have_copy(spec, name, want, hf["version"], args):
             return None
-        from docsearch import guides
-        return guides.plan_with({**hf, **{k: v for k, v in source.items() if v}}, name, args,
-                                newest=not want, pypi=not override)
+        return {**hf, **{k: v for k, v in source.items() if v}}     # (its header's links: the Hub's own
+                                                                   # sections, Models, Learn: not guides)
     if kind == "readme":                             # the README of a release: the newest, or the one asked
         version = want or (PYPI_INFO.get(name) or {}).get("version") or ""
         if not version or (want and not release_info(name, want)):

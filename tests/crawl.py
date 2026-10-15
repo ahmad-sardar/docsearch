@@ -195,10 +195,11 @@ def main() -> None:
     turns: list[float] = []                          # when each request was let go (cli.wait_turn)
     real_wait = cli.wait_turn
 
-    def wait_turn(host: str) -> None:
-        real_wait(host)
+    def wait_turn(host: str) -> float:
+        went = real_wait(host)
         if host in cli.PACE:
-            turns.append(time.monotonic())
+            turns.append(went)
+        return went
     cli.wait_turn = wait_turn
     try:
         entries, meta = cli.build_known("db", "db", plan, 8, None)
@@ -220,9 +221,10 @@ def main() -> None:
     check(meta["failures"].keys() == {"not-found"} and cli.missed_pages(meta) == 0,
           "links to missing pages: not a reason to call the download incomplete")
     times = [t for t, path in LOG if path != "/robots.txt"]
+    turns.sort()                                     # (appended by several threads)
     sent = min(b - a for a, b in zip(turns, turns[1:]))
     came = min(b - a for a, b in zip(times, times[1:]))     # (on the way: a busy machine's delays)
-    check(len(turns) >= len(times) - 1 and sent >= 0.9 and came >= 0.5,
+    check(len(turns) >= len(times) - 1 and sent >= 0.999 and came >= 0.5,
           f"robots.txt Crawl-delay kept: 1 s between requests sent (at least {sent:.3f} s; "
           f"{came:.3f} s as they came)")
 

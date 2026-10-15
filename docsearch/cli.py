@@ -363,26 +363,37 @@ def paused(host: str, url: str) -> None:
         raise Failed("paused", url, time.strftime("%H:%M", time.localtime(until)))
 
 
-def wait_turn(host: str) -> None:
-    """Wait until this host may be asked again: one request per `gap` seconds, over all threads."""
-    with _PACE_LOCK:
-        p = PACE.get(host)
-        if p is None:
-            return
-        now = time.monotonic()
-        at = max(now, p["next"])
-        p["next"] = at + max(p["gap"], p.get("quota", 0.0))
-    while time.monotonic() < at:                   # (a download that stops asks nothing more)
-        if STOPPING:
+def wait_turn(host: str) -> float:
+    """Wait until this host may be asked again: `gap` seconds after the last request to it was
+    let go, over all threads, and not before a wait it asked for (`next`). Counted from when a
+    request is let go, not from a time given it beforehand: a thread that wakes late (a busy
+    machine) does not bring the next request closer (macOS CI: 0.86 s for a 1 s Crawl-delay).
+    Returns when it was let go."""
+    while True:
+        with _PACE_LOCK:
+            p = PACE.get(host)
+            now = time.monotonic()
+            if p is None:
+                return now
+            at = next_turn(p)
+            if now >= at:
+                p["last"] = now
+                return now
+        if STOPPING:                               # (a download that stops asks nothing more)
             raise Failed("dropped", f"https://{host}/", "stopped")
-        time.sleep(min(0.2, at - time.monotonic()))
+        time.sleep(min(0.2, max(0.001, at - now)))
+
+
+def next_turn(p: dict) -> float:
+    """When a host (its PACE) may be asked again."""
+    return max(p["next"], p.get("last", float("-inf")) + max(p["gap"], p.get("quota", 0.0)))
 
 
 def turn_in(host: str) -> float:
     """Seconds until `host` may be asked again (0: now)."""
     with _PACE_LOCK:
         p = PACE.get(host)
-        return max(0.0, p["next"] - time.monotonic()) if p else 0.0
+        return max(0.0, next_turn(p) - time.monotonic()) if p else 0.0
 
 
 def paced(host: str, busy: bool, retry_after: float | None = None, left: int | None = None,
@@ -413,7 +424,7 @@ def paced(host: str, busy: bool, retry_after: float | None = None, left: int | N
             PAUSED[host] = time.time() + retry_after
         if retry_after:                            # "come back in N seconds": everyone waits
             until = now + min(retry_after, MAX_WAIT)
-            if until - max(p["next"], now) > 30:
+            if until - max(next_turn(p), now) > 30:
                 say(f"  {host} asks to wait {min(retry_after, MAX_WAIT):.0f} s before more requests: waiting")
             p["next"] = max(p["next"], until)
 

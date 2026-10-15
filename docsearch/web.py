@@ -630,6 +630,7 @@ class Handler(BaseHTTPRequestHandler):
     sys_version = ""
     library: Library
     hosts: set[str]
+    code: int = 0                                    # code_stamp() when it started
 
     def log_message(self, fmt: str, *args) -> None:  # quiet; errors go to the log below
         pass
@@ -678,8 +679,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, found[0], found[1], ASSET_CSP, "max-age=86400")
             if url.path in ("/favicon.ico", "/apple-touch-icon.png"):     # asked for without the page
                 return self.send(200, (STATIC / "icon.png").read_bytes(), "image/png")
-            if url.path == "/api/info":
-                return self.json(lib.info())
+            if url.path == "/api/info":             # (and which server: its process, data and code)
+                return self.json({**lib.info(), "pid": os.getpid(), "data": str(cli.DATA), "code": self.code})
             if url.path == "/api/search":
                 srcs = {s for s in qs.get("src", "").split(",") if s}
                 offset = max(0, int(qs.get("offset", "0") or 0))
@@ -754,6 +755,7 @@ class Server(ThreadingHTTPServer):
 def serve(port: int = PORT) -> None:
     """Run the server in this process until it is stopped. It cannot reach the internet."""
     cli.offline_only()
+    Handler.code = code_stamp()                      # (before the index loads: an edit meanwhile is newer)
     library = Library()
 
     def warm_up() -> None:                           # the first "search ai" is then quick
@@ -771,7 +773,12 @@ def serve(port: int = PORT) -> None:
     real = httpd.server_address[1]
     Handler.library = library
     Handler.hosts = {f"127.0.0.1:{real}", f"localhost:{real}"}
-    STATE.write_text(json.dumps({"pid": os.getpid(), "port": real}), encoding="utf-8")
+    try:
+        was = int(json.loads(STATE.read_text(encoding="utf-8"))["port"])
+    except (OSError, ValueError, KeyError, TypeError):
+        was = None
+    if was in (None, real) or answers(was) is None:  # (a second one, run by hand: search keeps the first)
+        STATE.write_text(json.dumps({"pid": os.getpid(), "port": real}), encoding="utf-8")
     print(f"docsearch: serving on http://127.0.0.1:{real}", flush=True)
     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown).start())
     try:
@@ -786,22 +793,58 @@ def serve(port: int = PORT) -> None:
 
 # --------------------------------------------------------------------------- control
 
-def running() -> int | None:
-    """The port of our running server, if there is one."""
+def code_stamp() -> int:
+    """When docsearch's code last changed (its Python and the page's files): a server started
+    before that runs the old code."""
+    here = Path(__file__).parent
+    return max(f.stat().st_mtime_ns for f in (*here.glob("*.py"), *STATIC.iterdir()) if f.is_file())
+
+
+def answers(port: int) -> dict | None:
+    """What a docsearch server on this port says of itself, if one answers there."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/info", timeout=1) as r:
+            info = json.loads(r.read())
+    except (OSError, ValueError):
+        return None
+    return info if isinstance(info, dict) and info.get("app") == "docsearch" else None
+
+
+def found() -> tuple[int, dict] | None:
+    """Our running server, if there is one: its port, and what it says of itself (its
+    process, its data, its code). At the port server.json says; else at the usual port, if it
+    serves this data (one whose server.json another server took)."""
     try:
         port = int(json.loads(STATE.read_text(encoding="utf-8"))["port"])
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/info", timeout=1) as r:
-            return port if json.loads(r.read()).get("app") == "docsearch" else None
-    except (OSError, ValueError, KeyError):
-        return None
+    except (OSError, ValueError, KeyError, TypeError):
+        port = None
+    if port is not None:
+        info = answers(port)
+        if info and info.get("data", str(cli.DATA)) == str(cli.DATA):
+            return port, info
+    if port != PORT:
+        info = answers(PORT)
+        if info and info.get("data") == str(cli.DATA):
+            return PORT, info
+    return None
+
+
+def running() -> int | None:
+    """The port of our running server, if there is one."""
+    server = found()
+    return server[0] if server else None
 
 
 def start() -> int:
     """Make sure the server runs (start it in the background if needed); return its port."""
-    port = running()
-    if port:
-        return port
-    cli.say("Starting docsearch (loading the index, a few seconds the first time)...")
+    server = found()
+    if server and server[1].get("code") == code_stamp():
+        return server[0]
+    if server:                                       # docsearch changed since it started: the new one
+        cli.say("docsearch changed since the search page started: starting it again (a few seconds)...")
+        stop()
+    else:
+        cli.say("Starting docsearch (loading the index, a few seconds the first time)...")
     STATE.unlink(missing_ok=True)
     if os.name == "nt":                              # no console window, and it outlives this one
         detach = {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
@@ -822,19 +865,23 @@ def start() -> int:
 
 
 def stop() -> bool:
-    try:
-        pid = int(json.loads(STATE.read_text(encoding="utf-8"))["pid"])
-    except (OSError, ValueError, KeyError):
-        return False
-    if running() is None:
+    server = found()
+    if server is None:
         STATE.unlink(missing_ok=True)
         return False
+    port, info = server
+    pid = info.get("pid")
+    if pid is None:                                  # (a server from before it said its process)
+        try:
+            pid = int(json.loads(STATE.read_text(encoding="utf-8"))["pid"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
     try:
-        os.kill(pid, signal.SIGTERM)                 # (on Windows: ends the process)
+        os.kill(int(pid), signal.SIGTERM)            # (on Windows: ends the process)
     except OSError:
         return False
     for _ in range(40):
-        if running() is None:
+        if answers(port) is None:
             return True
         time.sleep(0.1)
     return True

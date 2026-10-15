@@ -24,11 +24,13 @@ Search (opens the browser: results on the left, the documentation as real HTML):
     search sum of elements           # no package named: all packages
     search python 'Path()'           # symbols ( ) < > [ ] # $ ! * ? & | ; ~: in single quotes
                                      # (else the shell reads them itself), or type in the page
-    search stop                      # stop the background server (it starts by itself)
+    search stop                      # stop the background server (it starts by itself, and
+                                     # again after docsearch changed)
 
 In the page: type to search, Up/Down to choose, Enter for the full page (an offline
 copy; links between pages work too), Esc to go back or clear, / to jump to the search box,
-w to wrap or scroll long code, c to copy the name. Code blocks and signatures have Copy
+w to wrap or scroll long code, c to copy the name, 1-4 for only learn, do, look up or
+understand (0: all). Code blocks and signatures have Copy
 buttons; text can be selected and copied as in any web page.
 """
 from __future__ import annotations

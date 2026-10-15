@@ -97,7 +97,7 @@ docs.
 ```bash
 search numpy svd              # just numpy
 search how pandas pivot       # how to do it: pandas' guides, examples and functions first
-search                        # open the page
+search                        # open the page (no search needed)
 search list                   # what you have, and which version
 search stop                   # stop the background server
 search --help                 # every command (search add --help: its options)
@@ -108,6 +108,7 @@ in the page:
 | key | does |
 |---|---|
 | type | search |
+| 1 2 3 4 | only learn, do, look up or understand (0: all) |
 | ↑ ↓ | pick a result |
 | enter | open the full page |
 | esc | back |

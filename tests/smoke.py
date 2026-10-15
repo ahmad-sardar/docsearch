@@ -199,6 +199,20 @@ def versions() -> None:
                                               "Origin": f"http://127.0.0.1:{port}"}, method="POST")
         with urllib.request.urlopen(req, timeout=60) as r:
             chosen_in_page = json.loads(r.read()).get("use")
+        before = web.found()
+        real_stamp = web.code_stamp
+        web.code_stamp = lambda: real_stamp() + 1     # docsearch changed since the page started
+        try:
+            web.start()
+        finally:
+            web.code_stamp = real_stamp
+        restarted = web.found()
+        same_port = web.start()
+        check(before and restarted and restarted[1]["pid"] != before[1]["pid"]
+              and same_port == restarted[0] and web.found()[1]["pid"] == restarted[1]["pid"]
+              and restarted[1]["data"] == str(cli.DATA),
+              "plain search, after docsearch changed: the search page starts again with the new code; "
+              "unchanged, the running one")
         web.stop()
         check(chosen_in_page == "testdocs@1.1" and cli.in_use("testdocs")[0] == "testdocs@1.1",
               "chosen in the page: kept as your choice")

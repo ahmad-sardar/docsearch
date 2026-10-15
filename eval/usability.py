@@ -1,6 +1,6 @@
 """Usability: does the search give the answer a person wants, where they would look?
 
-    .venv/bin/python eval/usability.py [--data DIR] [--ai] [--out eval/results-usability.md]
+    .venv/bin/python eval/usability.py [--data DIR] [--ai] [--out docs/evaluation/results-usability.md]
 
 Each question in eval/usability.json is asked as a person would ask it (the package they
 search, plain search or `search how`), and the rank of the first result whose name holds the

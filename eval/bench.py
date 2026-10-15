@@ -1,6 +1,6 @@
 """Measure search quality, with statistics: which setup finds the right documentation?
 
-    .venv/bin/python eval/bench.py            (offline; see eval/README in results.md)
+    .venv/bin/python eval/bench.py            (offline; how it is measured: docs/evaluation/PROTOCOL.md)
 
 Question sets (reported separately):
   so      real Stack Overflow questions whose accepted answer links to the official docs

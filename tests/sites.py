@@ -1,5 +1,5 @@
 """Finding a package's docs on made-up sites, one of each kind that went wrong before (the
-spot check of 81 packages: eval/results-finding.md), with no internet: a fake web answers.
+spot check of 81 packages: docs/evaluation/results-finding.md), with no internet: a fake web answers.
 
     .venv/bin/python tests/sites.py
 

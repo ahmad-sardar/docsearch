@@ -196,7 +196,7 @@ def systems(b: Bench, names: list[str]) -> dict:
             lazy["qe"] = b.dense(V, m.query)
         return lazy["qe"]
 
-    def first_stage():                                   # chosen on dev (see results.md)
+    def first_stage():                                   # chosen on dev (docs/evaluation/results-dev.md)
         return b.hybrid(bge()) if os.environ.get("FIRST", "baseline") == "hybrid-bge" else b.baseline
 
     makers = {
@@ -325,5 +325,5 @@ if __name__ == "__main__":
     elif not a.report:
         run(a.split, a.systems.split(","), a.limit)
     text = report(a.split, show=a.show.split(",") if a.show else None)
-    (HERE / f"results-{a.split}.md").write_text(text)
+    (HERE.parent / "docs" / "evaluation" / f"results-{a.split}.md").write_text(text)
     print(text)

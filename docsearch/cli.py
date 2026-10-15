@@ -336,7 +336,7 @@ DEAD_HOSTS: dict[str, Failed] = {}   # hosts that failed for good this run: fail
 # (pkg.go.dev answers 429 after ~55 quick requests: a few seconds of this and it reads on).
 # A site that says its limit (RateLimit headers: huggingface.co, 100 pages in 5 minutes) is
 # never asked faster than what it has left until its window ends allows, and when nothing is
-# left, not until then: no request is sent that it would refuse (notes/fetching-policy.md).
+# left, not until then: no request is sent that it would refuse (docs/notes/fetching-policy.md).
 PACE: dict[str, dict] = {}       # host -> next: when it may be asked again, gap, floor, slowed
 _PACE_LOCK = __import__("threading").Lock()
 MAX_GAP = 10.0                   # seconds between requests at the slowest (unless Retry-After says)
@@ -3165,10 +3165,10 @@ class Index:
         """The ranked results. If the query has words the docs never use (misspelled), the
         corrected query is searched too and the two result lists are fused: a right
         correction brings its results up, a wrong one cannot push the typed query's out
-        (benchmark: eval/results-spelling.md). `mode`: "what", plain search: only the entries
+        (benchmark: docs/evaluation/results-spelling.md). `mode`: "what", plain search: only the entries
         it covers (MODES), each ranker choosing among them; "how": search how's own entries
         (MODES, and the API objects: numpy.argmax finds the indices of the maximum) fused with
-        every entry (eval/results-usability.md, T2); a purpose ("learn", "do", "lookup",
+        every entry (docs/evaluation/results-usability.md, T2); a purpose ("learn", "do", "lookup",
         "understand"): only its entries."""
         if mode == "how":                            # its own first, then everything: the function
             own, every = self.search(q, limit, "how-own"), self.search(q, limit)      # that does it too
@@ -3394,7 +3394,7 @@ def web_docs(name: str, spec: str, want: str, override: str, args, check_copy: b
             return None
         kind, root, inv, source = got
     from docsearch import hfdocs                     # Hugging Face's libraries: from its own copy of
-    lib = hfdocs.library(root) if kind == "website" else None      # their docs (notes/fetching-policy.md)
+    lib = hfdocs.library(root) if kind == "website" else None      # their docs (docs/notes/fetching-policy.md)
     hf = lib and hfdocs.plan(name, lib, want, (PYPI_INFO.get(name) or {}).get("version") or "")
     if hf:
         if check_copy and have_copy(spec, name, want, hf["version"], args):
@@ -5022,9 +5022,9 @@ def remember(spec: str) -> None:
             config_set(name, vals + [want])
 
 
-COMMANDS = {"add", "sync", "list", "remove", "embed", "serve", "stop", "known", "ai", "how", "update", "upgrade", "downgrade",
+COMMANDS = {"add", "sync", "list", "remove", "embed", "serve", "stop", "known", "ai", "how", "update", "downgrade",
             "setup", "save"}
-ONLINE = {"add", "sync", "embed", "update", "upgrade", "downgrade", "setup", "save"}   # the only commands that may go online
+ONLINE = {"add", "sync", "embed", "update", "downgrade", "setup", "save"}   # the only commands that may go online
                                        # (embed: only to download the model, once)
 
 

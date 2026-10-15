@@ -24,7 +24,7 @@ search ai how do i drop duplicate rows    # a question, ranked by a small local 
 your browser opens with results on the left and the docs on the right (safari on a mac).
 that's it.
 
-![docsearch: "matrix" in the cuda docs, ranked with ai](docs/screenshot.png)
+![docsearch: "read a csv file" in the pandas docs, do only: read_csv's examples first](docs/screenshot.png)
 
 ## what's in it
 
@@ -78,7 +78,7 @@ search add numpy pandas rust
 setup stopped halfway? run it again: what's already downloaded is checked and kept.
 
 no gpu needed. on a mac with apple silicon the models run on the gpu, everywhere else on
-the processor: same results (measured, see `eval/results-backends.md`), just slower.
+the processor: same results (measured, see `docs/evaluation/results-backends.md`), just slower.
 `search ai` takes ~6.5 s instead of ~3 s on a fast processor, more on a slow one, and
 computing the vectors in `search add` takes longer. plain search is
 still instant. needs ~3 GB of memory with ai. no man pages on windows.
@@ -162,7 +162,7 @@ programs too. each says whether its code is complete, read from the code itself:
 or what it needs first ("needs df (from earlier)", "needs import polars as pl"). numpy's and
 pandas' examples assume `np` and `pd`, as their docs say.
 
-measured on the stack overflow questions (`eval/results-organized.md`, test split, 348
+measured on the stack overflow questions (`docs/evaluation/results-organized.md`, test split, 348
 questions, once): plain search 0.246 against 0.255 for every entry (p=0.45), names 0.958
 against 0.964; `search how` 0.267, names too (0.957). on the 27 questions whose answer is a
 tutorial or how-to, `search how` scores 0.28 against 0.18: better, but too few questions to be
@@ -402,7 +402,8 @@ the answer is the first result for 29 of 44 "how do i" questions and 22 of 27 "w
 ones; 2 and 0 are missing from the top 50. on 348 stack overflow questions, plain search
 finds the docs entry an answer links to about as often as searching every entry does, and a
 name lookup gives its entry first 92% of the time, in the top 5 always. the numbers, how
-they were measured, and each change's effect are in `eval/`.
+they were measured, and each change's effect are in `docs/evaluation/` (the scripts and their
+questions: `eval/`); design notes are in `docs/notes/`.
 
 ## license
 

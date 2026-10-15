@@ -7,7 +7,7 @@ official docs entry; it only changes the order. Results whose API name is exactl
 query (np.sum, Vec::push) stay first: the benchmark showed the model would otherwise
 move them down.
 
-Which model: the one the benchmark in eval/ picked (see eval/results-test.md), within a
+Which model: the one the benchmark in eval/ picked (see docs/evaluation/results-test.md), within a
 memory budget of 4 GB for the whole search page. Its files live on this computer in
 data/models: `search setup` fetches them once, from a fixed commit of the Hugging Face
 repository, and checks them; searching never downloads anything.

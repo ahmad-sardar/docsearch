@@ -789,6 +789,13 @@ def reload_now(force: bool = False) -> dict:
 class Server(ThreadingHTTPServer):
     request_queue_size = 128       # a page asks for its images at once: 5 waiting (the default) drop some
 
+    def handle_error(self, request, client_address) -> None:
+        """A page that stopped waiting (a search typed further, a page left) is not an error:
+        not logged (server.log had 800 such tracebacks)."""
+        if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)):
+            return
+        super().handle_error(request, client_address)
+
 
 def serve(port: int = PORT) -> None:
     """Run the server in this process until it is stopped. It cannot reach the internet."""
@@ -888,6 +895,7 @@ def start() -> int:
         detach = {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
     else:
         detach = {"start_new_session": True}
+    keep_short(LOG)
     with open(LOG, "ab") as log:
         subprocess.Popen([sys.executable, "-m", "docsearch.web", "serve"], stdout=log, stderr=log,
                          stdin=subprocess.DEVNULL, cwd=str(cli.ROOT), **detach,
@@ -922,6 +930,18 @@ def reload_running() -> str | None:
         except (OSError, ValueError):
             pass
     return "stopped" if stop() else None
+
+
+def keep_short(log: Path, most: int = 1 << 20) -> None:
+    """A log over `most` bytes keeps its last quarter (it grows with each start)."""
+    try:
+        if log.stat().st_size > most:
+            with open(log, "rb") as f:
+                f.seek(-most // 4, os.SEEK_END)
+                tail = f.read()
+            log.write_bytes(tail[tail.find(b"\n") + 1:])
+    except OSError:
+        pass
 
 
 def stop() -> bool:

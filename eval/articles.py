@@ -6,7 +6,7 @@ the reference; it is only used here.
 
 Recall: how much of the reference's text (4-word runs) the article kept; precision: how
 much of the article's text the reference also counts as the article. Pages are cached in
-eval/cache/articles/. Results: eval/results-articles.md.
+eval/cache/articles/. Results: docs/evaluation/results-articles.md.
 """
 import hashlib
 import re

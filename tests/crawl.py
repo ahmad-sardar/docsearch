@@ -363,7 +363,7 @@ def main() -> None:
 
 
 def politeness(site: str) -> None:
-    """A site's own limits kept (notes/fetching-policy.md): a long pause it asks for stops the
+    """A site's own limits kept (docs/notes/fetching-policy.md): a long pause it asks for stops the
     download, kept, to go on after it; the requests it says are left are spread to the end of
     its window; a robots.txt that cannot be read allows nothing (RFC 9309)."""
     import contextlib

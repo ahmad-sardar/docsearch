@@ -6,7 +6,7 @@ same docs, built, are published by Hugging Face as one file per version in the d
 hf-doc-build/doc-build (its staff point there to download them): each page as Markdown, the
 site's outline (_toctree.yml), and the versions it has (_versions.yml). So a library's docs
 are two downloads, of files (whose limit is 3,000 in five minutes), and no page is asked for.
-notes/fetching-policy.md has the reasons.
+docs/notes/fetching-policy.md has the reasons.
 """
 from __future__ import annotations
 

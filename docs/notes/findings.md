@@ -34,7 +34,7 @@
 | P1 Windows CI, Python 3.11 | T11: pushed; CI runs every test file on Windows, Linux, Mac, Python 3.11-3.14 |
 | page rendering in a browser | checked (T11): results, how mode, "where" labels, an API entry from a Markdown reference |
 
-From the spot check (`notes/spot-check.md`; temp copies of 15 packages; the 81-package
+From the spot check (`docs/notes/spot-check.md`; temp copies of 15 packages; the 81-package
 docs-finding run) and the usability run (about 60 real questions on your page and on the new
 langchain copy, each result read). Evidence is from those runs.
 
@@ -97,7 +97,7 @@ langchain copy, each result read). Evidence is from those runs.
   Python's "Reading and writing files" had 111 letters of 8,385 (the label's anchor opens the
   section; the cutter took the next paragraph). Every Sphinx copy.
 
-S2, S3, S8, S9: fixed in T1 (`eval/results-usability.md`).
+S2, S3, S8, S9: fixed in T1 (`docs/evaluation/results-usability.md`).
 
 ## Finding the docs
 - **D1 Hugging Face** (transformers, datasets, accelerate, diffusers): "rate limited, nothing

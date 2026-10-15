@@ -32,7 +32,7 @@ Hugging Face's copy, read for real (transformers, in a scratch folder): `_versio
 `v5.19.0.zip` (57 MB): 753 pages, 14,007 entries (API objects by their headings' ids), the
 site's outline, in 79 s; no page of huggingface.co asked for.
 
-The rest of T5 (notes/fetching-policy.md): requests paced by the site's own RateLimit header;
+The rest of T5 (docs/notes/fetching-policy.md): requests paced by the site's own RateLimit header;
 a long pause it asks for stops the download, kept, to go on after it; robots.txt as RFC 9309
 (a 5xx means nothing is read); the survey asks once per list and less; `search add NAME`
 uses packages.toml's address for it.

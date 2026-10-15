@@ -111,9 +111,6 @@ def robots(root: str):
     return rp
 
 
-MD_LINK = re.compile(r"\]\((\S+?)\)")
-
-
 def from_llms(url: str, prefixes: list[str], limit: int) -> list[str]:
     """Pages listed in an llms.txt index (and the section indexes it points to): web pages,
     or Markdown pages (.md)."""

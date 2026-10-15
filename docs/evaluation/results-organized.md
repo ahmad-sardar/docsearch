@@ -430,7 +430,7 @@ be sure. Most questions (218 of 245) link a reference page: how is not their sea
 ## Search how, T2 (2026-10-12), dev split, your data organized by version 3
 
 How mode is its own entries (learn, do, examples) and the API objects, fused with every entry
-(eval/results-usability.md has the candidates). Paired with how mode as it was:
+(docs/evaluation/results-usability.md has the candidates). Paired with how mode as it was:
 
 | questions | how as it was | how now | Δ [95% CI] | p |
 |---|---|---|---|---|

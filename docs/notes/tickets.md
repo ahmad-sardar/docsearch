@@ -27,10 +27,10 @@ top 5, missing.
   - `eval/usability.py`;
   - `eval/usability.json`: this run's ~60 questions plus 20 written before any change, each
     with package, mode and wanted answer;
-  - `eval/results-usability.md`: the baseline on your current data.
+  - `docs/evaluation/results-usability.md`: the baseline on your current data.
 - **Done when:** the baseline table exists; re-running gives the same numbers.
 
-### T1 Examples: right purpose, real examples only (done: `eval/results-usability.md`)
+### T1 Examples: right purpose, real examples only (done: `docs/evaluation/results-usability.md`)
 - **Change:**
   - re-organizing keeps an example's purpose (do, or learn in a tutorial);
   - an example is an "Examples" part, or code the docs present as one, not every code block;
@@ -43,33 +43,33 @@ top 5, missing.
   - "Reading and writing files" is in the how-mode top 5 for "how read a file line by line";
   - Python's example count is reported, with 20 read by hand.
 
-### T2 How mode finds the function that does it (done: `eval/results-usability.md`)
+### T2 How mode finds the function that does it (done: `docs/evaluation/results-usability.md`)
 - **Change:** three candidates, measured, one kept:
   - (a) how = learn + do + examples + API objects;
   - (b) how = everything, guides and examples ranked first;
   - (c) as now.
-- **Deliverables:** `cli.Index.search` / `MODES`; results added to `eval/results-usability.md`
-  and `eval/results-organized.md`.
+- **Deliverables:** `cli.Index.search` / `MODES`; results added to `docs/evaluation/results-usability.md`
+  and `docs/evaluation/results-organized.md`.
 - **Done when:**
   - the S1 answers are in the how-mode top 3;
   - the usability score in how mode improves;
   - Stack Overflow how mode does not drop on how-to answers;
   - plain search is unchanged (names within 0.01).
 
-### T3 One result per thing (done: `eval/results-usability.md`)
+### T3 One result per thing (done: `docs/evaluation/results-usability.md`)
 - **Change:**
   - one Sphinx section reached by two labels (same page, same heading) is one entry;
   - one name on two pages is told apart (`std::vector<bool>`) or shown once;
   - repeated headings get their own anchors.
 - **Done when:** no repeated result in the usability run; anchors are unique per page.
 
-### T4 Your project's packages first (done: `eval/results-usability.md`)
+### T4 Your project's packages first (done: `docs/evaluation/results-usability.md`)
 - **Change:** searching all packages puts the packages of your project (its languages: Python,
   C++…) first. Others follow, never mixed into the first results.
 - **Done when:** the cross-package usability questions have their language's answer first.
   Searching one package is unchanged.
 
-### T5 Finding the docs: trusted paths, fewer requests (done: `eval/results-finding.md`, `notes/fetching-policy.md`)
+### T5 Finding the docs: trusted paths, fewer requests (done: `docs/evaluation/results-finding.md`, `docs/notes/fetching-policy.md`)
 - **Change:**
   - **The survey:**
     - its requests never mark a place unreached;
@@ -88,7 +88,7 @@ top 5, missing.
   - numba is found; onnx and opencv are found or the reason is said;
   - a re-run of the 81-package docs-finding is no worse anywhere.
 
-### T6 Guides: docs sites only, never twice (done: `eval/results-finding.md`)
+### T6 Guides: docs sites only, never twice (done: `docs/evaluation/results-finding.md`)
 - **Change:**
   - a guide link's whole text must name a guide;
   - a guide must be a docs site (an inventory, a search index, llms.txt, or a page saying its
@@ -102,7 +102,7 @@ top 5, missing.
   - polars' guide is 86 pages;
   - numpy's tutorials and langchain's guide are still found.
 
-### T7 Reading: complete lists, sections everywhere (done: `eval/results-finding.md`)
+### T7 Reading: complete lists, sections everywhere (done: `docs/evaluation/results-finding.md`)
 - **Change:**
   - expected pages only from complete lists;
   - the sections question for every part, once per site, kept per site in packages.toml;
@@ -113,7 +113,7 @@ top 5, missing.
     ask again;
   - without a terminal it says what it chose.
 
-### T8 Organizing by the site's structure (done: `eval/results-organized.md`; the concept option measured and dropped)
+### T8 Organizing by the site's structure (done: `docs/evaluation/results-organized.md`; the concept option measured and dropped)
 - **Change:**
   - **labels pass only through contents and outline**, not by address;
   - **place-name sections** label only their own page;
@@ -129,7 +129,7 @@ top 5, missing.
   - the earlier good sites are unchanged (fastapi, streamlit, httpx, numpy, Python);
   - "what is a checkpointer" improves or the option is dropped.
 
-### T9 Markdown API references (done: `eval/results-organized.md`)
+### T9 Markdown API references (done: `docs/evaluation/results-organized.md`)
 - **Change:**
   - a page titled as the last part of its address is an API entry named from the address
     (`langchain.agents.create_agent`);
@@ -140,7 +140,7 @@ top 5, missing.
   - no "› Signature" results;
   - langchain has example entries.
 
-### T10 Replace a copy by coverage; your data (done: `eval/results-usability.md`)
+### T10 Replace a copy by coverage; your data (done: `docs/evaluation/results-usability.md`)
 - **Change:** a re-download replaces the copy you have when it read ≥ 90% of the listed pages
   with under 5% failed. The 70% rule applies only when coverage is unknown.
 - **Then, with you at your terminal:** `search add langchain` (sections question), then
@@ -148,11 +148,11 @@ top 5, missing.
 - **Done when:** your langchain is the new one; the others have their guides and outlines; the
   usability run on your data is re-done.
 
-### T11 Release (done: CI on the push; the test split in `eval/results-organized.md`)
+### T11 Release (done: CI on the push; the test split in `docs/evaluation/results-organized.md`)
 - **Deliverables:**
   - `tests/sites.py` (made-up sites of each failing kind) and the new tests, all in CI;
   - README updated;
-  - `notes/findings.md` updated, each finding fixed or why not;
+  - `docs/notes/findings.md` updated, each finding fixed or why not;
   - push.
 - **Done when:**
   - CI is green on Windows and Python 3.11–3.14;

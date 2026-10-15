@@ -3,7 +3,7 @@
 Everything built on this branch since `0de59d4`: organizing (learn, do, look up,
 understand), official guides, `search how`, examples, the site survey (lists, Markdown,
 coverage, sections, outline). Each item has how it is checked. Results go in
-`notes/findings.md`.
+`docs/notes/findings.md`.
 
 Data used:
 - **"temp"**: copies made in a scratch folder, never your `data/`.

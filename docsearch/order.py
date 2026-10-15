@@ -115,20 +115,37 @@ def page_links(html: str) -> tuple[list[str], list[str]]:
     return toc, nav
 
 
-def start_urls(meta: dict) -> list[str]:
-    """Where the docs begin: the root page, or the start of each part (sources.py)."""
+def known_parts(meta: dict) -> list[dict] | None:
+    """A known source's parts (sources.py), as resolved for this copy's version; None for
+    other docs."""
     from docsearch import sources
-    root = meta.get("root", "")
     name, _, want = str(meta.get("spec") or meta.get("name", "")).partition("==")
     known = sources.KNOWN.get(name) if meta.get("kind") == "known" else None
-    if known and not want and known.get("version_from") and re.fullmatch(r"[\d.]+", known.get("version", "")):
+    if not known:
+        return None
+    if not want and known.get("version_from") and re.fullmatch(r"[\d.]+", known.get("version", "")):
         want = meta.get("version", "")                 # docs that follow releases (OCaml 5.5)
-    plan = sources.resolve(name, want) if known else None
-    out = [] if plan else [root]
-    for part in ((plan.get("parts") or [plan]) if plan else []):
-        starts = part.get("start") or part.get("url") or part.get("prefix") or part.get("root") or []
-        out += [starts] if isinstance(starts, str) else list(starts)
+    plan = sources.resolve(name, want)
+    return (plan.get("parts") or [plan]) if plan else None
+
+
+def part_start(part: dict) -> list[str]:
+    starts = part.get("start") or part.get("url") or part.get("prefix") or part.get("root") or []
+    return [starts] if isinstance(starts, str) else list(starts)
+
+
+def start_urls(meta: dict) -> list[str]:
+    """Where the docs begin: the root page, or the start of each part (sources.py)."""
+    root = meta.get("root", "")
+    parts = known_parts(meta)
+    out = [u for part in parts or [] for u in part_start(part)] if parts else [root]
     return [u for u in out if u.startswith(root)] + [g["root"] for g in meta.get("guides") or []]
+
+
+def part_titles(meta: dict) -> dict[str, str]:
+    """A known source's parts named as their publisher names them ("CUDA C++ Best Practices
+    Guide", whose one page's first heading is "1. Overview"), by their start address."""
+    return {part_start(p)[0]: p["title"] for p in known_parts(meta) or [] if p.get("title") and part_start(p)}
 
 
 def seeds(meta: dict) -> list[str]:

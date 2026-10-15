@@ -511,3 +511,35 @@ entry; "what" is plain search; "how" is search how (T2). MRR@10 [95% CI], paired
 
 Names within 0.01 in both. The 27 questions whose answer is a tutorial or how-to: how 0.28,
 every entry 0.18 (too few to be sure).
+
+## Organizing version 8 (2026-10-15): CUDA's guides
+
+CUDA's Programming Guide and Best Practices Guide were all "look up" (6,083 of 6,086 entries;
+nothing to learn from). Three reasons: a "Contents" page lists the guide's first page, so that
+page did not start a part and its title ("CUDA Programming Guide") was not read as one; CUDA's
+titles are numbered ("1. Introduction to CUDA"), and no label matches a number; and the Best
+Practices Guide is one page whose first heading is "1. Overview". Now: a page that only a
+Contents page lists starts a part; titles are read without their numbers; "Introduction to …"
+is to learn from, appendices to look up; a known source's parts are named as their publisher
+names them (sources.py).
+
+Your data, cloned (every page's purpose, before → after): only CUDA changes, and two pages
+elsewhere ("Intro to data structures" in pandas, "An introduction to the ipaddress module" in
+Python: do → learn).
+
+| CUDA entries | learn | do | look up |
+|---|---|---|---|
+| before | 0 | 3 | 6,083 |
+| after | 78 (Introduction to CUDA, Intro to CUDA C++ and Python) | 634 (the guides) | 5,374 (the APIs, the appendices) |
+
+`eval/organized.py --split dev`, version 7 → 8 on the same data: plain search the same on
+every question (Stack Overflow 0.243, names 0.920, Δ 0.000, p=1.0); search how 0.422 → 0.422
+(Stack Overflow 0.258 → 0.257, names 0.920 → 0.920).
+
+Usability (`eval/runs/usability-v8.json`): #1 52 → 50, top 3 62 → 62, top 5 64 → 64,
+missing 2 → 2. CUDA in search how now gives its guides first, as search how does:
+"launch a kernel" gives "Device-Side Kernel Launch", "Kernel Launch APIs" and "Launching
+Kernels" (#2, #5, #6) before the functions the question wants (`cuLaunchKernelEx` 8 → 15);
+"copy memory from host to device", a guide section, then `cudaMemcpyPeer` (1 → 2). Two
+langchain questions swap near-ties (1 → 2, 8 → 9): CUDA's guides left plain search's entries,
+which moves every fused rank a little.

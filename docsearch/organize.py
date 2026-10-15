@@ -31,12 +31,14 @@ from typing import NamedTuple
 from docsearch import cli
 from docsearch import pages as offline
 
-VERSION = 7                       # meta["organized"]: the rules a copy was organized with (2: examples;
+VERSION = 8                       # meta["organized"]: the rules a copy was organized with (2: examples;
                                   # 3: examples keep their purpose, only real ones, no placeholders,
                                   # whole sections; 4: a section reached by two labels, once;
                                   # 5: purposes by the site's structure, not by address;
                                   # 6: Markdown API references' pages, API entries;
-                                  # 7: a big labeled section parted by its own sections too)
+                                  # 7: a big labeled section parted by its own sections too;
+                                  # 8: numbered titles, a guide under a Contents page, a known
+                                  # source's parts by their names: CUDA's guides)
 PURPOSES = {"learn": "Learn", "do": "Do", "lookup": "Look up", "understand": "Understand"}
 
 # The sites' own names for their parts, on a title made plain (lower case, without the
@@ -52,7 +54,7 @@ LABELS = [
                 r"about( this| these)? (documents?|documentation|docs)|dealing with bugs|reporting bugs|"
                 r"search( page)?|download( .*)? documentation|improve( a| this)? documentation( page)?"),
     ("learn", r"(.* )?tutorials?|getting started( .*)?|quick ?start( guide)?|absolute basics( .*)?|"
-              r"(\d+ )?minutes to( .*)?|first steps( .*)?"),
+              r"(\d+ )?minutes to( .*)?|first steps( .*)?|(an? )?(intro|introduction) to( .*)?"),
     ("do", r"(.* )?how-?tos?|(.* )?howtos?|(.* )?cookbook|(.* )?faqs?|(.* )?frequently asked questions|"
            r"installing( .*)?|installation( .*)?|(.* )?migration guide|setup and usage"),
     ("lookup", r"glossary|(.* )?index"),
@@ -67,9 +69,12 @@ PARTS = [
     ("do", r"(.* )?how-?tos?( .*)?|(.* )?howtos?( .*)?|how to .*|(.* )?user'?s? guide( .*)?|(.* )?recipes|"
            r"install( .*)?|migrating( .*)?|porting( .*)?|(.* )?examples|(.* )?gallery|(.* )?guides?"),
     ("lookup", r"(.* )?reference( manual| guide)?|(.* )?api( reference| documentation| docs)?|"
-               r"(.* )?standard library|(.* )?module index"),
+               r"(.* )?standard library|(.* )?module index|(.* )?appendix|(.* )?appendices"),
     ("understand", r"(.* )?fundamentals|(.* )?internals|(.* )?concepts|design( .*)?"),
 ]
+# A page that only lists the docs (Sphinx's root document, "Contents"): the pages it lists
+# start parts, as if nothing listed them (CUDA's "CUDA Programming Guide" is under one)
+CONTENTS = {"contents", "table of contents"}
 LABEL_RE = {p: re.compile(rx) for p, rx in LABELS}
 # Titles that name a place, not a kind of page: an "Overview" section holds how-tos and tutorials
 # too (langchain's "Create an agent"), so such a title labels its own page only
@@ -139,6 +144,7 @@ def unread(titles: dict[str, str], api_pages: set[str], names: set[str]) -> set[
 def plain_title(title: str, names: set[str]) -> str:
     """A title as LABELS reads it: "NumPy 2.5.0 Release Notes" -> "2.5.0 release notes"."""
     t = re.sub(r" \((page|section)\)$", "", title).lower().replace("’", "'")
+    t = re.sub(r"^\d+(\.\d+)*\.?\s+", "", t.strip())         # (its number: "2.1. Intro to CUDA C++")
     t = re.sub(r"[^\w\s'+./-]", " ", t)
     words = [w for w in t.split() if w not in names and w not in ("the", "a", "an")]
     return " ".join(words)
@@ -208,6 +214,11 @@ def classify(sid: str, meta: dict, entries: list[cli.Entry]) -> Pages:
             title[rel] = re.sub(r" \(page\)$", "", e.title)
     pages = set(title) | {p for e in entries if (p := page_of(e.location, meta, stored))}
     guides = {g["dir"] + "/": g for g in meta.get("guides") or []}
+    for url, name in order.part_titles(meta).items():    # a known source's part: as its publisher
+        first = page_of(url, meta, stored)               # names it (sources.py)
+        if first:
+            pages.add(first)
+            title[first] = name
     for g in guides.values():                    # a guide's first page: named as its link names it
         first = page_of(g["root"], meta, stored)   # (one its index does not list stands for it:
         if first:                                  # numpy's tutorials have no first page)
@@ -235,8 +246,11 @@ def classify(sid: str, meta: dict, entries: list[cli.Entry]) -> Pages:
     # "Getting Started", is not what docs/proxy/... are; spaCy's usage page, "Install spaCy",
     # is not what usage/... are): a page no contents nor outline places is named by its folder.
     walk: dict[str, str | None] = {r: contents.parent.get(r) for r in pages if r not in contents.by_nav}
-    label = {r: None if r in named else label_of(title.get(r, ""), names, r in lists or contents.parent.get(r) is None)
-             for r in pages}
+    def starts_part(r: str) -> bool:
+        """A page whose contents list other pages, or that nothing but a list of the docs lists."""
+        above_ = contents.parent.get(r)
+        return r in lists or above_ is None or plain_title(title.get(above_, ""), names) in CONTENTS
+    label = {r: None if r in named else label_of(title.get(r, ""), names, starts_part(r)) for r in pages}
     label.update({r: "removed" for r in unread})
     # A page no contents list has, in the site's own outline (site.py: its llms.txt headings, its
     # search index, its sidebar): above it are its sections ("§Get started"), as if they were

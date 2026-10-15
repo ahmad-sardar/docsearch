@@ -107,10 +107,12 @@ KNOWN: dict[str, dict] = {
         "version_from": ["https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html",
                          r"CUDA Toolkit (\d+\.\d+(?: Update \d+)?)"],
         "parts": [
-            {"kind": "sphinx", "url": "https://docs.nvidia.com/cuda/cuda-programming-guide/"},
-            {"kind": "sphinx", "url": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/"},
-            {"kind": "sphinx", "url": "https://docs.nvidia.com/cuda/cuda-runtime-api/"},
-            {"kind": "sphinx", "url": "https://docs.nvidia.com/cuda/cuda-driver-api/"},
+            {"kind": "sphinx", "url": "https://docs.nvidia.com/cuda/cuda-programming-guide/",
+             "title": "CUDA Programming Guide"},
+            {"kind": "sphinx", "url": "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/",
+             "title": "CUDA C++ Best Practices Guide"},
+            {"kind": "sphinx", "url": "https://docs.nvidia.com/cuda/cuda-runtime-api/", "title": "CUDA Runtime API"},
+            {"kind": "sphinx", "url": "https://docs.nvidia.com/cuda/cuda-driver-api/", "title": "CUDA Driver API"},
         ],
     },
     "mojo": {

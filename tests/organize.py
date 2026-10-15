@@ -142,6 +142,7 @@ def main() -> None:
     yours_first()
     sections_kept()
     by_structure()
+    under_contents()
     markdown_api()
     replaced_by_coverage()
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Site)
@@ -272,6 +273,13 @@ def labels() -> None:
                    "NumPy user guide": "do", "Development": "removed", "Building from source": "removed",
                    "pandas documentation": None},
           f"a page that starts a part: its loose names count too ({part})")
+    numbered = {t: organize.label_of(t, {"cuda"}, part=k < 3) for k, t in enumerate((
+        "1. Introduction to CUDA", "5. Technical Appendices", "3. Tutorials", "2.1. Intro to CUDA C++",
+        "4.2. CUDA Graphs", "2.3. Writing SIMT Kernels"))}
+    check(numbered == {"1. Introduction to CUDA": "learn", "5. Technical Appendices": "lookup", "3. Tutorials": "learn",
+                       "2.1. Intro to CUDA C++": "learn", "4.2. CUDA Graphs": None, "2.3. Writing SIMT Kernels": None},
+          f"numbered titles (CUDA's): read without their number; an introduction is to learn from, "
+          f"appendices to look up ({numbered})")
     titles = {"whatsnew/index.html": "Release notes", "whatsnew/v1.0.html": "Version 1.0 (January 1, 2026)",
               "whatsnew/api.html": "Version 1.1", "dev/index.html": "Contributing to Mini",
               "dev/internals.html": "Internals", "user/index.html": "User guide"}
@@ -480,6 +488,55 @@ def by_structure() -> None:
           and "blog/post" not in purpose and {"Build", "Observe", "Deploy"} <= set(parts.get("do", [])),
           f"by the site's structure: not by address (but a collection's folder); a place names its own page; "
           f"changelogs and blogs left out; a big section parted by its own ({purpose}, {parts})")
+
+
+def under_contents() -> None:
+    """CUDA's guides: a "Contents" page lists the guide's first page, so that page starts a part
+    and its title counts ("CUDA Programming Guide": do); its numbered parts are read without
+    their numbers ("1. Introduction to CUDA": learn); a known source's parts are named as the
+    publisher names them (a one-page guide whose first heading is "1. Overview")."""
+    from docsearch import order, pages as offline, sources
+    root = "https://gpu.example/"
+    toc = lambda *hrefs: ('<div class="toctree-wrapper compound"><ul>'
+                          + "".join(f'<li class="toctree-l1"><a href="{h}">{h}</a></li>' for h in hrefs) + "</ul></div>")
+    pages = {"gpu-programming-guide/contents.html": ("Contents", toc("index.html")),
+             "gpu-programming-guide/index.html": ("GPU Programming Guide", ""),
+             "gpu-programming-guide/part1.html": ("1. Introduction to GPU", toc("01-intro/model.html")),
+             "gpu-programming-guide/01-intro/model.html": ("1.1. Programming Model", ""),
+             "gpu-programming-guide/part2.html": ("2. Programming GPUs", toc("02-basics/intro-cpp.html", "02-basics/kernels.html")),
+             "gpu-programming-guide/02-basics/intro-cpp.html": ("2.1. Intro to GPU C++", ""),
+             "gpu-programming-guide/02-basics/kernels.html": ("2.2. Writing Kernels", ""),
+             "gpu-programming-guide/part5.html": ("5. Technical Appendices", toc("05-appendices/env.html")),
+             "gpu-programming-guide/05-appendices/env.html": ("5.1. Environment Variables", ""),
+             "practices/contents.html": ("Contents", toc("index.html")),
+             "practices/index.html": ("1. Overview", ""),
+             "api/index.html": ("GPU Runtime API", "")}
+    entries = [cli.Entry(f"{t} (page)", "page", root + r, f"About {t}.", "gpu") for r, (t, _) in pages.items()]
+    entries.append(cli.Entry("Memory transfers", "section", root + "practices/index.html#memory", "Copy less.", "gpu"))
+    known = {"about": "GPU", "root": root, "parts": [
+        {"kind": "sphinx", "url": root + "gpu-programming-guide/", "title": "GPU Programming Guide"},
+        {"kind": "sphinx", "url": root + "practices/", "title": "GPU Best Practices Guide"},
+        {"kind": "sphinx", "url": root + "api/", "title": "GPU Runtime API"}]}
+    sources.KNOWN["gpu"] = known
+    try:
+        cli.save("gpu", entries, {"name": "gpu", "spec": "gpu", "kind": "known", "root": root, "pages": True,
+                                  "count": len(entries), "created": "2026-10-15 10:00", "model": None,
+                                  "nav": [root + "gpu-programming-guide/contents.html", root + "practices/contents.html"]})
+        for r, (t, body) in pages.items():
+            offline.save_page(cli.HOME / "gpu" / "pages", r, f"<html><body><main><h1>{t}</h1>{body}<p>Text.</p></main></body></html>")
+        meta = cli.load_meta("gpu")
+        listed = order.page_order("gpu", meta).parent.get("gpu-programming-guide/index.html")
+        kept, _ = organize.organize("gpu", list(cli.iter_entries("gpu")), meta)
+        purpose = {e.location[len(root):]: e.purpose for e in kept}
+        run("remove", "gpu")
+    finally:
+        del sources.KNOWN["gpu"]
+    want = {"gpu-programming-guide/index.html": "do", "gpu-programming-guide/01-intro/model.html": "learn", "gpu-programming-guide/02-basics/intro-cpp.html": "learn",
+            "gpu-programming-guide/02-basics/kernels.html": "do", "gpu-programming-guide/05-appendices/env.html": "lookup",
+            "practices/index.html": "do", "practices/index.html#memory": "do", "api/index.html": "lookup"}
+    check(listed == "gpu-programming-guide/contents.html" and {r: purpose.get(r) for r in want} == want,
+          f"a guide under a Contents page, numbered titles, a known source's parts named by their publisher "
+          f"({ {r: purpose.get(r) for r in want} })")
 
 
 def markdown_api() -> None:

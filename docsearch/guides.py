@@ -165,8 +165,9 @@ def plan_with(plan: dict, name: str, args, newest: bool, pypi: bool = False) -> 
     names = {name.lower(), name.replace("-", " ").lower()}
     found: list[dict] = []
     if newest:
-        try:
-            _, page = cli.landing(root)
+        seen = cli.PAGES_SEEN.get(root)
+        try:                                         # (read already this run: not asked again)
+            page = seen[1] if seen and seen[1] else cli.landing(root)[1]
         except Exception:  # noqa: BLE001 - no page: no header to read
             page = ""
         found = find_guides(root, page, names) if page else []

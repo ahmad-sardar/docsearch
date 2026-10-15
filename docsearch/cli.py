@@ -474,11 +474,115 @@ def http_get(url: str, timeout: float = 20, guess: bool = False, limit: int | No
                 DEAD_HOSTS[host] = e       # check (Read the Docs): it lasts, so no more asking this run
             if e.kind not in TRANSIENT or wait is None or STOPPING:
                 raise
-            time.sleep(min(30.0, e.wait if e.wait is not None else wait))
+            pause = min(30.0, e.wait if e.wait is not None else wait)
+            if Telling.on:
+                say(f"    asking again in {pause:.0f} s")
+            time.sleep(pause)
     raise AssertionError("unreachable")
 
 
+class Telling:
+    """While docs are found and their site surveyed (before the pages are read), each request is
+    said as it goes: what is asked, how the site answered, and how long the answer took, so a
+    slow site shows as one; at the end, the time spent waiting for answers against docsearch's
+    own. On a terminal, a request that takes long counts its seconds as it waits."""
+    on = False
+    started = 0.0
+    site = 0.0                       # seconds waiting for answers
+    turn = 0.0                       # seconds waiting our turn (a site's Crawl-delay, its limits)
+    count = 0
+    mine = __import__("threading").local()    # .sent: [when this thread's request went (after its turn)]
+    lock = __import__("threading").Lock()
+
+
+@contextlib.contextmanager
+def telling():
+    """Say each request (Telling) in this block; nested blocks are one."""
+    if Telling.on:
+        yield
+        return
+    Telling.on, Telling.started, Telling.site, Telling.turn, Telling.count = True, time.monotonic(), 0.0, 0.0, 0
+    try:
+        yield
+    finally:
+        Telling.on = False
+        if Telling.count:
+            own = time.monotonic() - Telling.started - Telling.site - Telling.turn
+            say(f"  {Telling.count} request{'s' if Telling.count > 1 else ''}: {Telling.site:.1f} s waiting for "
+                f"the site's answers" + (f", {Telling.turn:.1f} s waiting our turn (its pace)" if Telling.turn >= 0.5 else "")
+                + f", {max(0.0, own):.1f} s docsearch's own work")
+
+
+ANSWERS = {"not-found": "not there", "gone": "not there", "forbidden": "refused", "login": "needs a login",
+           "rate-limited": "too many requests", "server-error": "server error", "bot-check": "a bot check",
+           "dropped": "the connection dropped", "too-large": "too large"}
+
+
+def told(url: str, timeout: float, ask):
+    """One request, said (Telling): asked from this thread only (the survey's; the reading's
+    workers have their progress bar)."""
+    import threading
+    short = re.sub(r"^https?://", "", url)
+    short = short if len(short) <= 70 else short[:33] + "…" + short[-36:]
+    start = time.monotonic()
+    went = Telling.mine.sent = [start]               # (a list: the counting thread reads this one's)
+    done = threading.Event()
+
+    def count() -> None:                             # (a terminal: the seconds, as they pass)
+        while not done.wait(1.0):
+            waited = time.monotonic() - went[0]
+            if waited >= 2 and not done.is_set():
+                with Telling.lock:
+                    if not done.is_set():
+                        print(f"\r    {short} · waiting for an answer: {waited:.0f} s ", end="", file=sys.stderr, flush=True)
+    ticker = threading.Thread(target=count, daemon=True) if sys.stderr.isatty() else None
+    if ticker:
+        ticker.start()
+    try:
+        data, final = ask()
+        answer = f"{len(data) / 1024:,.0f} KB" if len(data) >= 1024 else f"{len(data)} bytes"
+        return data, final
+    except Failed as e:
+        answer = (f"no answer in {timeout:.0f} s" if e.kind == "timeout"
+                  else ANSWERS.get(e.kind, e.kind) + (f" ({e.detail})" if e.detail and e.detail.isdigit() else ""))
+        raise
+    except Exception as e:  # noqa: BLE001
+        answer = type(e).__name__
+        raise
+    finally:
+        end, at = time.monotonic(), went[0]
+        Telling.mine.sent = None
+        with Telling.lock:
+            done.set()
+            Telling.count += 1
+            Telling.site += end - at
+            Telling.turn += at - start
+            took = f"{end - at:.1f} s" + (f" (after {at - start:.0f} s for our turn)" if at - start >= 1 else "")
+            if ticker:
+                print("\r\033[K", end="", file=sys.stderr, flush=True)
+            say(f"    {short} · {answer} · {took}")
+
+
+ANSWERED_ABSENT: dict[str, Failed] = {}   # addresses that answered "not there" (404, 410) this run:
+                                           # not asked again (the survey's objects.inv, after finding)
+
+
 def http_get_once(url: str, timeout: float = 20, limit: int | None = None) -> tuple[bytes, str]:
+    import threading
+    gone = ANSWERED_ABSENT.get(url)
+    if gone is not None:
+        raise Failed(gone.kind, url, gone.detail)
+    try:
+        if Telling.on and threading.current_thread() is threading.main_thread():
+            return told(url, timeout, lambda: get_once(url, timeout, limit))
+        return get_once(url, timeout, limit)
+    except Failed as e:
+        if e.kind in ("not-found", "gone"):
+            ANSWERED_ABSENT[url] = e
+        raise
+
+
+def get_once(url: str, timeout: float = 20, limit: int | None = None) -> tuple[bytes, str]:
     import httpx
     for _ in range(6):
         if not safe_url(url):
@@ -486,6 +590,9 @@ def http_get_once(url: str, timeout: float = 20, limit: int | None = None) -> tu
         host = urllib.parse.urlparse(url).netloc
         paused(host, url)
         wait_turn(host)
+        went = getattr(Telling.mine, "sent", None)
+        if went:                                     # (said: the answer's time starts here, after our turn)
+            went[0] = time.monotonic()
         try:
             with http_client().stream("GET", url, timeout=timeout) as r:
                 after = r.headers.get("retry-after", "")
@@ -1602,18 +1709,26 @@ def index_in(roots: list[str], files=SITE_INDEXES) -> tuple[str, str, bytes | No
     return None
 
 
-def find_docs(candidate: str, fallback: bool = False, lists: bool = False) -> tuple[str, str, bytes | None, str] | None:
+def find_docs(candidate: str, fallback: bool = False, lists: bool = False,
+              given: bool = False) -> tuple[str, str, bytes | None, str] | None:
     """The docs at or under an address, and the page at the address (its links say whose docs
     they are): ("sphinx", root, inventory) where an objects.inv is; ("website", root, None) for
     other docs, a page that says it is MkDocs or Zensical, or their search index. A page that
     says where its docs begin costs one question. fallback: an address of docs (PyPI's docs
-    link), whose pages are read even if nothing says what they are. None: no docs there."""
+    link), whose pages are read even if nothing says what they are. given: an address you gave:
+    the folders where docs often are (stable/, docs/...) are guessed only where its page links
+    (on learncpp.com each guess was a "not there" taking seconds). None: no docs there."""
     from docsearch import hfdocs
     lib = hfdocs.library(candidate)
     if lib:                                       # Hugging Face's docs: its page (whose they are), and no
         page = probe_roots(candidate)[1]          # guesses at where an inventory is (each one of the 100
         return ("website", f"https://huggingface.co/docs/{lib}/", None, page) if page else None   # pages a
     under, page, said = probe_roots(candidate)                                                     # visitor has)
+    if given and not said and under:                 # an address you gave: guess only the folders
+        here = under[0]                              # its page links to (and the ones above it)
+        final = PAGES_SEEN.get(candidate, (candidate,))[0] or candidate
+        hrefs = [urllib.parse.urljoin(final, h) for h in re.findall(r"""href\s*=\s*["']?([^"'\s>]+)""", page)]
+        under = [u for u in under if u == here or not u.startswith(here) or any(h.startswith(u) for h in hrefs)]
     if said:                                      # its root is known: an inventory there, or pages
         hit = index_in(under, SITE_INDEXES[:1])  # (unless the inventory did not answer: a limit)
         hit = hit or (None if under[0] + SITE_INDEXES[0][0] in UNREACHED else ("website", under[0], None))
@@ -3243,7 +3358,7 @@ def web_docs(name: str, spec: str, want: str, override: str, args, check_copy: b
             say(f"  For a PyPI package: search add {name} (its docs are found and checked through its "
                 f"source). For docs you downloaded: search add {name}=/path/to/folder")
             return None
-        kind, root, inv, page = find_docs(override, fallback=True) or ("website", override, None, "")
+        kind, root, inv, page = find_docs(override, fallback=True, given=True) or ("website", override, None, "")
         source = {"repo": address_repo(page, root)} if page else {}
     else:
         got = package_docs(name, args.yes)
@@ -3333,10 +3448,14 @@ DEV_SEGMENTS = {"main", "master", "trunk", "dev", "devdocs", "develop", "nightly
 
 def menu_version(root: str) -> str:
     """The version the docs' own version menu gives them (PyData's: polars '2 (stable)': "2")."""
-    try:
-        page = http_get_once(root, timeout=15)[0].decode("utf-8", "replace")
-    except Exception:  # noqa: BLE001
-        return ""
+    seen = PAGES_SEEN.get(root)
+    if seen and seen[1]:                             # (the page, read once already this run)
+        page = seen[1]
+    else:
+        try:
+            page = http_get_once(root, timeout=15)[0].decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            return ""
     m = re.search(r"""theme_switcher_version_match\s*=\s*['"]v?(\d+(?:\.\d+)*)['"]""", page)
     return m.group(1) if m else ""
 
@@ -3478,8 +3597,10 @@ def add_each(args, outer: str) -> None:
                         f"Python docs: search add python")
                     say(f"  (For a PyPI package of that name: search add pypi:{name})")
                     continue
-                read = web_docs(name, spec, want, override, args,
-                                check_copy=not staged and not getattr(args, "force", False))
+                say(f"  {name}: finding its docs (each request below: how the site answered, and how fast)")
+                with telling():
+                    read = web_docs(name, spec, want, override, args,
+                                    check_copy=not staged and not getattr(args, "force", False))
                 if read is None:
                     continue
                 if read.get("kind") == "release-docs":   # a release's docs, built: one download, read
@@ -5036,6 +5157,8 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("how", help="search how IDEA: how to do it: tutorials, guides, how-tos, examples and the "
                                "functions that do it first (plain search: the reference)")
     argv = sys.argv[1:] if argv is None else argv
+    PAGES_SEEN.clear()                             # (what a site answered: kept for this command)
+    ANSWERED_ABSENT.clear()
     if not argv or argv[0] not in ONLINE:          # everything but indexing stays offline
         offline_only()
     if not argv:                                   # just "search": open the search page

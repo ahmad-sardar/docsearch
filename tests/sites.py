@@ -10,7 +10,9 @@ spot check of 81 packages: eval/results-finding.md), with no internet: a fake we
 - a home page with no docs link, its docs in a folder named for the package (onnx.ai/onnx/);
 - docs behind a bot check (docs.opencv.org): not got around; the README, said why;
 - and where its release publishes its docs, built (opencv-5.0.0-docs.zip): those, one download,
-  read with their Doxygen tag file: every function an entry, a class's page its class's.
+  read with their Doxygen tag file: every function an entry, a class's page its class's;
+- an address you gave (learncpp.com, whose every "not there" takes seconds): each request said,
+  with how the site answered; folders guessed only where its page links; nothing asked twice.
 """
 from __future__ import annotations
 
@@ -209,6 +211,22 @@ def main() -> None:
           and not any("docs.cvx.example" in u and "/master/" not in u for u in ASKED),
           f"a release's Doxygen docs: each function an entry at its place on the docs site; a class's page "
           f"its class; a tutorial titled as Doxygen titles it, to learn from ({sorted(got)[:8]})")
+    WEB["learn.example"] = {"/": page("Learn X", "".join(f"<p><a href='/lesson-{k}/'>Lesson {k}</a></p>" for k in range(12))
+                                     + "<p><a href='/docs/setup'>Setup</a></p>"),
+                            **{f"/lesson-{k}/": page(f"Lesson {k}") for k in range(12)}}
+    ASKED.clear()
+    said = io.StringIO()
+    with contextlib.redirect_stderr(said), contextlib.redirect_stdout(said), cli.telling():
+        plan = cli.web_docs("learnx", "learnx=https://learn.example/", "", "https://learn.example/",
+                            argparse.Namespace(yes=True, workers=2, guide=None), check_copy=False)
+    said = said.getvalue()
+    guessed = [u for u in ASKED if u.endswith("objects.inv")]
+    check(plan is not None and plan.get("root") == "https://learn.example/"
+          and sorted(guessed) == ["https://learn.example/docs/objects.inv", "https://learn.example/objects.inv"]
+          and not [u for u in set(ASKED) if ASKED.count(u) > 1]
+          and "learn.example/objects.inv · not there (404) · " in said and "waiting for the site's answers" in said,
+          f"an address you gave: each request said, with the site's answer; folders guessed only where its page "
+          f"links (docs/, not stable/); nothing asked twice ({guessed}; {said.splitlines()[-1:]})")
     print("all good")
 
 

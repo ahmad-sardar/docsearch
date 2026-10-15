@@ -30,7 +30,7 @@ process (httpx's MockTransport: real-looking addresses, nothing goes online), a 
   docsearch kept code gets it from `search add NAME`, without reading the pages again
 - docs that state no version: the release their source links name (polars: py-2.0.0);
   development docs (links to main, or an address at /main/: jax, triton) are a nightly of
-  their day, "after" PyPI's newest release, and `search upgrade` pulls them anew; a version
+  their day, "after" PyPI's newest release, and `search update` pulls them anew; a version
   menu ("2 (stable)") made exact by PyPI's newest release; else the day, with that release; a
   version a build tool made up for an untagged checkout (fsspec's 0.0.post50+g0f76baaae) is
   no version; docs a major version behind PyPI's newest are said to be (pytz's 2014.10)
@@ -593,9 +593,9 @@ def versions() -> None:
     said = run("add", "olddocs", "--no-embed")
     check(cli.copies("olddocs") == ["olddocs@2014.10"] and "PyPI's newest release is 2025.2" in said,
           "docs a major version behind PyPI's newest: kept as what they are, and said so")
-    said = run("upgrade")
+    said = run("update")
     check("jaxy: you have" in said and "jaxy: nightly docs change often" not in said,
-          "search upgrade pulls development-only docs anew (not only a note)")
+          "search update pulls development-only docs anew (not only a note)")
 
 
 def source_code() -> None:

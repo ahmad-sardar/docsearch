@@ -103,6 +103,43 @@ function renderSources() {
   }
 }
 
+// Docs added, updated or removed in a terminal (search add) since the page opened: the server
+// loads them again (unless nothing changed on disk), then the page shows what it has now.
+async function refreshDocs() {
+  const button = $("#refresh");
+  if (button.disabled) return;
+  button.disabled = true;
+  button.classList.add("busy");
+  toast("Loading the docs…");
+  try {
+    const r = await fetch("/api/reload", { method: "POST", headers: { "Content-Type": "application/json", "X-Docsearch": "1" },
+                                           body: JSON.stringify({ wait: true }) });
+    const done = await r.json().catch(() => ({}));
+    if (!r.ok || !done.ok) throw new Error(done.error || r.statusText);
+    const before = new Set(state.sources.map((s) => s.id));
+    const info = await getJSON("/api/info");
+    state.sources = info.sources;
+    const now = new Set(state.sources.map((s) => s.id));
+    for (const [group, id] of Object.entries(state.active)) {        // (a copy removed: the one in use)
+      if (!now.has(id)) delete state.active[group];
+    }
+    for (const s of state.sources) if (s.default && !state.active[s.group]) state.active[s.group] = s.id;
+    for (const group of [...state.srcs]) if (!state.sources.some((s) => s.group === group)) state.srcs.delete(group);
+    const added = state.sources.filter((s) => !before.has(s.id)).map((s) => `${s.name} ${s.version}`.trim());
+    const gone = [...before].filter((id) => !now.has(id)).length;
+    renderSources();
+    renderChoose();
+    await search({ openFirst: false });
+    homeAgain();
+    toast(added.length ? `New: ${added.join(", ")}` : gone ? `${gone} removed` : done.changed ? "Docs updated" : "Up to date");
+  } catch (e) {
+    toast(`Could not refresh: ${e.message}`);
+  } finally {
+    button.disabled = false;
+    button.classList.remove("busy");
+  }
+}
+
 // A package with several copies and none chosen yet: which one should search use? The answer
 // is kept (packages.toml); the version menu changes it for this page only (search list NAME: for good).
 function renderChoose() {
@@ -536,6 +573,7 @@ function showHome() {
                                          + "how-tos, examples and the functions that do it first"],
                 ["1 2 3 4", "only Learn, Do, Look up or Understand (the buttons over the results); 0: all"],
                 ["↑ ↓", "move through the results"],
+                ["r", "refresh: show docs added in a terminal (search add) since the page opened"],
                 ["Enter", "the full page (offline copy)"], ["Esc", "back, then clear the search"],
                 ["/", "jump to the search box"], ["w", "wrap or scroll long code lines"],
                 ["c", "copy the name of the current entry"], ["s", "the source code of the current entry"]];
@@ -708,6 +746,7 @@ async function removeSource(s, button) {
 function bindEvents() {
   const input = $("#q");
   $("#manage").addEventListener("click", openPanel);
+  $("#refresh").addEventListener("click", refreshDocs);
   $("#how").addEventListener("click", () => {
     setHow(!state.how);
     toast(state.how ? "How: guides, how-tos and examples first" : "Searching the reference");
@@ -782,6 +821,8 @@ function bindEvents() {
       if (state.view?.type === "page") history.back();
       else if (input.value) { input.value = ""; input.dispatchEvent(new Event("input")); }
       else input.blur();
+    } else if (!inInput && ev.key === "r") {               // docs added in a terminal
+      refreshDocs();
     } else if (!inInput && /^[0-4]$/.test(ev.key)) {      // 1–4: one purpose; 0: all
       const key = ["", ...Object.keys(PURPOSE)][+ev.key];
       if (key !== state.purpose) setPurpose(key);
@@ -794,7 +835,7 @@ function bindEvents() {
     } else if (!inInput && ev.key === "s" && state.view?.type === "entry") {
       const b = $$(".actions button").find((x) => x.dataset.source);
       if (b) b.click();
-      else toast(state.entry?.code ? "Its source code was not stored with these docs (search upgrade NAME --force stores it)"
+      else toast(state.entry?.code ? "Its source code was not stored with these docs (search update NAME --force stores it)"
                                    : "These docs link no source code for this entry");
     } else if (ev.key === "PageDown" || ev.key === "PageUp") {
       ev.preventDefault();

@@ -6,7 +6,7 @@ tags deep, as some sites are.
     uv run python tests/smoke.py
 
 Then a small local website whose download stops half way and continues; whose vectors
-stop and are made by the same command alone; and whose new copy (search upgrade) stops,
+stop and are made by the same command alone; and whose new copy (search update) stops,
 keeping the copy you have, and goes on the next time. Then docs with versions: each version
 pulled is a copy of its own, the one search uses chosen once; and a project's versions.
 
@@ -15,7 +15,9 @@ models are downloaded into it the first time, unless DOCSEARCH_DATA already has 
 """
 from __future__ import annotations
 
+import contextlib
 import http.server
+import io
 import json
 import os
 import re
@@ -166,11 +168,11 @@ def versions() -> None:
         check("you have this version already" in said and pages_read() == 0,
               "the version you have is not downloaded again")
         VERSION["now"] = "1.1"
-        said = run("upgrade", "testdocs")
+        said = run("update", "testdocs")
         check(cli.copies("testdocs") == ["testdocs@1.1", "testdocs@1.0"] and "next search asks" in said,
-              "search upgrade: the new version next to the old one; the next search asks which one to use")
+              "search update: the new version next to the old one; the next search asks which one to use")
         ASKED.clear()
-        said = run("upgrade", "testdocs")
+        said = run("update", "testdocs")
         check("you have this version already" in said and pages_read() == 0, "and again: nothing to download")
         check(cli.in_use("testdocs")[0] is None and cli.ask_copy("testdocs", cli.copies("testdocs")) == "testdocs@1.1",
               "several copies, none chosen: asked (without a terminal: the newest)")
@@ -311,21 +313,21 @@ def stop_and_continue() -> None:
     check(meta()["count"] == 5 and meta().get("partial") and not (cli.HOME / "book" / "emb.npy").exists()
           and "partial: 5 pages so far" in listed.getvalue(),
           "stopped after 5 pages: kept, listed as partial; its vectors wait for the rest (no wait at a stop)")
-    cli.main(["upgrade", "book"])
-    check(meta()["count"] == 5, "search upgrade leaves a stopped download to search add")
+    cli.main(["update", "book"])
+    check(meta()["count"] == 5, "search update leaves a stopped download to search add")
     cli.main(["add", "book"])
     check(meta()["count"] == 40 and not meta().get("partial") and not (cli.HOME / "book" / "crawl").exists(),
           "search add NAME continues it to the end")
     cli.main(["sync"])
-    cli.main(["upgrade", "book"])
-    check(meta()["count"] == 40, "then sync and upgrade as for any docs (and ask nothing again)")
+    cli.main(["update", "book"])
+    check(meta()["count"] == 40, "then sync and update as for any docs (and ask nothing again)")
     cli.main(["remove", "book"])
     server.shutdown()
 
 
 def vectors_and_new_copies() -> None:
     """The vectors stop (ctrl+c): searchable by words; the same command makes them alone.
-    A new copy (search upgrade) stops: yours is kept; the next upgrade goes on with it."""
+    A new copy (search update) stops: yours is kept; the next update goes on with it."""
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Chain)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{server.server_address[1]}/docs/"
@@ -359,15 +361,15 @@ def vectors_and_new_copies() -> None:
             time.sleep(0.05)
         signal.getsignal(signal.SIGINT)(signal.SIGINT, None)
     threading.Thread(target=ctrl_c_in_new_copy, daemon=True).start()
-    cli.main(["upgrade", "vbook"])
+    cli.main(["update", "vbook"])
     staged = cli.STAGING / "vbook"
     check(meta()["count"] == 40 and not meta().get("partial") and (staged / "crawl" / "plan.json").exists(),
-          "ctrl+c in search upgrade: the copy you have stays; the new one is kept, stopped")
+          "ctrl+c in search update: the copy you have stays; the new one is kept, stopped")
     SLOW["seconds"] = 0.0
     ASKED.clear()
-    cli.main(["upgrade", "vbook"])
+    cli.main(["update", "vbook"])
     check(meta()["count"] == 40 and not staged.exists() and 0 < pages_asked() < 40,
-          f"search upgrade went on with it ({pages_asked()} pages, not 40) and put it in place")
+          f"search update went on with it ({pages_asked()} pages, not 40) and put it in place")
     cli.main(["remove", "vbook"])
     server.shutdown()
 
@@ -436,6 +438,31 @@ def main() -> None:
             hit = get(port, "/api/search", q=q, src="mini")["items"][0]
             entry = get(port, f"/api/entry/{hit['id']}")
             check(q in json.dumps(entry), f"stored page of '{q}' (a name Windows reserves)")
+        later = data / "later-docs"                  # docs added in a terminal while the page is open
+        later.mkdir(parents=True, exist_ok=True)
+        (later / "index.html").write_text("<html><head><title>Later notes</title></head><body><main><h1>Later "
+                                          "notes</h1><p>Added while the page was open.</p></main></body></html>",
+                                          encoding="utf-8")
+        pid = web.found()[1]["pid"]
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            cli.main(["add", f"later={later}", "--no-embed"])
+
+        def reload() -> dict:
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/api/reload", data=b'{"wait": true}', method="POST",
+                                         headers={"Content-Type": "application/json", "X-Docsearch": "1",
+                                                  "Origin": f"http://127.0.0.1:{port}"})
+            with urllib.request.urlopen(req, timeout=600) as r:
+                return json.loads(r.read())
+        reload()                                     # (the page's Refresh: after the one search add began)
+        listed = [s["id"] for s in get(port, "/api/info")["sources"]]
+        again = reload()
+        check(web.found()[1]["pid"] == pid and "later" in listed and again["changed"] is False
+              and "loading the new docs" in said.getvalue()
+              and [it["name"] for it in get(port, "/api/search", q="later notes", src="later")["items"]][:1] == ["Later notes"],
+              f"docs added in a terminal while the page is open: the page loads them (its Refresh), not stopped; "
+              f"nothing changed: nothing loaded ({listed}, {again})")
+        cli.main(["remove", "later"])
         cli.main(["remove", "plain"])
         cli.main(["remove", "mini"])                 # while the server still runs
         check(not (cli.HOME / "mini").exists(), "removed while the server runs")

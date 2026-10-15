@@ -87,6 +87,7 @@ class Library:
     one), and another copy when a search first asks for it (the page's version menu)."""
 
     def __init__(self, extra: frozenset[str] = frozenset()) -> None:
+        self.stamp = data_stamp()                    # (the docs on disk it loads: see reload)
         sids = [s for have in cli.groups().values() for s in have]      # (each package's newest first)
         if not sids:
             raise SystemExit("search: nothing is indexed yet. Run: search sync")
@@ -719,13 +720,19 @@ class Handler(BaseHTTPRequestHandler):
         if (host not in self.hosts or self.headers.get("Origin") != f"http://{host}"
                 or self.headers.get("X-Docsearch") != "1"):
             return self.send(403, b"forbidden", "text/plain")
-        if self.path not in ("/api/remove", "/api/use"):
+        if self.path not in ("/api/remove", "/api/use", "/api/reload"):
             return self.send(404, b"not found", "text/plain")
         try:
             size = int(self.headers.get("Content-Length", "0"))
-            sid = json.loads(self.rfile.read(min(size, 1000)) or b"{}").get("source", "")
+            body = json.loads(self.rfile.read(min(size, 1000)) or b"{}")
+            sid = body.get("source", "")
         except (ValueError, AttributeError):
             return self.json({"error": "bad request"}, 400)
+        if self.path == "/api/reload":               # docs added or updated in a terminal: load them
+            if body.get("wait") is False:            # (search add: it does not wait)
+                threading.Thread(target=reload_now, daemon=True).start()
+                return self.json({"ok": True, "started": True})
+            return self.json(reload_now())
         lib = self.library
         if sid not in lib.meta:
             return self.json({"error": "no such source"}, 404)
@@ -740,12 +747,43 @@ class Handler(BaseHTTPRequestHandler):
 def reload_library() -> None:
     """Load the index again in the background (after a source was removed); the old one
     answers until the new one is ready."""
-    def run() -> None:
+    threading.Thread(target=reload_now, args=(True,), daemon=True).start()
+
+
+def data_stamp() -> tuple:
+    """What the docs on disk are: each copy, when its meta last changed, and when your choices
+    did (packages.toml). A loaded library whose stamp is this one is up to date."""
+    out = []
+    for sid in cli.indexed():
         try:
-            Handler.library = Library()
-        except SystemExit:                           # nothing indexed any more
+            out.append((sid, (cli.HOME / sid / "meta.json").stat().st_mtime_ns))
+        except OSError:
             pass
-    threading.Thread(target=run, daemon=True).start()
+    try:
+        out.append(("", cli.CONFIG.stat().st_mtime_ns))
+    except OSError:
+        pass
+    return tuple(sorted(out))
+
+
+RELOAD = threading.Lock()                        # one reload at a time
+
+
+def reload_now(force: bool = False) -> dict:
+    """Load the docs again, as they are on disk now (added, updated or removed in a terminal),
+    unless they did not change; the library loaded answers until the new one is ready. Said:
+    the copies added and removed."""
+    with RELOAD:
+        old = getattr(Handler, "library", None)
+        if not force and old is not None and data_stamp() == old.stamp:
+            return {"ok": True, "changed": False, "added": [], "removed": []}
+        try:
+            new = Library()
+        except SystemExit:                           # nothing indexed any more
+            return {"ok": False, "error": "nothing is indexed"}
+        Handler.library = new
+        before, after = set(old.meta) if old is not None else set(), set(new.meta)
+        return {"ok": True, "changed": True, "added": sorted(after - before), "removed": sorted(before - after)}
 
 
 class Server(ThreadingHTTPServer):
@@ -862,6 +900,28 @@ def start() -> int:
             return port
     cli.die(f"the server did not start. See {LOG}")
     return 0
+
+
+def reload_running() -> str | None:
+    """After a command changed the docs: the running search page loads them (in the background,
+    the old ones answering until then), so the page shows them on its Refresh. Running code
+    older than docsearch's (it changed since): stopped, as the next search starts it anew.
+    Says what happened: "reloading", "stopped", or None (none running)."""
+    server = found()
+    if server is None:
+        return None
+    port, info = server
+    if info.get("code") == code_stamp():
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/reload", data=b'{"wait": false}', method="POST",
+                                     headers={"Content-Type": "application/json", "X-Docsearch": "1",
+                                              "Origin": f"http://127.0.0.1:{port}"})
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                if json.loads(r.read()).get("ok"):
+                    return "reloading"
+        except (OSError, ValueError):
+            pass
+    return "stopped" if stop() else None
 
 
 def stop() -> bool:

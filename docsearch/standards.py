@@ -196,8 +196,8 @@ def add(group: str, want: str, spec: str, args) -> None:
     cli.copy_hint(group, sid)
 
 
-def upgrade(group: str, args) -> None:
-    """search upgrade cpp: the site downloaded again, and each standard you have made anew."""
+def update(group: str, args) -> None:
+    """search update cpp: the site downloaded again, and each standard you have made anew."""
     have = [s for s in cli.copies(group) if edition_of(s)]
     if not download(group, args):
         say(f"  {group}: the new download did not finish; the copies you have stay as they are")

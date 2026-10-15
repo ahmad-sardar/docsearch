@@ -381,3 +381,11 @@ div.highlight:hover .copy-btn, dt.sig:hover .copy-btn, .copy-btn:focus { opacity
 }
 .ai-toggle:hover { background: var(--hover); color: var(--text); }
 .ai-toggle[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+
+/* ---- refresh: docs added in a terminal ------------------------------------------------- */
+#refresh { font-size: 15px; line-height: 1; }
+#refresh.busy { opacity: .6; cursor: progress; }
+#refresh.busy { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { #refresh.busy { animation: none; } }
+#refresh + .manage { margin-left: 6px; }

@@ -294,9 +294,9 @@ search add aks=https://learn.microsoft.com/en-us/azure/aks/
 every version you pull is kept as a copy of its own, until you remove it.
 
 ```bash
-search upgrade                 # the newest docs of every package, next to the ones you have
-search upgrade numpy           # one package
-search upgrade numpy==1.26     # an older version
+search update                  # the newest docs of every package, next to the ones you have
+search update numpy            # one package
+search update numpy==1.26      # an older version
 search list                    # every copy, and the one search uses
 search list numpy              # numpy's copies: choose the one search uses
 search remove numpy@1.26       # remove one copy
@@ -324,7 +324,7 @@ never chooses a nightly or beta for you.
 ```bash
 search add max==nightly             # next to the stable max docs
 search add rust==beta python==nightly numpy==nightly pandas==beta
-search upgrade max==nightly         # a new nightly copy (each one is named by its day)
+search update max==nightly          # a new nightly copy (each one is named by its day)
 ```
 
 `search known` shows which ones each built-in site has.

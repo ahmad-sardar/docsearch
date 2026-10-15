@@ -697,7 +697,7 @@ SHORT = {"not-found": "404", "gone": "gone", "forbidden": "403", "login": "login
 # --------------------------------------------------------------------------- reading many pages
 
 AHEAD = 200          # pages downloaded and not yet cut into entries, at most: memory stays small
-CONTINUE_WITH = ""   # the command that goes on with a download that stops (search upgrade NAME...)
+CONTINUE_WITH = ""   # the command that goes on with a download that stops (search update NAME...)
 
 
 def continue_with(name: str) -> str:
@@ -2652,7 +2652,7 @@ def trigrams(s: str) -> set[str]:
 class FileSlices:
     """Bytes of a file by position, opening it for each read. Windows cannot delete a file
     another program holds open (a memory map does), so there the running search page holds
-    none, and remove and upgrade can replace index folders under it."""
+    none, and remove and update can replace index folders under it."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -3348,7 +3348,7 @@ def make_vectors(sid: str, name: str) -> None:
 
 def cmd_add(args) -> None:
     global CONTINUE_WITH
-    outer = CONTINUE_WITH                                # (sync, upgrade: their own command)
+    outer = CONTINUE_WITH                                # (sync, update: their own command)
     try:
         add_each(args, outer)
     finally:
@@ -3677,7 +3677,7 @@ def add_each(args, outer: str) -> None:
         failed = missed_pages(meta)
         if failed and failed > 0.05 * (failed + stored_pages(sid)) and not getattr(args, "staged", False):
             say(f"  Note: {failed} pages could not be downloaded (the site may be busy or blocking); "
-                f"saved the rest. To try again later: search upgrade {name} --force")
+                f"saved the rest. To try again later: search update {name} --force")
         if getattr(args, "record", True):
             remember(spec)
             if name in SECTIONS_SAID:                # the sections you chose: asked once
@@ -4306,7 +4306,7 @@ def in_use(group: str, project: dict[str, str] | None = None) -> tuple[str | Non
             return hit, ""
         short = ".".join(wanted.split(".")[:2]) if re.fullmatch(r"[\d.]+", wanted) else wanted
         note = (f"{group}: your project uses {wanted}; you have {', '.join(s.partition('@')[2] or s for s in have)} "
-                f"(to get it: search upgrade {group}=={short})")
+                f"(to get it: search update {group}=={short})")
     return chosen(group) or (have[0] if len(have) == 1 else None), note
 
 
@@ -4784,8 +4784,8 @@ def cmd_setup(args) -> None:
     cmd_sync(argparse.Namespace(force=False, prune=False, workers=args.workers, accept_partial=False))
 
 
-def cmd_upgrade(args) -> None:
-    """search upgrade [NAME[==VERSION]...] (and search downgrade NAME==VERSION): pull the newest
+def cmd_update(args) -> None:
+    """search update [NAME[==VERSION]...] (and search downgrade NAME==VERSION): pull the newest
     docs of each package (or that version) as a copy of its own, next to the ones you have. A
     version you have is not pulled again, and nothing is deleted (search remove does that). Docs
     kept as one copy (no version number; added by address or from a folder) are downloaded again
@@ -4797,9 +4797,9 @@ def cmd_upgrade(args) -> None:
     for group, have in ([] if named else groups().items()):
         asked = [s for s in have if is_channel(s) and not channel_of(s) == "draft" and "==" in str(json.loads(
             (HOME / s / "meta.json").read_text(encoding="utf-8")).get("spec", ""))]     # (a draft standard: below)
-        if asked and args.cmd == "upgrade":              # nightly, beta: pulled when asked for
+        if asked and args.cmd == "update":              # nightly, beta: pulled when asked for
             for ch in dict.fromkeys(map(channel_of, asked)):
-                say(f"{group}: {ch} docs change often; to pull a new copy: search upgrade {group}=={ch}")
+                say(f"{group}: {ch} docs change often; to pull a new copy: search update {group}=={ch}")
         stable = [s for s in have if s not in asked]     # (docs that only come as development docs,
         #                                                   jax's: a nightly of their day, pulled anew)
         if stable:
@@ -4813,9 +4813,9 @@ def cmd_upgrade(args) -> None:
         if standards.profile(spec.removeprefix("pypi:").partition("==")[0]) and not forced:
             group = spec.partition("==")[0]
             if named:                                # cppreference: downloaded again, each standard remade
-                standards.upgrade(group, args)
+                standards.update(group, args)
             else:
-                say(f"{group}: the site does not publish a version number. To download it again: search upgrade {group}")
+                say(f"{group}: the site does not publish a version number. To download it again: search update {group}")
             continue
         head, _, want = spec.removeprefix("pypi:").partition("==")
         name = head.partition("=")[0]
@@ -4844,7 +4844,7 @@ def cmd_upgrade(args) -> None:
                 continue
             if not now and not named:
                 say(f"{name}: the site does not publish a version number (downloaded "
-                    f"{meta.get('created', '?')[:10]}). To download it again: search upgrade {name}")
+                    f"{meta.get('created', '?')[:10]}). To download it again: search update {name}")
                 continue
             build = meta.get("spec") or name
             say(f"{name}: {meta.get('version') or 'downloaded ' + str(meta.get('created', '?'))[:10]} "
@@ -4976,9 +4976,9 @@ def remember(spec: str) -> None:
             config_set(name, vals + [want])
 
 
-COMMANDS = {"add", "sync", "list", "remove", "embed", "serve", "stop", "known", "ai", "how", "upgrade", "downgrade",
+COMMANDS = {"add", "sync", "list", "remove", "embed", "serve", "stop", "known", "ai", "how", "update", "upgrade", "downgrade",
             "setup", "save"}
-ONLINE = {"add", "sync", "embed", "upgrade", "downgrade", "setup", "save"}   # the only commands that may go online
+ONLINE = {"add", "sync", "embed", "update", "upgrade", "downgrade", "setup", "save"}   # the only commands that may go online
                                        # (embed: only to download the model, once)
 
 
@@ -5089,11 +5089,17 @@ def cmd_stop(_args) -> None:
 
 
 def index_changed() -> None:
-    """A running search page still has the old index in memory: stop it. The next search
-    starts it again with the new one."""
+    """A running search page still has the old docs in memory: it loads the new ones (its
+    Refresh button shows them), or, running older code, it is stopped (the next search starts
+    it again)."""
     from docsearch import web
-    if CHANGED and web.stop():
-        say("Stopped the running search page; your next search starts it with the new index.")
+    if not CHANGED:
+        return
+    done = web.reload_running()
+    if done == "reloading":
+        say("The search page is loading the new docs: in a few seconds, its ↻ Refresh button shows them.")
+    elif done == "stopped":
+        say("Stopped the running search page; your next search starts it with the new docs.")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -5153,21 +5159,23 @@ def main(argv: list[str] | None = None) -> None:
                                       "then the docs packages.toml lists")
     st.add_argument("--workers", type=int, default=16, help="parallel downloads (default 16)")
     st.set_defaults(func=cmd_setup)
-    for cmd, text in (("upgrade", "pull the newest docs (or NAME==VERSION), kept next to the ones you have; "
+    for cmd, text in (("update", "pull the newest docs (or NAME==VERSION), kept next to the ones you have; "
                                   "no NAME: all"),
                       ("downgrade", "pull an older version, NAME==VERSION, kept next to the ones you have")):
         u = sub.add_parser(cmd, help=text)
-        u.add_argument("sources", nargs="*" if cmd == "upgrade" else "+", metavar="NAME[==VERSION]")
+        u.add_argument("sources", nargs="*" if cmd == "update" else "+", metavar="NAME[==VERSION]")
         u.add_argument("--force", action="store_true", help="download again even if up to date")
         u.add_argument("--yes", action="store_true", help="take docs that cannot be checked against their source code")
         u.add_argument("--workers", type=int, default=16, help="parallel downloads (default 16)")
         u.add_argument("--accept-partial", action="store_true",
                        help="replace docs you have even if the new download looks incomplete")
-        u.set_defaults(func=cmd_upgrade)
+        u.set_defaults(func=cmd_update)
     sub.add_parser("ai", help="search with AI: search ai IDEA (a model on this computer reorders the top results)")
     sub.add_parser("how", help="search how IDEA: how to do it: tutorials, guides, how-tos, examples and the "
                                "functions that do it first (plain search: the reference)")
     argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["upgrade"]:                    # (update's old name)
+        argv = ["update", *argv[1:]]
     PAGES_SEEN.clear()                             # (what a site answered: kept for this command)
     ANSWERED_ABSENT.clear()
     if not argv or argv[0] not in ONLINE:          # everything but indexing stays offline
@@ -5195,7 +5203,7 @@ def main(argv: list[str] | None = None) -> None:
     except KeyboardInterrupt:
         say("\n  stopped." + (" The same command goes on where it stopped." if args.cmd in ONLINE - {"setup", "save"} else ""))
         sys.exit(130)
-    if args.cmd in ("add", "sync", "remove", "embed", "upgrade", "downgrade", "setup", "save"):
+    if args.cmd in ("add", "sync", "remove", "embed", "update", "downgrade", "setup", "save"):
         index_changed()
 
 

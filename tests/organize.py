@@ -143,6 +143,7 @@ def main() -> None:
     sections_kept()
     by_structure()
     under_contents()
+    followed_site()
     markdown_api()
     replaced_by_coverage()
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Site)
@@ -537,6 +538,41 @@ def under_contents() -> None:
     check(listed == "gpu-programming-guide/contents.html" and {r: purpose.get(r) for r in want} == want,
           f"a guide under a Contents page, numbered titles, a known source's parts named by their publisher "
           f"({ {r: purpose.get(r) for r in want} })")
+
+
+def followed_site() -> None:
+    """A site read by following its links (a blog-like tutorial site, learncpp.com): the pages its
+    own structure reaches are its docs, not its author, category and news pages, reached only
+    through its menus; its front page ("Learn Widget") names what every page under it is; a site
+    whose pages' content links reach under half of them is navigated by its menus: all kept."""
+    from docsearch import pages as offline
+    root = "https://widget.example/"
+    lessons = [f"widget-lessons/lesson-{k}/" for k in range(6)]
+    menus = ["author/alex/", "category/widget-lessons/", "category/widget-lessons/page/2/", "site-news/moving/"]
+
+    def make(sid: str, front_links: list[str], chain: bool) -> dict[str, str]:
+        pages = {"": ("Learn Widget", "".join(f"<li><a href='{root}{r}'>{r}</a></li>" for r in front_links))}
+        for k, r in enumerate(lessons):
+            nxt = f"<p>Next: <a href='{root}{lessons[k + 1]}'>lesson</a></p>" if chain and k + 1 < len(lessons) else ""
+            pages[r] = (f"{k}.1 — Widget lesson {k}", f"<p>How widgets work, part {k}.</p>{nxt}")
+        for r in menus:
+            pages[r] = (f"Archive {r}", "".join(f"<p><a href='{root}{x}'>{x}</a> An excerpt.</p>" for x in lessons))
+        entries = [cli.Entry(f"{t} (page)", "page", root + r, f"About {t}.", sid) for r, (t, _) in pages.items()]
+        cli.save(sid, entries, {"name": sid, "spec": f"{sid}={root}", "kind": "website", "root": root, "pages": True,
+                                "count": len(entries), "created": "2026-10-15 10:00", "model": None})
+        for r, (t, body) in pages.items():
+            offline.save_page(cli.HOME / sid / "pages", r or "index.html", f"<html><body><main><h1>{t}</h1>{body}</main></body></html>")
+        meta = cli.load_meta(sid)
+        kept, _ = organize.organize(sid, list(cli.iter_entries(sid)), meta)
+        run("remove", sid)
+        return {e.location[len(root):]: e.purpose for e in kept}
+
+    blog = make("widgetblog", lessons[:3], chain=True)      # (the front page lists three; each links the next)
+    menu_only = make("widgetmenu", lessons[:1], chain=False)  # (one lesson in content: the rest by the menus)
+    check(all(blog.get(r) == "learn" for r in lessons) and not any(r in blog for r in menus)
+          and all(r in menu_only for r in lessons + menus),
+          f"a site read by following its links: the pages its own structure reaches, not the ones only its menus "
+          f"reach; its front page names what they are; one navigated by its menus: all kept ({blog}, {sorted(menu_only)})")
 
 
 def markdown_api() -> None:

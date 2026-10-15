@@ -543,3 +543,24 @@ Kernels" (#2, #5, #6) before the functions the question wants (`cuLaunchKernelEx
 "copy memory from host to device", a guide section, then `cudaMemcpyPeer` (1 → 2). Two
 langchain questions swap near-ties (1 → 2, 8 → 9): CUDA's guides left plain search's entries,
 which moves every fused rank a little.
+
+## Organizing version 9 (2026-10-15): sites read by following their links
+
+learncpp.com (`search add cpplearn=https://www.learncpp.com`, a WordPress site with no list of its
+own) came with 578 pages, 214 of them not docs (40 author pages, 36 category archives, date
+archives, news and WordPress posts), and its lessons were "look up" (489 of 576 entries). Two
+rules, for any site:
+
+- A site read by following its links, whose front page is its contents (its content leads to at
+  least half its pages): its docs are what its own structure reaches (front page, sidebar,
+  outline, contents) through their content; a page reached only through its menus and widgets
+  is left out. A site whose front page leads to few pages (a sidebar-navigated one) is left as
+  it is. Sphinx and other docs read from their own index are never judged this way (on them it
+  would drop real pages: 353 of numpy's reference, 17 of Python's).
+- A page that nothing closer labels takes what the docs' front page names ("Learn C++": learn),
+  as a folder's page that names a collection already did.
+
+Your data, cloned: only learncpp changes (learn 84 → 362, do 2, look up 489 → 0, 212 pages left
+out, no lesson among them). `eval/organized.py --split dev`, 8 → 9: Stack Overflow 0.239 →
+0.238 (p=0.49), names 0.931 → 0.952 (p=0.50); usability (`eval/runs/usability-v9.json`) the
+same but "what is a ufunc" (numpy) 4 → 3.

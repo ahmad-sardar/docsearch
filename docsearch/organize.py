@@ -31,14 +31,16 @@ from typing import NamedTuple
 from docsearch import cli
 from docsearch import pages as offline
 
-VERSION = 8                       # meta["organized"]: the rules a copy was organized with (2: examples;
+VERSION = 9                       # meta["organized"]: the rules a copy was organized with (2: examples;
                                   # 3: examples keep their purpose, only real ones, no placeholders,
                                   # whole sections; 4: a section reached by two labels, once;
                                   # 5: purposes by the site's structure, not by address;
                                   # 6: Markdown API references' pages, API entries;
                                   # 7: a big labeled section parted by its own sections too;
                                   # 8: numbered titles, a guide under a Contents page, a known
-                                  # source's parts by their names: CUDA's guides)
+                                  # source's parts by their names: CUDA's guides; 9: a site read
+                                  # by following its links: what its structure reaches; its front
+                                  # page names what is under it)
 PURPOSES = {"learn": "Learn", "do": "Do", "lookup": "Look up", "understand": "Understand"}
 
 # The sites' own names for their parts, on a title made plain (lower case, without the
@@ -83,7 +85,7 @@ PLACE_NAMES = {"overview", "introduction", "intro", "home", "welcome", "index", 
 # Titles that name a collection of pages ("Advanced User Guide", "API reference", "Tutorials"):
 # such a folder's page names what its folder holds, by address too; a page named for its own
 # topic ("Getting Started", "Install spaCy") does not
-COLLECTION = re.compile(r"(.* )?(user'?s? )?guides?( .*)?|(.* )?tutorials?( .*)?|(.* )?how-?tos?|(.* )?howtos?|"
+COLLECTION = re.compile(r"(.* )?(user'?s? )?guides?( .*)?|(.* )?tutorials?( .*)?|learn( .*)?|(.* )?how-?tos?|(.* )?howtos?|"
                         r"(.* )?recipes|(.* )?examples|(.* )?gallery|(.* )?cookbook|(.* )?faqs?|"
                         r"(.* )?reference( manual| guide)?|(.* )?api( reference| documentation| docs)?|"
                         r"(.* )?standard library|(.* )?module index|(.* )?concepts|(.* )?internals|"
@@ -295,6 +297,7 @@ def classify(sid: str, meta: dict, entries: list[cli.Entry]) -> Pages:
         order_.append(r)
     purpose: dict[str, str] = {}
     anchor: dict[str, str | None] = {}
+    front = page_of(root, meta, stored) or "index.html"     # the docs' front page: above every page
     for rel in pages | set(first):
         cur, seen, said = rel, set(), []
         while cur is not None and cur not in seen:   # the page, then the pages above it
@@ -309,13 +312,16 @@ def classify(sid: str, meta: dict, entries: list[cli.Entry]) -> Pages:
             continue                                      # folder says, as development/ in polars' guide)
         at = next((r for r in said if label.get(r) and (
             r == rel or plain_title(title.get(r, ""), names) not in PLACE_NAMES)), None)   # (a place: its own page)
-        if at is None:                           # by its address: a folder's page that names a collection
-            cur, seen_ = above(rel), set()
-            while cur is not None and cur not in seen_ and at is None:
+        if at is None:                           # by its address: a folder's page that names a collection,
+            cur, seen_ = above(rel), set()       # up to the docs' front page ("Learn C++": the site's
+            while cur is not None and cur not in seen_ and at is None:              # lessons)
                 seen_.add(cur)
                 if label.get(cur) and COLLECTION.fullmatch(plain_title(title.get(cur, ""), names)):
                     at = cur
-                cur = above(cur)
+                cur = above(cur) or (front if cur != front and guide is None else None)
+            if at is None and guide is None and rel != front and front in pages and label.get(front) \
+                    and COLLECTION.fullmatch(plain_title(title.get(front, ""), names)):
+                at = front
         top = own.split("/")[0] if "/" in own else ""
         if at is not None:                       # (a big top section of the outline: its own sections part it)
             purpose[rel], anchor[rel] = label[at], (part_key(said) if at in big else at)
@@ -331,7 +337,55 @@ def classify(sid: str, meta: dict, entries: list[cli.Entry]) -> Pages:
             purpose[rel] = FOLDER_OF[folders[k].lower()] if k is not None else "lookup"
             base = "/".join(folders[:k + 1]) + "/" if k is not None else None
             anchor[rel] = next((r for r in reversed(said) if base and r.startswith(base)), None)
+    if meta.get("kind") == "website" and front in stored:     # a site read by following its links,
+        links = content_links(sid, meta, stored)                # whose front page is its contents:
+        if len(closure({front}, links)) >= len(stored) / 2:     # what its own structure does not reach
+            kept = closure(structure(meta, stored, contents, set(keys_of)) | {front}, links)   # is not its
+            for rel in stored - kept:                                                          # docs
+                purpose[rel], anchor[rel] = "removed", None
     return Pages(order_, purpose, anchor, up, dict(contents.parent), title, first)
+
+
+HREF = re.compile(r"""href\s*=\s*["']([^"'#]+)""")
+
+
+def content_links(sid: str, meta: dict, stored: set[str]) -> dict[str, set[str]]:
+    """Each stored page's links to other stored pages, from its content (a stored page is its
+    content: no menus, footers or widgets)."""
+    import urllib.parse
+    from docsearch import order
+    pages_dir = cli.HOME / sid / "pages"
+    out: dict[str, set[str]] = {}
+    for rel in stored:
+        base = order.url_in(rel, meta)
+        out[rel] = {r for h in HREF.findall(offline.load_page(pages_dir, rel) or "")
+                    if (r := page_of(urllib.parse.urljoin(base, h), meta, stored)) in stored and r != rel}
+    return out
+
+
+def closure(start: set[str], links: dict[str, set[str]]) -> set[str]:
+    """The pages these lead to through their content, and they."""
+    seen = {r for r in start if r in links}
+    todo = list(seen)
+    while todo:
+        for r in links[todo.pop()] - seen:
+            seen.add(r)
+            todo.append(r)
+    return seen
+
+
+def structure(meta: dict, stored: set[str], contents, outlined: set[str]) -> set[str]:
+    """Where a site read by following its links places its pages itself: its front page, its
+    sidebar and start pages (order.seeds), the pages its outline names (llms.txt, a search
+    index) or its contents list. A site whose front page is its contents (learncpp.com: its
+    content leads to most pages) has as its docs what these lead to through their content; a
+    page reached only through its menus and widgets (a blog's author, category and date
+    archives, its news posts: 214 of learncpp.com's 578) is not (classify). A site whose front
+    page leads to few of its pages is navigated by its sidebar: nothing is decided this way."""
+    from docsearch import order
+    seeds = {page_of(s if s.startswith("http") else meta.get("root", "") + s, meta, stored) for s in order.seeds(meta)}
+    return {r for r in seeds | outlined | {r for r, up in contents.parent.items() if up is not None
+                                          and r not in contents.by_nav} if r in stored}
 
 
 def outline_of(sid: str, meta: dict, stored: set[str]) -> dict[str, list[str]]:

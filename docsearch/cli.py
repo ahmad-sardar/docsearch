@@ -2295,10 +2295,27 @@ def source_id(spec: str) -> str:
     return sid
 
 
+SPEC_ADDRESS = re.compile(r"(?P<name>[^=@\s]+?)(?:(?:==|@)(?P<want>[^=@\s/\\]+))?="
+                          r"(?P<address>(?:https?://|/|~|\.{1,2}[/\\]|[A-Za-z]:[/\\]|\\\\).*)", re.S)
+
+
+def split_spec(spec: str) -> tuple[str, str, str]:
+    """What `search add` is given: (name, version, address). numpy; numpy==1.26; docs at an
+    address you give, named by you (postgres=https://www.postgresql.org/docs/current/), and
+    of a version you say (postgres==17=https://www.postgresql.org/docs/17/, or postgres@17=...:
+    the copy postgres@17); an address may be a folder (name==2.0=/path/to/docs)."""
+    s = spec.removeprefix("pypi:")
+    m = SPEC_ADDRESS.fullmatch(s)
+    if m:
+        return m.group("name"), m.group("want") or "", m.group("address")
+    name, _, want = s.partition("==")
+    name, _, address = name.partition("=")
+    return name, want, address
+
+
 def folder_name(spec: str) -> str | None:
     """source_id, or None for what cannot name a source (=>, (+), ...: in a search, the query's)."""
-    name, _, version = spec.partition("==")
-    name = name.split("=", 1)[0].removeprefix("pypi:")
+    name, version, _ = split_spec(spec)
     if not version and "@" in name:
         name, _, version = name.partition("@")
     sid = re.sub(r"[^\w.-]+", "-", name).strip("-.").lower()
@@ -3409,7 +3426,11 @@ def web_docs(name: str, spec: str, want: str, override: str, args, check_copy: b
                 **{k: v for k, v in source.items() if v}}
     if not want and "/latest/" in root and not override:     # Read the Docs: latest is its
         kind, root, inv = find_version(root, "stable") or (kind, root, inv)    # development branch
-    if want:
+    if want and override:                            # the address you gave: that version
+        have = parse_objects_inv(inv)[1] if kind == "sphinx" and inv else ""
+        if have and not have.startswith(want.lstrip("v")):
+            say(f"  Note: you said {want}, these docs say version {have}.")
+    elif want:
         got = find_version(root, want)
         if not got:
             say(f"  Could not find docs for {name} {want} next to the current ones.")
@@ -3505,16 +3526,16 @@ def add_each(args, outer: str) -> None:
     for spec in args.sources:
         t0 = time.time()
         say(f"Indexing {spec}")
-        CONTINUE_WITH = outer or f"search add {spec.split('=')[0] if '=' in spec.replace('==', '') else spec}"
         forced_pypi = spec.startswith("pypi:")
-        spec_ = spec[len("pypi:"):] if forced_pypi else spec
-        name, want = spec_.split("==", 1) if "==" in spec_ else (spec_, "")
-        name, _, override = name.partition("=")
-        saved = config_values(name) if not override and not want and not forced_pypi else None
-        if isinstance(saved, dict) and isinstance(saved.get("url") or saved.get("path"), str):
-            override = saved.get("url") or saved.get("path")      # its address in packages.toml (as sync)
-            spec = f"{name}={override}"
-            say(f"  {name}: its docs at {override}, as packages.toml says")
+        name, want, override = split_spec(spec)
+        if want and override:                            # (pg@17=..., pg==17=...: one way of writing it)
+            spec = f"{name}=={want}={override}"
+        CONTINUE_WITH = outer or (f"search add {name}" + (f"=={want}" if want else "") if override else f"search add {spec}")
+        saved = saved_address(name, want) if not override and not forced_pypi else None
+        if saved:                                        # its address in packages.toml (as sync)
+            override = saved
+            spec = f"{name}=={want}={override}" if want else f"{name}={override}"
+            say(f"  {name}{' ' + want if want else ''}: its docs at {override}, as packages.toml says")
         if not override and not forced_pypi and not getattr(args, "standards_base", False):
             from docsearch import standards
             if standards.profile(name):                  # cpp==17: one copy per standard (standards.py)
@@ -3529,10 +3550,14 @@ def add_each(args, outer: str) -> None:
         from docsearch import importers
         staged = getattr(args, "staged", False)
         stopped = importers.unfinished(sid)              # a download that stopped (in staging: a new copy)
-        if stopped is not None and override and spec != stopped.get("spec"):
+        if stopped is not None and override and split_spec(spec) != split_spec(stopped.get("spec") or ""):
             stopped = None                               # other docs under this name: start anew
         if stopped is not None and not override and not want:   # search add aks: as it was added
             spec = stopped.get("spec") or spec
+        elif stopped is not None and not override:      # search add pg==17: from the address it was added
+            _, s_want, s_address = split_spec(stopped.get("spec") or "")
+            if s_address and s_want == want:
+                spec, override = stopped["spec"], s_address
         meta_f = HOME / sid / "meta.json"
         old = json.loads(meta_f.read_text(encoding="utf-8")) if meta_f.exists() else None
         if stopped is None and old and (old.get("partial") or {}).get("step") == "vectors" and not args.no_embed:
@@ -3586,7 +3611,7 @@ def add_each(args, outer: str) -> None:
                     read = {"found": "sphinx", **plan_} if how == "sphinx" else plan_     # kept "sphinx")
             elif override and LOCAL_PATH.match(override):  # docs you downloaded yourself
                 entries, extra = importers.build_local(name, sid, Path(override), args.workers, spec, args.max_pages)
-                meta.update(extra)
+                meta.update(extra, **({"version": want} if want else {}))
             elif plan is not None:                       # a language or toolkit we know
                 say(f"  {plan.get('about', name)}")
                 read = plan
@@ -3624,7 +3649,9 @@ def add_each(args, outer: str) -> None:
                 meta.update(extra, **{k: read[k] for k in ("repo", "verified") if read.get(k)})
                 if read.get("found"):                    # (docs found by their address: what they are)
                     meta["kind"] = read["found"]
-                    if not re.search(r"\d", meta.get("version") or "") and not meta.get("partial"):
+                    if want and override:                # (the version you said they are)
+                        meta["version"] = want
+                    elif not re.search(r"\d", meta.get("version") or "") and not meta.get("partial"):
                         meta.update(found_version(name, meta))
                     newest = (PYPI_INFO.get(name) or {}).get("version") or ""   # (docs whose version shows
                     if not want and not read.get("older") and older_major(meta.get("version") or "", newest):  # only now)
@@ -3856,6 +3883,7 @@ CONFIG_TEMPLATE = """\
 #   name = "latest"                          the current docs (PyPI finds the site)
 #   name = "1.26"                            the docs of one version
 #   name = { url = "https://.../" }          the docs at this address (HTTPS)
+#   name = { url = "https://.../17/", version = "17" }   the docs of version 17, at this address
 #   name = { version = "2.1", embed = false }   no meaning search (no model, faster)
 #   name = ["latest", "1.26"]                   several versions, side by side
 
@@ -3888,13 +3916,16 @@ def read_config() -> list[tuple[str, bool]]:
         if unknown:
             die(f"{CONFIG}: [{name}] has unknown keys: {', '.join(sorted(unknown))}")
         version, url = str(opts.get("version", "latest")), opts.get("url")
+        said = "" if version in ("latest", "stable", "") else version     # (an address of that version)
+        if said and not VERSION.fullmatch(said):
+            die(f"{CONFIG}: [{name}] '{version}' is not a version.")
         if opts.get("path"):                                 # docs you downloaded yourself
-            out.append((f"{name}={opts['path']}", bool(opts.get("embed", True))))
+            out.append((f"{name}{'==' + said if said else ''}={opts['path']}", bool(opts.get("embed", True))))
             continue
         if url:
             if not isinstance(url, str) or not safe_url(url):
                 die(f"{CONFIG}: [{name}] url must be an https:// address.")
-            spec = f"{name}={url if url.endswith('/') else url + '/'}"
+            spec = f"{name}{'==' + said if said else ''}={url if url.endswith('/') else url + '/'}"
         elif version in ("latest", "stable", ""):
             spec = name
         elif VERSION.fullmatch(version):
@@ -3949,7 +3980,7 @@ def sync_all(args) -> None:
             embed_source(sid)
             continue
         cmd_add(argparse.Namespace(sources=[spec], workers=args.workers, max_pages=None, no_embed=not embed,
-                                   yes="=" in spec.split("==")[0],      # an address you listed: no question
+                                   yes=bool(split_spec(spec)[2]),      # an address you listed: no question
                                    accept_partial=args.accept_partial))
     import tomllib                                       # saved pages ([saved] in packages.toml)
     for name, urls in (tomllib.loads(CONFIG.read_text(encoding="utf-8")).get("saved") or {}).items():
@@ -4165,7 +4196,7 @@ def copy_label(meta: dict, want: str = "", day: str = "") -> str | None:
     copy (no version number; or added by address or from a folder; man pages, saved pages)."""
     from docsearch import sources
     spec = str(meta.get("spec") or meta.get("name") or "")
-    if meta.get("kind") in ("man", "saved", "local") or "=" in spec.removeprefix("pypi:").split("==")[0]:
+    if meta.get("kind") in ("man", "saved", "local") or split_spec(spec)[2]:
         return None
     version = str(meta.get("version") or "").strip()
     ch = sources.channel(want) if want else sources.channel(version)
@@ -4650,7 +4681,7 @@ def stopped_at_vectors(d: Path) -> bool:
 
 
 def name_of(spec: str) -> str:
-    return spec.removeprefix("pypi:").split("==")[0].split("=")[0]
+    return split_spec(spec)[0]
 
 
 def not_staged(spec: str, again: str) -> str:
@@ -4817,8 +4848,7 @@ def cmd_update(args) -> None:
             else:
                 say(f"{group}: the site does not publish a version number. To download it again: search update {group}")
             continue
-        head, _, want = spec.removeprefix("pypi:").partition("==")
-        name = head.partition("=")[0]
+        name, want, _ = split_spec(spec)
         if args.cmd == "downgrade" and not want:
             say(f"{name}: say which version, e.g. search downgrade {name}==1.2")
             continue
@@ -4882,6 +4912,18 @@ def cmd_update(args) -> None:
 
 
 # --------------------------------------------------------------------------- packages.toml
+
+def saved_address(name: str, want: str) -> str | None:
+    """The address packages.toml gives the docs of this name (of this version, if one is said):
+    its url or path."""
+    val = config_values(name)
+    for v in val if isinstance(val, list) else [val]:
+        if isinstance(v, dict) and isinstance(v.get("url") or v.get("path"), str):
+            said = str(v.get("version", "latest"))
+            if said == want if want else said in ("latest", "stable", ""):
+                return v.get("url") or v.get("path")
+    return None
+
 
 def config_values(name: str):
     import tomllib
@@ -4960,12 +5002,16 @@ def remember(spec: str) -> None:
             if new != text:
                 write_atomic(CONFIG, new.encode())
         return
-    name, _, want = spec.partition("==")
-    name, _, url = name.partition("=")
+    name, want, url = split_spec(spec)
     old = config_values(name)
-    if url:
+    if url:                                          # docs at an address you gave (of a version you said)
+        entry = {"path": url} if LOCAL_PATH.match(url) else {"url": url}
+        entry |= {"version": want} if want else {}
+        listed = old if isinstance(old, list) else [] if old is None else [old]
         if old is None:
-            config_set(name, {"path": url} if LOCAL_PATH.match(url) else {"url": url})
+            config_set(name, entry)
+        elif want and all(isinstance(v, dict) and str(v.get("version", "")) != want for v in listed):
+            config_set(name, listed + [entry])       # another version, next to the ones listed
         return
     want = want or "latest"
     if old is None:

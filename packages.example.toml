@@ -7,10 +7,12 @@
 #   numpy = ["latest", "1.26"]                 several versions, side by side
 #   rust = "latest"                            a language or toolkit (see: search known)
 #   mydocs = { url = "https://docs.example.com/" }   any docs site
+#   pg = [{ url = "https://www.postgresql.org/docs/16/", version = "16" },
+#         { url = "https://www.postgresql.org/docs/17/", version = "17" }]   an address of each version
 #   mydocs = { path = "~/Downloads/docs.zip" }       docs you downloaded yourself
 #   pandas = { version = "2.1", embed = false }      no meaning search (faster to add)
 #
-# `search add`, `remove`, `upgrade` and `downgrade` keep this file up to date.
+# `search add`, `remove`, `update` and `downgrade` keep this file up to date.
 
 [packages]
 

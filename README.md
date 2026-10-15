@@ -227,8 +227,16 @@ search add opencv-python                 # from its github release (its site blo
 search add rust go                       # languages, see: search known
 search add mydocs=https://docs.example.com/
 search add mydocs=~/Downloads/docs.zip   # docs you downloaded yourself (or C:\path on windows)
+search add pg==17=https://www.postgresql.org/docs/17/   # your name, a version you say, its address
 search remove polars
 ```
+
+docs at an address you give take the name you give them. say their version too, with `==`,
+and they are a copy of that version (`pg@17`, as `numpy@1.26`): `pg==16=https://…/16/` next to
+it is another copy, and `search list pg` chooses between them. the address can be a folder:
+`mylib==2.0=~/Downloads/mylib-docs.zip`. `pg@17=…` works too. packages.toml keeps each with
+its address (`pg = [{ url = "…/16/", version = "16" }, { url = "…/17/", version = "17" }]`), so
+`search sync` keeps them, and `search add pg==17` alone finds its address there.
 
 ### where the docs come from
 

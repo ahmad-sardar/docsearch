@@ -227,6 +227,20 @@ def main() -> None:
           and "learn.example/objects.inv · not there (404) · " in said and "waiting for the site's answers" in said,
           f"an address you gave: each request said, with the site's answer; folders guessed only where its page "
           f"links (docs/, not stable/); nothing asked twice ({guessed}; {said.splitlines()[-1:]})")
+    WEB["pg.example"] = {"/docs/17/": page("PG 17 manual", "".join(f"<p><a href='/docs/17/ch{k}.html'>Chapter {k}</a></p>"
+                                                                  for k in range(12))),
+                         **{f"/docs/17/ch{k}.html": page(f"Chapter {k}") for k in range(12)}}
+    ASKED.clear()
+    plan, said = None, io.StringIO()
+    with contextlib.redirect_stderr(said), contextlib.redirect_stdout(said):
+        plan = cli.web_docs("pg", "pg==17=https://pg.example/docs/17/", "17", "https://pg.example/docs/17/",
+                            argparse.Namespace(yes=True, workers=2, guide=None), check_copy=False)
+    check(plan is not None and plan.get("root") == "https://pg.example/docs/17/" and "Could not find" not in said.getvalue()
+          and not any("/16/" in u or "/current/" in u or "/stable/" in u for u in ASKED)
+          and cli.split_spec("pg@17=https://pg.example/docs/17/") == ("pg", "17", "https://pg.example/docs/17/")
+          and cli.source_id("pg==17=https://pg.example/docs/17/") == "pg@17",
+          f"an address you give, of a version you say: read as that version, no other looked for "
+          f"({plan and plan.get('root')}, {said.getvalue().splitlines()[-1:]})")
     print("all good")
 
 

@@ -374,6 +374,39 @@ def vectors_and_new_copies() -> None:
     server.shutdown()
 
 
+def named_versions() -> None:
+    """Docs at an address you give, named by you, of a version you say (search add
+    pg==17=https://..., or pg@17=...; a folder too): a copy of that version, listed with its
+    address and version in packages.toml (sync reads each back); search add pg==16 alone finds
+    its address there."""
+    def run(*argv: str) -> str:
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said), contextlib.redirect_stdout(said):
+            cli.main(list(argv))
+        return said.getvalue()
+    folders = {}
+    for v in ("16", "17"):
+        d = Path(tempfile.mkdtemp(prefix=f"pgdocs-{v}-", dir=cli.DATA))
+        (d / "index.html").write_text(f"<html><head><title>PG {v} manual</title></head><body><main><h1>PG {v} "
+                                      f"manual</h1><p>Tables and queries, version {v}.</p></main></body></html>",
+                                      encoding="utf-8")
+        folders[v] = d
+    run("add", f"zzpgx==16={folders['16']}", "--no-embed")
+    run("add", f"zzpgx@17={folders['17']}", "--no-embed")
+    import tomllib
+    listed = tomllib.loads(cli.CONFIG.read_text(encoding="utf-8"))["packages"].get("zzpgx")
+    specs = [spec for spec, _ in cli.read_config() if spec.startswith("zzpgx")]
+    again = run("add", "zzpgx==16", "--no-embed")
+    check(sorted(cli.copies("zzpgx")) == ["zzpgx@16", "zzpgx@17"]
+          and cli.load_meta("zzpgx@16").get("version") == "16" and cli.load_meta("zzpgx@17").get("version") == "17"
+          and listed == [{"path": str(folders["16"]), "version": "16"}, {"path": str(folders["17"]), "version": "17"}]
+          and specs == [f"zzpgx==16={folders['16']}", f"zzpgx==17={folders['17']}"]
+          and "as packages.toml says" in again and sorted(cli.copies("zzpgx")) == ["zzpgx@16", "zzpgx@17"],
+          f"docs at an address you give, of a version you say: a copy of each, listed with both in packages.toml, "
+          f"kept by sync ({cli.copies('zzpgx')}, {listed}, {specs})")
+    run("remove", "zzpgx", "--all")
+
+
 def main() -> None:
     data = Path(os.environ["DOCSEARCH_DATA"])
     cli.CONFIG = data / "packages.toml"
@@ -472,6 +505,7 @@ def main() -> None:
     vectors_and_new_copies()
     versions()
     project_files()
+    named_versions()
     print("all good")
 
 

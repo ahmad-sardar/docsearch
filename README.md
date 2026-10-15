@@ -98,7 +98,7 @@ docs.
 
 ```bash
 search numpy svd              # just numpy
-search how pandas pivot       # how to do it, in pandas' guides (plain search: the reference)
+search how pandas pivot       # how to do it: pandas' guides, examples and functions first
 search                        # open the page
 search list                   # what you have, and which version
 search stop                   # stop the background server
@@ -145,8 +145,9 @@ two searches, for two questions:
 - **plain `search`: what** something is. the reference and the explanations (look up,
   understand): `search np.sum`, `search broadcasting`. names come first, as always.
 - **`search how`: how** to do something. the tutorials, guides, how-tos and examples (learn,
-  do) and the functions that do it come first, then the rest: `search how read a json file`. in the page, the **How** button switches, or start what you
-  type with "how". with ai: `search ai how pandas pivot a table`.
+  do) and the functions that do it come first, then the rest: `search how read a json file`.
+  in the page, the **How** button switches, or start what you type with "how". with ai:
+  `search ai how pandas pivot a table`.
 
 examples are units of their own in `search how`: a function's "examples" part, with the text
 around it, stays linked to the function (enter opens its page), and cppreference's example
@@ -215,37 +216,45 @@ without downloading the docs again.
 
 ```bash
 search add polars                        # a pypi package
+search add opencv-python                 # from its github release (its site blocks programs)
 search add rust go                       # languages, see: search known
 search add mydocs=https://docs.example.com/
 search add mydocs=~/Downloads/docs.zip   # docs you downloaded yourself (or C:\path on windows)
 search remove polars
 ```
 
-a package's docs are found through its source code. pypi names its repository (github,
-gitlab, codeberg), and docs count as the package's when they and the repository point at each
-other: the docs link to it, or it names their site as its website. that finds the right docs
-when pypi's own link is old or points elsewhere, and docs that point neither way are shown to
-you before anything is downloaded (`--yes` takes them). the project's own home page (as pypi or
-its repository names it) vouches for the docs it links to, by their address or a link named
-"docs" or "documentation", never a "contribute" or "blog" page; so does pypi's description of
-the package. in packages.toml, `name = { url = "..." }` is where `search add name` and
-`search sync` read it.
+### where the docs come from
 
-where a package's docs come from, in this order:
+for a package, docsearch tries these in order and takes the first that works:
 
-1. the docs as their publisher ships them, in one file: hugging face's libraries, from hugging
-   face's own copy;
-2. the docs site, from the lists it publishes (or page by page), at the pace it allows;
-3. where the site lets people in but not programs (a bot check, which docsearch never gets
-   around), or no site is found: the docs its github release publishes, built (opencv:
-   `opencv-5.0.0-docs.zip`, for the version you use). doxygen docs like opencv's are read
-   with their index: every function, class and constant an entry (`cv::imread`, found by
-   `cv2.imread` too), each tutorial a page, the modules as the parts;
-4. the readme of its release, which is then its documentation.
+1. **the docs as their publisher ships them, in one file**: hugging face's libraries
+   (transformers, datasets, diffusers...) from hugging face's own copy. one download, no page
+   of its site asked for.
+2. **the docs site**, from the lists it publishes for programs (a sphinx inventory, an mkdocs
+   search index, llms.txt, its sitemaps), else page by page, at the pace the site allows.
+   pages drawn by javascript are read as markdown where the site offers it (docs.langchain.com).
+3. **the docs its github release publishes, built**, for the version you use, where the site
+   lets people in but not programs (a bot check, which docsearch never gets around) or no
+   site is found. opencv: `opencv-5.0.0-docs.zip`. doxygen docs like opencv's are read with
+   their index: every function, class and constant an entry (`cv::imread`, found by
+   `cv2.imread` too), each tutorial a page, the modules as the parts.
+4. **the readme** of its release, which is then its documentation.
+
+the docs have to be the package's own. pypi names its repository (github, gitlab, codeberg),
+and docs count as the package's when they and the repository point at each other: the docs
+link to it, or it names their site as its website. that finds the right docs when pypi's own
+link is old or points elsewhere. the project's home page (as pypi or its repository names it)
+vouches for the docs it links to, by their address or a link named "docs" or "documentation",
+never a "contribute" or "blog" page; so does pypi's description of the package. docs that
+nothing vouches for are shown to you before anything is downloaded (`--yes` takes them). in
+packages.toml, `name = { url = "..." }` says where a package's docs are, for `search add` and
+`search sync`.
 
 the code an entry documents comes along, where the docs link to it (numpy, pandas, torch,
 scipy, polars, matplotlib, go...): press `s` on the entry to read it, at the version the docs
 were built from, offline like everything else.
+
+### reading a site
 
 a docs site gives you every page under the address you add. big sites (azure, aws, google
 cloud, oracle) have tens of thousands, so add the part you want, one product or book:
@@ -254,30 +263,24 @@ cloud, oracle) have tens of thousands, so add the part you want, one product or 
 search add aks=https://learn.microsoft.com/en-us/azure/aks/
 ```
 
-- before it starts, it says how many pages there are, when the site's sitemap tells; then
-  the bar shows how many are read, of how many, and the time left. without a sitemap it
-  shows how many are found so far, a number that grows as pages turn up.
+- before it starts, it says how many pages the site lists; then the bar shows how many are
+  read, of how many, and the time left. without a list it shows how many are found so far, a
+  number that grows as pages turn up. at the end it says how many of the listed pages it read.
 - ctrl+c stops it and keeps what's read: searchable now, marked partial in `search list`.
   `search add aks` continues where it stopped.
-- docsearch reads what the site lists for programs (a sphinx inventory, an mkdocs search
-  index, llms.txt, its sitemaps), as markdown where the site offers it and its html is drawn by
-  javascript (docs.langchain.com), and says how many of the listed pages it read.
 - a site with pages for other languages than the package's (langchain's typescript next to its
   python), or with many sections (tensorflow.org), asks which sections to read when you add it
   in a terminal; the answer is kept in packages.toml, for that site, and sync asks no more.
   without a terminal it reads all but the other languages' pages and says so.
-- some sites ask programs to wait between pages, and docsearch waits. aws asks for 5
-  seconds, so 700 pages take about an hour. a site that says how many requests it allows
-  (huggingface.co: 100 pages in 5 minutes) is asked no faster than that; one that asks for a
-  longer pause (come back in an hour) stops the download, kept, and the same command goes on
-  after that time. a big site can take a few sittings; so can updating it.
-- a site whose robots.txt can't be read (it answers with a server error) is not read at all
-  that time, as the robots.txt standard (rfc 9309) says.
-- hugging face's libraries (transformers, datasets, diffusers...) come from hugging face's own
-  copy of their docs: one download, no page of its site asked for.
-- some sites ask programs not to read some pages at all (oracle: its old releases, 10g
-  and 11g), and docsearch doesn't. download those docs yourself and add the folder or zip:
-  `search add oracle11=~/Downloads/oracle11g.zip`
+- it reads at the pace the site allows. aws asks programs to wait 5 seconds between pages, so
+  700 pages take about an hour. a site that says how many requests it allows (huggingface.co:
+  100 pages in 5 minutes) is asked no faster than that. one that asks for a longer pause (come
+  back in an hour) stops the download, kept, and the same command goes on after that time: a
+  big site can take a few sittings, and so can updating it.
+- robots.txt is kept: pages it asks programs not to read are not read (oracle: its old
+  releases, 10g and 11g; download those yourself and add the folder or zip). a site whose
+  robots.txt can't be read (it answers with a server error) is not read at all that time, as
+  the robots.txt standard (rfc 9309) says.
 
 ## versions
 
@@ -367,7 +370,8 @@ it tells you why (site down, blocked, moved, needs javascript...) and what to tr
 existing docs are never touched until a new download fully works: it replaces them when it
 read nine in ten of the pages the site lists, with few failed (where nothing says how many
 there are, when it has most of the entries yours has). if a site won't let programs in,
-download the docs yourself and `search add name=/path/to/folder`.
+docsearch takes the docs its release publishes, if it has some (opencv); else download the
+docs yourself and `search add name=/path/to/folder`.
 
 ## safe
 
@@ -378,7 +382,12 @@ download the docs yourself and `search add name=/path/to/folder`.
 
 ## how good is the search
 
-measured, not guessed. see `eval/` if you care.
+measured, not guessed. on 71 questions people ask, in their words (`eval/usability.json`),
+the answer is the first result for 29 of 44 "how do i" questions and 22 of 27 "what is"
+ones; 2 and 0 are missing from the top 50. on 348 stack overflow questions, plain search
+finds the docs entry an answer links to about as often as searching every entry does, and a
+name lookup gives its entry first 92% of the time, in the top 5 always. the numbers, how
+they were measured, and each change's effect are in `eval/`.
 
 ## license
 

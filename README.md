@@ -228,10 +228,20 @@ when pypi's own link is old or points elsewhere, and docs that point neither way
 you before anything is downloaded (`--yes` takes them). the project's own home page (as pypi or
 its repository names it) vouches for the docs it links to, by their address or a link named
 "docs" or "documentation", never a "contribute" or "blog" page; so does pypi's description of
-the package. a package that names no docs site at all gets the readme of its release, which is
-its documentation, and so does one whose docs site only lets people in, not programs (a bot
-check, which docsearch never gets around). in packages.toml, `name = { url = "..." }` is where
-`search add name` and `search sync` read it.
+the package. in packages.toml, `name = { url = "..." }` is where `search add name` and
+`search sync` read it.
+
+where a package's docs come from, in this order:
+
+1. the docs as their publisher ships them, in one file: hugging face's libraries, from hugging
+   face's own copy;
+2. the docs site, from the lists it publishes (or page by page), at the pace it allows;
+3. where the site lets people in but not programs (a bot check, which docsearch never gets
+   around), or no site is found: the docs its github release publishes, built (opencv:
+   `opencv-5.0.0-docs.zip`, for the version you use). doxygen docs like opencv's are read
+   with their index: every function, class and constant an entry (`cv::imread`, found by
+   `cv2.imread` too), each tutorial a page, the modules as the parts;
+4. the readme of its release, which is then its documentation.
 
 the code an entry documents comes along, where the docs link to it (numpy, pandas, torch,
 scipy, polars, matplotlib, go...): press `s` on the entry to read it, at the version the docs

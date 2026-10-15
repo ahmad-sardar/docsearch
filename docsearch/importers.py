@@ -1092,30 +1092,46 @@ def unpack_zip(zip_path: Path, into: Path) -> Path:
     return tops[0] if len(tops) == 1 and tops[0].is_dir() else into     # docs-1.2/... -> its folder
 
 
+# Doxygen's listings of its own sources and folders, and other languages' pages (OpenCV: its Java
+# API, javadoc/; its JavaScript, Java, Clojure, Android and iOS tutorials): not the docs a reader
+# of a C++ or Python library looks in
+DOXYGEN_SKIP = re.compile(r"(_source\.html|(^|/)dir_[0-9a-f]+\.html|^javadoc/.*|tutorial_(js|java|clojure|android|ios)_[^/]*\.html|"
+                          r"_on_Android\.html|_8[a-z]+\.html|"
+                          r"^(files|annotated|classes|hierarchy|inherits|namespaces|modules|pages|examples|"
+                          r"functions|globals|namespacemembers)(_\w+)?\.html)$")     # (and its indexes, its files' pages)
+
+
 def build_local(name: str, sid: str, src: Path, workers: int, spec: str = "",
-                max_pages: int | None = None) -> tuple[list[Entry], dict]:
+                max_pages: int | None = None, root: str | None = None) -> tuple[list[Entry], dict]:
     """Docs you downloaded yourself (a folder, or a .zip of HTML or Markdown pages): read
     from disk, nothing fetched. The pages get the address https://SID.local-docs.invalid/
-    so links between them work in the search page. Their place is kept as they are read
-    (crawl_dir): stopped, the same command goes on."""
+    so links between them work in the search page (`root`: their address on the web, for a
+    release's docs: release_docs). Their place is kept as they are read (crawl_dir): stopped,
+    the same command goes on. Doxygen docs (a tag file next to their pages): their API objects
+    are entries too (doxygen.py)."""
+    from docsearch import doxygen
     import tempfile
     src = src.expanduser().resolve()
     if not src.exists():
         cli.die(f"{src}: no such file or folder.")
-    root = f"https://{sid}.{LOCAL_HOST}/"
+    root = root or f"https://{sid}.{LOCAL_HOST}/"
     if src.is_file() and src.suffix.lower() != ".zip":
         cli.die(f"{src}: give a folder, or a .zip of the docs.")
     tmp = Path(tempfile.mkdtemp(prefix="docsearch-")) if src.is_file() else None
     try:
         folder = unpack_zip(src, tmp) if tmp else src
+        tag = doxygen.tag_file(folder)
+        if tag is not None:                          # Doxygen: its pages are where its tag file is
+            folder = tag.parent
         files = sorted(f for f in folder.rglob("*") if f.is_file() and f.suffix.lower() in
                        (".html", ".htm", ".md", ".markdown")
-                       and not any(p.startswith(".") for p in f.relative_to(folder).parts))
+                       and not any(p.startswith(".") for p in f.relative_to(folder).parts)
+                       and not (tag is not None and DOXYGEN_SKIP.search(f.relative_to(folder).as_posix())))
         if len(files) > LOCAL_LIMITS["files"]:
             cli.die(f"{folder}: more than {LOCAL_LIMITS['files']} pages.")
         say(f"  {len(files)} pages in {src}")
         store = Store(sid, root)
-        if not begin(sid, {"kind": "local", "src": str(src)}, spec or f"{name}={src}", "local"):
+        if not begin(sid, {"kind": "local", "src": str(src), "root": root}, spec or f"{name}={src}", "local"):
             store.reset()
         part = part_dir(sid, 0)
         read_before = finished_part(part, store)
@@ -1146,6 +1162,8 @@ def build_local(name: str, sid: str, src: Path, workers: int, spec: str = "",
                      "failed_pages": len(fails), "failures": fails.as_meta()}
             if partial:
                 return entries, {**extra, "partial": partial}
+            if tag is not None:                      # its API objects, cut from the pages they are on
+                entries = doxygen_api(tag, folder, root, name, entries)
             finish_part(part, extra, images)
 
         def read_image(url: str) -> bytes:              # images come from the folder, not the web
@@ -1163,6 +1181,51 @@ def build_local(name: str, sid: str, src: Path, workers: int, spec: str = "",
         return entries, {**extra, "partial": cli.images_stopped(name)}
     shutil.rmtree(crawl_dir(sid), ignore_errors=True)    # complete: no place to keep
     return entries, extra
+
+
+def build_release(name: str, sid: str, plan: dict, workers: int, spec: str = "",
+                  max_pages: int | None = None) -> tuple[list[Entry], dict]:
+    """A release's docs, built (cli.release_docs): downloaded once, into data/downloads/ (a
+    stop goes on without downloading it again; read to the end, it is deleted), then read as
+    docs you downloaded yourself, at their address on the web."""
+    rel = plan["release"]
+    keep = cli.DATA / "downloads"
+    keep.mkdir(parents=True, exist_ok=True)
+    zip_path = keep / f"{sid}--{re.sub(r'[^\w.-]', '_', rel['name'])}"
+    if not zip_path.exists():
+        say(f"  downloading {rel['url']}")
+        data, _ = cli.http_get(rel["url"], timeout=900, limit=max(rel.get("size") or 0, 1) + 2**20)
+        cli.write_atomic(zip_path, data)
+    entries, extra = build_local(name, sid, zip_path, workers, spec, max_pages, root=plan["root"])
+    if not extra.get("partial"):
+        zip_path.unlink(missing_ok=True)
+    return entries, {**extra, "kind": "release-docs", "root": plan["root"]}
+
+
+def doxygen_api(tag: Path, folder: Path, root: str, name: str, pages_read: list[Entry]) -> list[Entry]:
+    """The pages read, with Doxygen docs' API objects (doxygen.py) cut from them on the other
+    cores; all tidied (a class's page, its class's entry; no "PROJECT: " in titles)."""
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    from docsearch import doxygen
+    by_page, types = doxygen.api(tag, root)
+    pages = [(page, objs) for page, objs in by_page.items() if (folder / page).is_file()
+             and not DOXYGEN_SKIP.search(page)]
+    out: list[Entry] = []
+    with cli.Progress(f"  API objects of {len(pages):,} pages", len(pages)) as bar, \
+            ProcessPoolExecutor(max_workers=max(1, os.cpu_count() or 4)) as pool:
+        futures = [pool.submit(doxygen.entries_of, (folder / page).read_bytes(), root + page, objs, name)
+                   for page, objs in pages]
+        for f in as_completed(futures):              # (as each page is done, not in their order)
+            out += f.result()
+            bar.update()
+    say(f"  {len(out):,} API objects (functions, classes, constants...) from its tag file")
+    entries = pages_read + out
+    titles, outline = doxygen.structure(tag)
+    doxygen.tidy(entries, root, types, titles)
+    places = {root + f: crumbs for f, crumbs in outline.items()}
+    if places:                                       # (its tutorials, under the pages that list them)
+        cli.write_atomic(cli.source_dir(cli.source_id(name)) / "outline.json", json.dumps(places).encode())
+    return entries
 
 
 # --------------------------------------------------------------------------- a README as the docs

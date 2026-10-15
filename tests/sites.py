@@ -8,7 +8,9 @@ spot check of 81 packages: eval/results-finding.md), with no internet: a fake we
 - a home page's link "Contribute to the docs" (tensorflow.org's): never the docs;
 - a home page that PyPI names, linking docs on another site named for the package (numba's);
 - a home page with no docs link, its docs in a folder named for the package (onnx.ai/onnx/);
-- docs behind a bot check (docs.opencv.org): not got around; the README, said why.
+- docs behind a bot check (docs.opencv.org): not got around; the README, said why;
+- and where its release publishes its docs, built (opencv-5.0.0-docs.zip): those, one download,
+  read with their Doxygen tag file: every function an entry, a class's page its class's.
 """
 from __future__ import annotations
 
@@ -78,6 +80,40 @@ def plan_of(name: str) -> tuple[dict | None, str]:
     return plan, said.getvalue()
 
 
+def doxygen_zip() -> bytes:
+    """A release's docs as Doxygen builds them: pages, and the tag file naming the API."""
+    def html(title: str, body: str) -> str:
+        return (f"<html><head><title>CVX: {title}</title></head><body><div class='header'><div class='headertitle'>"
+                f"<div class='title'>{title}</div></div></div><div class='contents'>{body}</div></body></html>")
+    tag = ("<?xml version='1.0'?><tagfile>"
+           "<compound kind='namespace'><name>cvx</name><filename>namespacecvx.html</filename>"
+           "<member kind='function'><type>Image</type><name>read</name><anchorfile>group__io.html</anchorfile>"
+           "<anchor>ga1</anchor><arglist>(const String &amp;path)</arglist></member></compound>"
+           "<compound kind='group'><name>io</name><title>Reading and writing</title><filename>group__io.html</filename>"
+           "<class kind='class'>cvx::Image</class></compound>"
+           "<compound kind='class'><name>cvx::Image</name><filename>classcvx_1_1Image.html</filename></compound>"
+           "<compound kind='page'><name>tutorial_root</name><title>CVX Tutorials</title><filename>tutorial_root.html</filename>"
+           "<subpage>tutorial_first.html</subpage></compound>"
+           "<compound kind='page'><name>tutorial_first</name><title>Your first image</title>"
+           "<filename>tutorial_first.html</filename></compound></tagfile>")
+    pages = {
+        "index.html": html("CVX", "<p>CVX reads and writes images, in many formats, quickly.</p>"),
+        "group__io.html": html("Reading and writing", "<p>Functions to read and write images.</p>"
+                               "<a id='ga1'></a><h2 class='memtitle'>read()</h2><div class='memitem'>"
+                               "<div class='memproto'>Image cvx::read(const String &amp;path)</div>"
+                               "<div class='memdoc'><p>Reads an image from a file and returns it.</p></div></div>"),
+        "classcvx_1_1Image.html": html("cvx::Image Class Reference", "<p>An image: its pixels, its size.</p>"),
+        "tutorial_root.html": html("CVX Tutorials", "<a href='tutorial_first.html'>Your first image</a>"),
+        "tutorial_first.html": html("Your first image", "<h1>What we will do</h1><p>Read an image with read, and show it.</p>"),
+    }
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as z:
+        for name, text in pages.items():
+            z.writestr(f"doc/html/{name}", text)
+        z.writestr("doc/html/cvx.tag", tag)
+    return out.getvalue()
+
+
 def web() -> None:
     hf = "/datasets/hf-doc-build/doc-build/resolve/main/hflib/"
     archive = io.BytesIO()
@@ -119,6 +155,19 @@ def web() -> None:
     challenge = (403, b"<html><head><title>Just a moment...</title></head></html>",
                  {"cf-mitigated": "challenge", "server": "cloudflare"})
     WEB["docs.cvlike.example"] = {"/master/": challenge, "/master/objects.inv": challenge}
+    docs = doxygen_zip()
+    WEB["pypi.org"]["/pypi/cvx/json"] = pypi("cvx", {"Homepage": "https://github.com/cvorg/cvx-python"},
+                                             "# cvx\n\nSee [the docs](https://docs.cvx.example/master/) and "
+                                             "[the library](https://github.com/cvorg/cvx).\n")
+    WEB["api.github.com"]["/repos/cvorg/cvx-python"] = json.dumps({"full_name": "cvorg/cvx-python", "homepage": ""}).encode()
+    WEB["api.github.com"]["/repos/cvorg/cvx-python/releases?per_page=30"] = b"[]"
+    WEB["api.github.com"]["/repos/cvorg/cvx/releases?per_page=30"] = json.dumps([
+        {"tag_name": "1.2.0", "draft": False, "prerelease": False,
+         "assets": [{"name": "cvx-1.2.0-docs.zip", "size": len(docs),
+                     "browser_download_url": "https://github.com/cvorg/cvx/releases/download/1.2.0/cvx-1.2.0-docs.zip"}]},
+        {"tag_name": "1.1.0", "draft": False, "prerelease": False, "assets": []}]).encode()
+    WEB["github.com"] = {"/cvorg/cvx/releases/download/1.2.0/cvx-1.2.0-docs.zip": docs}
+    WEB["docs.cvx.example"] = {"/master/": challenge, "/master/objects.inv": challenge}
 
 
 def main() -> None:
@@ -144,6 +193,22 @@ def main() -> None:
     plan, said = plan_of("cvlike")
     check(plan is not None and plan.get("found") == "readme" and "bot check" in said,
           f"docs behind a bot check: not got around; its README, and why ({plan and plan.get('found')})")
+    plan, said = plan_of("cvx")
+    check(plan is not None and plan.get("kind") == "release-docs" and plan.get("root") == "https://docs.cvx.example/1.2.0/"
+          and "publishes its docs" in said,
+          f"docs behind a bot check, but its release publishes them, built: those ({plan and plan.get('kind')})")
+    with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+        cli.main(["add", "cvx", "--no-embed"])
+    sid = next(s for s in cli.indexed() if s.startswith("cvx"))
+    got = {e.title: e for e in cli.iter_entries(sid)}
+    read = got.get("cvx::read")
+    check(read is not None and read.kind == "function" and "Reads an image" in read.text
+          and read.location == "https://docs.cvx.example/1.2.0/group__io.html#ga1"
+          and got.get("cvx::Image") is not None and got["cvx::Image"].kind == "class"
+          and got.get("Your first image") is not None and got["Your first image"].purpose == "learn"
+          and not any("docs.cvx.example" in u and "/master/" not in u for u in ASKED),
+          f"a release's Doxygen docs: each function an entry at its place on the docs site; a class's page "
+          f"its class; a tutorial titled as Doxygen titles it, to learn from ({sorted(got)[:8]})")
     print("all good")
 
 

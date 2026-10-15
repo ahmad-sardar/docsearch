@@ -66,6 +66,13 @@ Why: Hugging Face answered `429 Too Many Requests` while docsearch surveyed and 
 5. **robots.txt as RFC 9309**: answering 5xx or not reached, nothing is read from that site in
    this run, said so; 4xx, no rules.
 
+6. **A release's published docs** (2026-10-14): where the docs site refuses programs (OpenCV's
+   docs.opencv.org: a Cloudflare bot check) or none is found, the built docs the project's
+   GitHub release publishes for that version (`opencv-5.0.0-docs.zip`, 127 MB: one download
+   from GitHub, the project's own), before the README. Doxygen docs are read with their tag
+   file (docsearch/doxygen.py). OpenCV 5.0.0: 33,370 entries, every function and class, the
+   tutorials (Python and C++; the Java, Clojure, Android, iOS and JavaScript ones left out).
+
 Not done:
 - **User-Agent with a contact address** (`+https://github.com/ahmad-sardar/docsearch`): good
   practice, but it sends your GitHub address to every site; your call.

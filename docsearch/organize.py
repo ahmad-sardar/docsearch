@@ -31,11 +31,12 @@ from typing import NamedTuple
 from docsearch import cli
 from docsearch import pages as offline
 
-VERSION = 6                       # meta["organized"]: the rules a copy was organized with (2: examples;
+VERSION = 7                       # meta["organized"]: the rules a copy was organized with (2: examples;
                                   # 3: examples keep their purpose, only real ones, no placeholders,
                                   # whole sections; 4: a section reached by two labels, once;
                                   # 5: purposes by the site's structure, not by address;
-                                  # 6: Markdown API references' pages, API entries)
+                                  # 6: Markdown API references' pages, API entries;
+                                  # 7: a big labeled section parted by its own sections too)
 PURPOSES = {"learn": "Learn", "do": "Do", "lookup": "Look up", "understand": "Understand"}
 
 # The sites' own names for their parts, on a title made plain (lower case, without the
@@ -302,8 +303,8 @@ def classify(sid: str, meta: dict, entries: list[cli.Entry]) -> Pages:
                     at = cur
                 cur = above(cur)
         top = own.split("/")[0] if "/" in own else ""
-        if at is not None:
-            purpose[rel], anchor[rel] = label[at], at
+        if at is not None:                       # (a big top section of the outline: its own sections part it)
+            purpose[rel], anchor[rel] = label[at], (part_key(said) if at in big else at)
         elif guide is not None:                  # a guide's page: the guide's purpose, in its part:
             purpose[rel] = guide["purpose"]      # its top section in the guide's outline, else the guide
             anchor[rel] = part_key(said) or page_of(guide["root"], meta, stored)

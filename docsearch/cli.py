@@ -1669,6 +1669,63 @@ def docs_links(page: str, url: str, name: str, elsewhere: bool = False) -> list[
     return sorted(out.items(), key=lambda kv: not kv[1])[:3]
 
 
+# A release asset that is a project's built docs (opencv-5.0.0-docs.zip, opencv-docs-4.14.0.zip)
+DOCS_ASSET = re.compile(r"(^|[-_.])(docs?|documentation|html-?docs?)([-_.]|$)", re.I)
+
+
+def release_docs(name: str, repo: str | None, want: str = "") -> dict | None:
+    """The docs a project publishes with its releases, built (OpenCV: opencv-5.0.0-docs.zip on
+    github.com/opencv/opencv): one download from its repository's releases, for the version you
+    use, where its site cannot be read (docs.opencv.org shows programs a bot check). Its
+    repository's releases, or those of a repository of the same owner that its PyPI
+    description links (opencv-python is packaged in opencv/opencv-python; OpenCV is
+    opencv/opencv). {"repo", "tag", "url", "name", "size"}; None: none for this version."""
+    if not repo or not repo.startswith("github.com/"):
+        return None
+    owner = repo.split("/")[1].lower()
+    info = PYPI_INFO.get(name) or {}
+    version = (want or info.get("version") or "").lstrip("v")
+    linked = {repo_of(u) for u in re.findall(r"https://github\.com/[^\s)\]\"'<>`]+", info.get("description") or "")}
+    repos = [repo] + sorted(r for r in linked if r and r != repo and r.split("/")[1].lower() == owner)
+    for r in repos[:3]:
+        try:
+            data = json.loads(http_get(f"https://api.github.com/repos/{r[len('github.com/'):]}/releases?per_page=30",
+                                       timeout=20)[0])
+        except (Failed, ValueError):
+            continue
+        best = None
+        for rel in data if isinstance(data, list) else []:
+            tag = str(rel.get("tag_name") or "").lstrip("v")
+            if rel.get("draft") or rel.get("prerelease") or not tag or not (
+                    version == tag or version.startswith(tag + ".")):         # (5.0.0.93: release 5.0.0)
+                continue
+            asset = next((a for a in rel.get("assets") or [] if str(a.get("name", "")).lower().endswith(".zip")
+                          and DOCS_ASSET.search(a["name"][:-4])), None)
+            if asset and (best is None or len(tag) > len(best[0])):
+                best = (tag, asset)
+        if best:
+            tag, asset = best
+            return {"repo": r, "tag": tag, "url": asset["browser_download_url"], "name": asset["name"],
+                    "size": int(asset.get("size") or 0)}
+    return None
+
+
+def release_root(name: str, tag: str, sid: str) -> str:
+    """Where the docs of a release are on the web, for their pages' addresses: the docs site
+    its PyPI record or description links, at that version (docs.opencv.org/master/ ->
+    docs.opencv.org/5.0.0/); else none (the pages' own addresses, as local docs have)."""
+    links = list((project_of(name) or {}).get("docs") or []) + readme_docs(name)
+    for link in links:
+        u = urllib.parse.urlparse(link)
+        segs = [x for x in u.path.split("/") if x]
+        if segs and VERSION_SEGMENT.match(segs[0]):
+            return f"{u.scheme}://{u.netloc}/{tag}/"
+        if u.netloc:
+            return f"{u.scheme}://{u.netloc}/{'/'.join(segs[:1]) + '/' if segs else ''}"
+    from docsearch import importers
+    return f"https://{sid}.{importers.LOCAL_HOST}/"
+
+
 def readme_docs(name: str) -> list[str]:
     """Docs a package's PyPI description links to by their address (a docs. host, Read the Docs,
     a /docs folder): opencv-python's README, docs.opencv.org. The description is the package's
@@ -1764,7 +1821,6 @@ def package_docs(name: str, yes: bool) -> tuple[str, str, bytes | None, dict] | 
         say(f"  {NEXT.get(kind) or 'Try again later.'}")
         return None
     if first is None and has_readme(PYPI_INFO.get(name) or {}):
-        say(f"  {name} names no docs site (PyPI, its repository): its README is its documentation")
         return "readme", f"https://pypi.org/project/{name}/", None, {"repo": repo, "about": summary,
                                                                      "verified": "PyPI's record of the package"}
     if first is None:
@@ -3198,7 +3254,20 @@ def web_docs(name: str, spec: str, want: str, override: str, args, check_copy: b
             return None
         return {**hf, **{k: v for k, v in source.items() if v}}     # (its header's links: the Hub's own
                                                                    # sections, Models, Learn: not guides)
+    if kind == "readme":                             # the docs its releases publish, built: before the README
+        got = release_docs(name, source.get("repo"), want)
+        if got:
+            sid = f"{source_id(name)}@{copy_label({'spec': spec, 'version': got['tag']}, want) or got['tag']}"
+            root = release_root(name, got["tag"], sid)
+            say(f"  {name}: its release {got['tag']} publishes its docs, built: {got['name']} "
+                f"({got['size'] / 2**20:.0f} MB, github.com/{got['repo'][len('github.com/'):]}): one download")
+            if check_copy and have_copy(spec, name, want, got["tag"], args):
+                return None
+            return {"found": "release-docs", "kind": "release-docs", "root": root, "url": got["url"],
+                    "version": got["tag"], "release": got, **{k: v for k, v in source.items() if v}}
     if kind == "readme":                             # the README of a release: the newest, or the one asked
+        say(f"  {name} names no docs site that can be read (PyPI, its repository), and its releases publish "
+            f"no docs: its README is its documentation")
         version = want or (PYPI_INFO.get(name) or {}).get("version") or ""
         if not version or (want and not release_info(name, want)):
             say(f"  {name}: PyPI has no release {want}." if want else f"  {name}: PyPI names no release.")
@@ -3375,9 +3444,9 @@ def add_each(args, outer: str) -> None:
             if stopped is not None:                      # go on where it stopped
                 say("  going on where it stopped")
                 how, plan_ = stopped.get("how"), stopped["plan"]
-                if how == "local":                       # docs you downloaded yourself
+                if how == "local":                       # docs you downloaded yourself (or a release's)
                     entries, extra = importers.build_local(name, sid, Path(plan_["src"]), args.workers, spec,
-                                                           args.max_pages)
+                                                           args.max_pages, root=plan_.get("root"))
                     meta.update(extra)
                 else:                                    # docs we know, or found (an earlier docsearch
                     read = {"found": "sphinx", **plan_} if how == "sphinx" else plan_     # kept "sphinx")
@@ -3409,6 +3478,11 @@ def add_each(args, outer: str) -> None:
                                 check_copy=not staged and not getattr(args, "force", False))
                 if read is None:
                     continue
+                if read.get("kind") == "release-docs":   # a release's docs, built: one download, read
+                    entries, extra = importers.build_release(name, sid, read, args.workers, spec, args.max_pages)
+                    meta.update(extra, kind="release-docs", root=read["root"], version=read["version"],
+                                release=read["release"], **{k: read[k] for k in ("repo", "verified") if read.get(k)})
+                    read = None
             if read is not None:
                 entries, extra = build_known(name, sid, read, args.workers, args.max_pages, True, spec)
                 meta.update(extra, **{k: read[k] for k in ("repo", "verified") if read.get(k)})

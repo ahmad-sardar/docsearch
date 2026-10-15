@@ -192,7 +192,18 @@ def main() -> None:
     site = f"http://127.0.0.1:{server.server_address[1]}"
     start = f"{site}/v23/docs/"
     plan = {"kind": "website", "root": start, "start": start, "prefix": start}
-    entries, meta = cli.build_known("db", "db", plan, 8, None)
+    turns: list[float] = []                          # when each request was let go (cli.wait_turn)
+    real_wait = cli.wait_turn
+
+    def wait_turn(host: str) -> None:
+        real_wait(host)
+        if host in cli.PACE:
+            turns.append(time.monotonic())
+    cli.wait_turn = wait_turn
+    try:
+        entries, meta = cli.build_known("db", "db", plan, 8, None)
+    finally:
+        cli.wait_turn = real_wait
     pages = {e.location: e for e in entries if e.kind == "page"}
     asked = [path for _, path in LOG]
 
@@ -209,7 +220,11 @@ def main() -> None:
     check(meta["failures"].keys() == {"not-found"} and cli.missed_pages(meta) == 0,
           "links to missing pages: not a reason to call the download incomplete")
     times = [t for t, path in LOG if path != "/robots.txt"]
-    check(min(b - a for a, b in zip(times, times[1:])) >= 0.9, "robots.txt Crawl-delay kept")
+    sent = min(b - a for a, b in zip(turns, turns[1:]))
+    came = min(b - a for a, b in zip(times, times[1:]))     # (on the way: a busy machine's delays)
+    check(len(turns) >= len(times) - 1 and sent >= 0.9 and came >= 0.5,
+          f"robots.txt Crawl-delay kept: 1 s between requests sent (at least {sent:.3f} s; "
+          f"{came:.3f} s as they came)")
 
     whole = sorted((e.title, e.location) for e in entries)
     SITE["/robots.txt"] = (200, b"User-agent: *\n")    # (no more waiting between pages: faster)

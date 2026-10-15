@@ -1,5 +1,3 @@
-[This project isHard Vibe coding]
-
 # docsearch
 
 search docs from your terminal. read them in your browser. offline.

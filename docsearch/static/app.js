@@ -47,6 +47,7 @@ async function init() {
   state.ai = p.get("ai") === "1";            // "search ai IDEA" turns AI on; plain "search", off
   $("#ai").setAttribute("aria-pressed", state.ai ? "true" : "false");
   setHow(p.get("mode") === "how");           // "search how IDEA": the guides; plain "search": the reference
+  state.purpose = PURPOSE[p.get("purpose")] ? p.get("purpose") : "";   // only learn, do, look up or understand
   $("#q").value = state.q;
   renderSources();
   renderChoose();
@@ -155,6 +156,7 @@ async function search({ openFirst = true, append = false, ai = false } = {}) {
   const params = new URLSearchParams({ q: state.q, src: searchedSources().join(","),
                                        offset: append ? state.items.length : 0, limit: 80,
                                        mode: state.how ? "how" : "what" });
+  if (state.purpose) params.set("purpose", state.purpose);
   if (state.proj) params.set("proj", state.proj);
   if (ai) { params.set("ai", "1"); status(`Ranking with AI… (“${state.q}”)`); }
   let data;
@@ -167,7 +169,9 @@ async function search({ openFirst = true, append = false, ai = false } = {}) {
   const where = state.srcs.size ? searchedSources().join(", ") : "all packages";
   const fixed = data.corrected ? ` · also searched “${data.corrected}”` : "";
   $("#how").setAttribute("aria-pressed", data.mode === "how" ? "true" : "false");
-  const kind = data.mode === "how" ? " · how: guides, how-tos and examples first" : "";
+  renderPurposes(data.purposes || {});
+  const kind = data.purpose ? ` · ${PURPOSE[data.purpose]} only`
+             : data.mode === "how" ? " · how: guides, how-tos and examples first" : "";
   status(state.q ? `${data.total} results for “${data.q}”${fixed} · ${where}${kind}${data.ai === "ranked" ? " · ranked with AI" : ""}`
                  : `${data.total} entries · ${where}, in reading order${kind}`);
   if (data.error) status(data.error);
@@ -202,6 +206,34 @@ function status(text) { $("#status").textContent = text; }
 // What an entry is for (organize.py): before you type, the list goes package by package,
 // each in this order, each in the order its docs are read.
 const PURPOSE = { learn: "Learn", do: "Do", lookup: "Look up", understand: "Understand" };
+const PURPOSE_NOTE = { learn: "tutorials, getting started, quickstarts", do: "how-tos, user guides, examples, FAQs",
+                       lookup: "the reference: every function and class", understand: "fundamentals, concepts, internals" };
+
+// All · Learn · Do · Look up · Understand: only one purpose's entries, searched among themselves
+// (keys 0–4). Each says how many entries the packages searched have.
+function renderPurposes(have) {
+  const nav = $("#purposes");
+  nav.textContent = "";
+  const all = Object.values(have).reduce((a, b) => a + b, 0);
+  for (const [k, p] of [["", "All"], ...Object.entries(PURPOSE)].entries()) {
+    const key = p[0];
+    const b = el("button", key ? `purpose-chip ${key}` : "purpose-chip", p[1]);
+    const n = key ? have[key] || 0 : all;
+    b.append(el("span", "count", n.toLocaleString()));
+    b.setAttribute("aria-pressed", state.purpose === key ? "true" : "false");
+    b.title = key ? `${p[1]}: ${PURPOSE_NOTE[key]}. Only these, the best first (key ${k}; again: all).`
+                  : "Every entry (key 0)";
+    b.disabled = !!key && !n && state.purpose !== key;    // (Python's docs have no "understand" part)
+    b.addEventListener("click", () => setPurpose(key));
+    nav.append(b);
+  }
+}
+
+// Choose a purpose (the chosen one again: all of them).
+function setPurpose(key) {
+  state.purpose = state.purpose === key ? "" : key;
+  search({ openFirst: !!state.q }).then(homeAgain);
+}
 
 function renderResults(items, start) {
   const ol = $("#results");
@@ -502,6 +534,7 @@ function showHome() {
                 ["sum of elements along an axis", "a description: search by meaning"],
                 ["how merge two tables", "how first (or the How button, or search how …): tutorials, guides, "
                                          + "how-tos, examples and the functions that do it first"],
+                ["1 2 3 4", "only Learn, Do, Look up or Understand (the buttons over the results); 0: all"],
                 ["↑ ↓", "move through the results"],
                 ["Enter", "the full page (offline copy)"], ["Esc", "back, then clear the search"],
                 ["/", "jump to the search box"], ["w", "wrap or scroll long code lines"],
@@ -528,6 +561,7 @@ async function showContents(box) {
     sec.id = `contents-${s.id}`;
     sec.append(el("h2", null, `${s.name} ${s.version}`.trim()));
     for (const g of s.groups) {
+      if (state.purpose && g.purpose !== state.purpose) continue;     // (Do only: each package's do part)
       const col = el("div", `purpose-group ${g.purpose}`);
       const h = el("h3", null, g.label);
       h.append(el("span", "count", ` ${g.count.toLocaleString()} entries`));
@@ -555,6 +589,9 @@ async function showContents(box) {
       }
       col.append(ul);
       sec.append(col);
+    }
+    if (state.purpose && !s.groups.some((g) => g.purpose === state.purpose)) {
+      sec.append(el("p", "count", `No ${PURPOSE[state.purpose].toLowerCase()} part in these docs.`));
     }
     box.append(sec);
     if (data.sources.length > 1) {
@@ -606,6 +643,7 @@ function syncURL(push) {
   if (state.q) p.set("q", state.q);
   if (state.ai) p.set("ai", "1");
   if (state.how) p.set("mode", "how");
+  if (state.purpose) p.set("purpose", state.purpose);
   if (state.proj) p.set("proj", state.proj);
   if (state.srcs.size) p.set("src", searchedSources().join(","));
   if (state.view?.type === "entry") p.set("id", state.view.id);
@@ -744,6 +782,9 @@ function bindEvents() {
       if (state.view?.type === "page") history.back();
       else if (input.value) { input.value = ""; input.dispatchEvent(new Event("input")); }
       else input.blur();
+    } else if (!inInput && /^[0-4]$/.test(ev.key)) {      // 1–4: one purpose; 0: all
+      const key = ["", ...Object.keys(PURPOSE)][+ev.key];
+      if (key !== state.purpose) setPurpose(key);
     } else if (ev.key === "/" && !inInput) {
       ev.preventDefault(); input.focus(); input.select();
     } else if (!inInput && ev.key === "w") {

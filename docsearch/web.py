@@ -65,6 +65,9 @@ def pygments_css() -> str:
 # --------------------------------------------------------------------------- the library
 
 
+PURPOSES = ("learn", "do", "lookup", "understand")     # organize.PURPOSES: what an entry is for
+
+
 def language_of(group: str) -> str:
     """The language a package's docs are for: a known language's own (sources.py), else Python
     (packages come from PyPI)."""
@@ -99,7 +102,7 @@ class Library:
         self.order: list[str] = []                   # the copies loaded, in the order they came
         self._browse_pos: tuple = (None, {})         # (index, entry -> place in index.browse)
         self._page_titles: tuple = (None, {})        # (index, a page's address -> its title)
-        self._browse: tuple = (None, [])             # ((index, packages), the list before you type)
+        self._browse: tuple = (None, [], {})         # ((index, packages), the list before you type, per purpose)
         self.summaries: dict[int, str] = {}
         self._covers: dict[str, dict] = {}          # copy -> what it describes
         self._marks: dict[int, dict] = {}           # entry -> its version marks
@@ -219,16 +222,20 @@ class Library:
         return self._complete[i]
 
     def search(self, q: str, srcs: set[str], offset: int, limit: int, ai: bool = False,
-               project: dict[str, str] | None = None, mode: str = "what") -> dict:
+               project: dict[str, str] | None = None, mode: str = "what", purpose: str = "") -> dict:
         """`mode`: "what" (plain search: the reference, explanations) or "how" (tutorials,
         guides, how-tos, examples and the functions that do it first): cli.MODES. With no
-        query, the docs organized (how: its learn and do parts)."""
+        query, the docs organized (how: its learn and do parts). `purpose`: only the entries
+        of one (learn, do, lookup, understand), the best of them first; "purposes": how many
+        entries of each the packages have."""
         q = q.strip()
         every = not srcs                             # (every package: your project's languages first)
         mode = mode if mode in cli.MODES else "what"
         m = re.match(r"how\s+(?=\S)", q, re.I)          # "how merge two tables": how, as search how
         if m:
             q, mode = q[m.end():], "how"
+        purpose = purpose if purpose in PURPOSES else ""
+        kind = purpose or mode                       # (the entries searched)
         srcs = srcs or self.default                  # never two versions of one package at once
         with self.lock:
             self.ensure(srcs)
@@ -237,7 +244,9 @@ class Library:
         plain_q = " ".join([rest] + phrases).strip()     # what ranks the results (and the AI reads)
         if not q:                                    # no query: all the docs, each package by purpose
             ids = self.browse(index, sid_of, srcs)   # (learn, do, look up, understand), in reading order
-            if mode == "how":
+            if purpose:
+                ids = [i for i in ids if index.entries[i].purpose == purpose]
+            elif mode == "how":
                 ids = [i for i in ids if index.entries[i].purpose in cli.MODES["how"]]
         elif phrases or patterns:                    # strict: every match, the best first
             with self.lock:
@@ -245,9 +254,10 @@ class Library:
                     found = index.strict(phrases, patterns, index.full_text)
                 except ValueError as e:
                     return {"q": q, "total": 0, "ai": None, "items": [], "error": str(e)}
-                hits = index.search(plain_q, limit=3000, mode=mode) if plain_q else []
+                hits = index.search(plain_q, limit=3000, mode=kind) if plain_q else []
             allowed = {i for i in found if (not srcs or sid_of[i] in srcs) and not index.duplicate(i)
-                       and (mode == "how" or index.entries[i].purpose in cli.MODES[mode])}
+                       and (index.entries[i].purpose == purpose if purpose
+                            else mode == "how" or index.entries[i].purpose in cli.MODES[mode])}
             ranked = [i for i, _, _ in hits if i in allowed]
             if self._browse_pos[0] is not index:
                 self._browse_pos = (index, {i: k for k, i in enumerate(index.browse)})
@@ -256,7 +266,7 @@ class Library:
             ids = ranked + sorted((i for i in allowed if i not in seen), key=lambda i: pos.get(i, len(pos)))
         else:
             with self.lock:
-                hits = index.search(q, limit=3000 if srcs else cli.SHOW, mode=mode)
+                hits = index.search(q, limit=3000 if srcs else cli.SHOW, mode=kind)
             ids = [i for i, _, _ in hits if not srcs or sid_of[i] in srcs][:cli.SHOW]
         state = None
         if ai and plain_q:                           # the model reorders the top results
@@ -279,7 +289,13 @@ class Library:
         for it in items:                             # two of one name: where each is
             if it["id"] in where:
                 it["where"] = where[it["id"]]
-        return {"q": q, "total": len(ids), "ai": state, "corrected": fixed, "mode": mode, "items": items}
+        return {"q": q, "total": len(ids), "ai": state, "corrected": fixed, "mode": mode, "items": items,
+                "purpose": purpose, "purposes": self.purposes(index, sid_of, srcs)}
+
+    def purposes(self, index, sid_of: list[str], srcs: set[str]) -> dict[str, int]:
+        """How many entries of each purpose the packages have (as listed before you type)."""
+        self.browse(index, sid_of, srcs)
+        return self._browse[2]
 
     def yours_first(self, index, sid_of: list[str], ids: list[int], q: str, project: dict[str, str]) -> list[int]:
         """Every package searched from a project: what is named exactly as asked first (malloc,
@@ -342,8 +358,10 @@ class Library:
             rank = {p: k for k, p in enumerate(organize.PURPOSES)}
             where = {sid: k for k, (_, sid) in enumerate(index.spans)}
             ids = [i for i in index.browse if not srcs or sid_of[i] in srcs]
+            have = Counter(index.entries[i].purpose for i in ids)
             self._browse = (key, sorted(ids, key=lambda i: (where[sid_of[i]],
-                                                            rank.get(index.entries[i].purpose, len(rank)))))
+                                                            rank.get(index.entries[i].purpose, len(rank)))),
+                            {p: have.get(p, 0) for p in PURPOSES})
         return self._browse[1]
 
     def contents(self, srcs: set[str]) -> list[dict]:
@@ -667,7 +685,8 @@ class Handler(BaseHTTPRequestHandler):
                 offset = max(0, int(qs.get("offset", "0") or 0))
                 limit = min(200, max(1, int(qs.get("limit", "60") or 60)))
                 return self.json(lib.search(qs.get("q", "")[:300], srcs, offset, limit, qs.get("ai") == "1",
-                                            project_of(qs.get("proj", "")), qs.get("mode", "what")))
+                                            project_of(qs.get("proj", "")), qs.get("mode", "what"),
+                                            qs.get("purpose", "")))
             m = re.fullmatch(r"/api/source/(\d+)", url.path)
             if m:
                 i = int(m.group(1))

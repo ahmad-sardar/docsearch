@@ -3023,7 +3023,8 @@ class Index:
         (benchmark: eval/results-spelling.md). `mode`: "what", plain search: only the entries
         it covers (MODES), each ranker choosing among them; "how": search how's own entries
         (MODES, and the API objects: numpy.argmax finds the indices of the maximum) fused with
-        every entry (eval/results-usability.md, T2)."""
+        every entry (eval/results-usability.md, T2); a purpose ("learn", "do", "lookup",
+        "understand"): only its entries."""
         if mode == "how":                            # its own first, then everything: the function
             own, every = self.search(q, limit, "how-own"), self.search(q, limit)      # that does it too
             return rrf([("how", [i for i, _, _ in own], 1.0), ("all", [i for i, _, _ in every], 1.0)])[:limit]
@@ -3040,10 +3041,11 @@ class Index:
 
     def mode_mask(self, mode: str):
         """The entries a kind of search covers (MODES; "how-own": search how's, and the API
-        objects), made once."""
+        objects; a purpose, "do": only its entries), made once."""
         import numpy as np
         if mode not in self.masks:
-            self.masks[mode] = np.array([e.purpose in MODES[mode.split("-")[0]]
+            wanted = MODES.get(mode.split("-")[0], {mode})
+            self.masks[mode] = np.array([e.purpose in wanted
                                          or (mode == "how-own" and e.kind not in PAGE_KINDS)
                                          for e in self.entries], dtype=bool)
         return self.masks[mode]

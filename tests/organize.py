@@ -193,6 +193,17 @@ def main() -> None:
           and {it["purpose"] for it in empty_how} == {"learn", "do"},
           f"plain search: the reference (names first); how: the tutorials and guides first, the function "
           f"that does it too ({what[:2]}, {how[:2]})")
+    learn = lib.search("sorting by key", {"mini"}, 0, 50, purpose="learn")
+    lookup = lib.search("sorting by key", {"mini"}, 0, 50, mode="how", purpose="lookup")
+    browse_do = lib.search("", {"mini"}, 0, 200, purpose="do")
+    have = browse_do["purposes"]
+    check(learn["items"] and {it["purpose"] for it in learn["items"]} == {"learn"}
+          and lookup["items"] and {it["purpose"] for it in lookup["items"]} == {"lookup"} and lookup["mode"] == "how"
+          and browse_do["purpose"] == "do" and {it["purpose"] for it in browse_do["items"]} == {"do"}
+          and have == lib.search("sorting by key", {"mini"}, 0, 5)["purposes"]
+          and have["do"] == browse_do["total"] and have["lookup"] == order.count("lookup") and set(have) == set(organize.PURPOSES),
+          f"one purpose: only its entries, searched among themselves (in how mode too), and before you type; "
+          f"each purpose's count of entries ({learn['items'][:1]}, {lookup['items'][:1]}, {have})")
     typed = lib.search("how sorting by key", {"mini"}, 0, 20)
     check(typed["mode"] == "how" and typed["q"] == "sorting by key" and typed["items"]
           and typed["items"][0]["name"] == "Sorting by key (section)",

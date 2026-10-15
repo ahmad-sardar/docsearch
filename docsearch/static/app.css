@@ -108,7 +108,20 @@ kbd {
 
 /* ---- results ------------------------------------------------------------------ */
 .results-pane { border-right: 1px solid var(--border); background: var(--bg); }
-.status { font-size: 13px; color: var(--faint); padding: 12px 18px 6px; }
+.status { font-size: 13px; color: var(--faint); padding: 4px 18px 6px; }
+.purposes {
+  position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; gap: 5px;
+  padding: 10px 14px 6px; background: var(--bg);
+}
+.purpose-chip {
+  font: 13px var(--font); color: var(--soft); background: transparent; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px;
+}
+.purpose-chip .count { color: var(--faint); margin-left: 5px; font-size: 12px; }
+.purpose-chip:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.purpose-chip[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.purpose-chip[aria-pressed="true"] .count { color: inherit; }
+.purpose-chip:disabled { opacity: .45; cursor: default; }
 .choose { grid-row: 2; font-size: 13px; padding: 8px 20px; background: var(--accent-soft); border-bottom: 1px solid var(--border); }
 .choose[hidden] { display: none; }
 .choose-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }

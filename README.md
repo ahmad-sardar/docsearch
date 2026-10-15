@@ -138,6 +138,14 @@ only the docs' own words (a page's title, or the part of their table of contents
 the page's home shows each package that way: each part (as its docs name it) with the pages
 under it. results say what they're for. `search list numpy` counts them.
 
+to see only one, the buttons over the results: **all · learn · do · look up · understand**
+(or the keys 0–4). a search then looks among that purpose's entries only: for "read a csv
+file", **do** gives `read_csv`'s examples and the user guide's "csv & text files", **look up**
+gives `read_csv` itself. each button says how many entries the packages have, and a purpose
+with none is grayed out (python's docs have no "understand" part). before you type, the list
+and the home show only that purpose's parts. the address keeps the choice
+(`?purpose=understand`), so a link to it does too.
+
 two searches, for two questions:
 
 - **plain `search`: what** something is. the reference and the explanations (look up,

@@ -1191,7 +1191,8 @@ def build_release(name: str, sid: str, plan: dict, workers: int, spec: str = "",
     rel = plan["release"]
     keep = cli.DATA / "downloads"
     keep.mkdir(parents=True, exist_ok=True)
-    zip_path = keep / f"{sid}--{re.sub(r'[^\w.-]', '_', rel['name'])}"
+    safe = re.sub(r"[^\w.-]", "_", rel["name"])
+    zip_path = keep / f"{sid}--{safe}"
     if not zip_path.exists():
         say(f"  downloading {rel['url']}")
         data, _ = cli.http_get(rel["url"], timeout=900, limit=max(rel.get("size") or 0, 1) + 2**20)

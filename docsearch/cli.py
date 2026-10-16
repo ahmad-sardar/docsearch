@@ -574,6 +574,7 @@ def told(url: str, timeout: float, ask):
             say(f"    {short} · {answer} · {took}")
 
 
+SURVEYED: dict[str, tuple[bytes, str]] = {}   # the lists a survey read this command (site.get)
 ANSWERED_ABSENT: dict[str, Failed] = {}   # addresses that answered "not there" (404, 410) this run:
                                            # not asked again (the survey's objects.inv, after finding)
 
@@ -3388,6 +3389,13 @@ def web_docs(name: str, spec: str, want: str, override: str, args, check_copy: b
             return None
         kind, root, inv, page = find_docs(override, fallback=True, given=True) or ("website", override, None, "")
         source = {"repo": address_repo(page, root)} if page else {}
+        if kind == "website":                        # a site's home page: its docs where its own
+            from docsearch import site as sites      # llms.txt says they are
+            docs = sites.llms_docs(root)
+            if docs:
+                say(f"  {root} is the site's home page; its llms.txt lists its docs at {docs}: reading those")
+                source["home"] = root                # (its header names the site's guides: Learn)
+                kind, root = "website", docs
     else:
         got = package_docs(name, args.yes)
         if got is None:
@@ -5224,6 +5232,7 @@ def main(argv: list[str] | None = None) -> None:
         argv = ["update", *argv[1:]]
     PAGES_SEEN.clear()                             # (what a site answered: kept for this command)
     ANSWERED_ABSENT.clear()
+    SURVEYED.clear()
     if not argv or argv[0] not in ONLINE:          # everything but indexing stays offline
         offline_only()
     if not argv:                                   # just "search": open the search page

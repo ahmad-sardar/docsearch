@@ -35,9 +35,10 @@ GENERATOR = re.compile(r"""<meta[^>]+name=["']generator["'][^>]+content=["'][^"'
                        r"antora|mystmd)", re.I)
 
 
-def find_guides(root: str, page: str, names: set[str]) -> list[dict]:
+def find_guides(root: str, page: str, names: set[str], base: str | None = None) -> list[dict]:
     """The guides the docs' header and navigation link to, outside the docs: links named as
-    something to learn or do from ("User guide", "Learn", "Tutorials", "Examples")."""
+    something to learn or do from ("User guide", "Learn", "Tutorials", "Examples"). `base`: the
+    page's address, when it is not the docs' (the site's home page they were found from)."""
     from docsearch import organize
     soup = cli.make_soup(page.encode())
     out: dict[str, dict] = {}
@@ -49,7 +50,7 @@ def find_guides(root: str, page: str, names: set[str]) -> list[dict]:
             purpose = organize.label_of(text, names)
             if purpose not in ("learn", "do"):
                 continue
-            url = urllib.parse.urljoin(root, a["href"]).split("#")[0]
+            url = urllib.parse.urljoin(base or root, a["href"]).split("#")[0]
             host = urllib.parse.urlparse(url).netloc.lower().removeprefix("www.")
             if not cli.safe_url(url) or url.startswith(root) or cli.repo_of(url) or host in cli.SKIP_HOSTS:
                 continue
@@ -165,12 +166,13 @@ def plan_with(plan: dict, name: str, args, newest: bool, pypi: bool = False) -> 
     names = {name.lower(), name.replace("-", " ").lower()}
     found: list[dict] = []
     if newest:
-        seen = cli.PAGES_SEEN.get(root)
+        top = plan.get("home") or root               # (the site's home page, where its docs were found
+        seen = cli.PAGES_SEEN.get(top)               # from it: its header names its guides)
         try:                                         # (read already this run: not asked again)
-            page = seen[1] if seen and seen[1] else cli.landing(root)[1]
+            page = seen[1] if seen and seen[1] else cli.landing(top)[1]
         except Exception:  # noqa: BLE001 - no page: no header to read
             page = ""
-        found = find_guides(root, page, names) if page else []
+        found = find_guides(root, page, names, base=top) if page else []
         if pypi:
             found += [g for g in pypi_docs(name, root) if g["url"] not in {f["url"] for f in found}]
     asked = wanted(name, args)

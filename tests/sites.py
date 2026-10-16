@@ -12,7 +12,10 @@ spot check of 81 packages: docs/evaluation/results-finding.md), with no internet
 - and where its release publishes its docs, built (opencv-5.0.0-docs.zip): those, one download,
   read with their Doxygen tag file: every function an entry, a class's page its class's;
 - an address you gave (learncpp.com, whose every "not there" takes seconds): each request said,
-  with how the site answered; folders guessed only where its page links; nothing asked twice.
+  with how the site answered; folders guessed only where its page links; nothing asked twice;
+- a site's home page you gave (nodejs.org/en, its website): its docs where its own llms.txt
+  says (/docs/latest/api/), each page at the address the site links it by (fs.html, listed as
+  fs.md), the list asked for once; an address that is not a home page: as you gave it.
 """
 from __future__ import annotations
 
@@ -227,6 +230,32 @@ def main() -> None:
           and "learn.example/objects.inv · not there (404) · " in said and "waiting for the site's answers" in said,
           f"an address you gave: each request said, with the site's answer; folders guessed only where its page "
           f"links (docs/, not stable/); nothing asked twice ({guessed}; {said.splitlines()[-1:]})")
+    names = [chr(97 + k) for k in range(12)]
+    WEB["nodex.example"] = {
+        "/en/": page("Nodex", "<nav><a href='/learn/'>Learn</a> <a href='/docs/api/'>Docs</a></nav>"
+                     + "".join(f"<p><a href='/en/blog/post-{k}'>Post {k}</a></p>" for k in range(12))),
+        **{f"/en/blog/post-{k}": page(f"Post {k}") for k in range(12)},
+        "/llms.txt": ("# Nodex Documentation\n\n## API\n" + "".join(
+            f"- [{n}](https://nodex.example/docs/api/{n}.md): the {n} module\n" for n in names)).encode(),
+        "/docs/api/": page("Nodex API", "".join(f"<p><a href='{n}.html'>{n}</a></p>" for n in names)),
+        **{f"/docs/api/{n}.html": page(f"Module {n}") for n in names},
+        **{f"/docs/api/{n}.md": f"# Module {n}\n\nThe {n} module, explained in words enough.\n".encode() for n in names},
+        "/learn/": page("Learn Nodex"),
+    }
+    ASKED.clear()
+    said = io.StringIO()
+    with contextlib.redirect_stderr(said), contextlib.redirect_stdout(said), cli.telling():
+        plan = cli.web_docs("nodex", "nodex=https://nodex.example/en/", "", "https://nodex.example/en/",
+                            argparse.Namespace(yes=True, workers=2, guide=None), check_copy=False)
+    listed = (plan or {}).get("listed") or []
+    from docsearch import site as sites
+    check(plan is not None and plan.get("root") == "https://nodex.example/docs/api/"
+          and all(u.endswith(".html") or u.endswith("/") for u in listed) and len(listed) >= 12
+          and plan.get("md_of", {}).get("https://nodex.example/docs/api/a.html") == "https://nodex.example/docs/api/a.md"
+          and ASKED.count("https://nodex.example/llms.txt") == 1 and "home page" in said.getvalue()
+          and sites.llms_docs("https://nodex.example/learn/") is None,
+          f"a site's home page you gave: its docs where its llms.txt says; pages at the addresses the site links; "
+          f"the list asked once; not a home page: as given ({plan and plan.get('root')}, {listed[:3]})")
     WEB["pg.example"] = {"/docs/17/": page("PG 17 manual", "".join(f"<p><a href='/docs/17/ch{k}.html'>Chapter {k}</a></p>"
                                                                   for k in range(12))),
                          **{f"/docs/17/ch{k}.html": page(f"Chapter {k}") for k in range(12)}}

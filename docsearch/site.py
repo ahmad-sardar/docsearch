@@ -170,8 +170,13 @@ def get(url: str, timeout: float = 15) -> tuple[bytes, str] | None:
     host = urllib.parse.urlparse(url).netloc
     if host in LIMITED:
         return None
+    if url in cli.SURVEYED:                          # (asked already in this command: llms.txt, read
+        return cli.SURVEYED[url]                     # to see what it is, then for its pages)
     try:
-        return cli.http_get_once(url, timeout=timeout)
+        got = cli.http_get_once(url, timeout=timeout)
+        if len(got[0]) <= 4 << 20:
+            cli.SURVEYED[url] = got
+        return got
     except cli.Failed as e:
         if e.kind == "rate-limited":
             LIMITED.add(host)
@@ -219,6 +224,49 @@ def search_index(root: str) -> tuple[list[str], dict[str, list[str]]]:
     return [], {}
 
 
+def as_linked(listed: list[str], crumbs: dict, md_of: dict, links: list[str]) -> tuple[list[str], dict, dict]:
+    """Pages an llms.txt lists by their Markdown (api/fs.md) at the address the site's own
+    pages link them by (api/fs.html: nodejs.org), not the one guessed from the Markdown's
+    (api/fs, which is not there); where its pages say nothing, the guess stays."""
+    linked = set(links)
+    moved = {}
+    for p in listed:
+        if p in md_of and p not in linked:
+            alt = next((a for a in (p + ".html", p + "/", p + "/index.html", p + ".htm") if a in linked), None)
+            if alt:
+                moved[p] = alt
+    if not moved:
+        return listed, crumbs, md_of
+    out = list(dict.fromkeys(moved.get(p, p) for p in listed))
+    return (out, {moved.get(p, p): c for p, c in crumbs.items()}, {moved.get(p, p): m for p, m in md_of.items()})
+
+
+HOME_PATH = re.compile(r"/?([a-z]{2}([-_][A-Za-z]{2})?/?)?")    # a site's home: /, or a language's (/en/)
+
+
+def llms_docs(address: str) -> str | None:
+    """Where a site's own llms.txt says its docs are, for an address that is the site's home
+    page (its root, or a language's: nodejs.org/en, its website) and holds none of what that
+    list names: the folder holding most of it (nodejs.org/llms.txt, "Node.js Documentation":
+    /docs/latest/api/). None: no such list, or the address holds its pages."""
+    from docsearch import importers
+    u = urllib.parse.urlparse(address)
+    if not HOME_PATH.fullmatch(u.path):
+        return None
+    origin = f"{u.scheme}://{u.netloc}/"
+    got = get(origin + "llms.txt")
+    if not got or b"](" not in got[0][:200_000] or b"<html" in got[0][:500].lower():
+        return None
+    listed = importers.read_llms(origin + "llms.txt", [origin], 50_000, fetch=fetched)[0]
+    here = address if address.endswith("/") else address + "/"
+    if sum(1 for p in listed if p.startswith(here)) >= cli.MIN_LISTED:
+        return None
+    import collections
+    folders = collections.Counter(p.rsplit("/", 1)[0] + "/" for p in listed)
+    folder, n = folders.most_common(1)[0] if folders else ("", 0)
+    return folder if n >= cli.MIN_LISTED and folder != here else None
+
+
 def survey(address: str, name: str = "", root: str | None = None) -> Site | None:
     """What the docs at an address publish about themselves (see above). `root`: the docs'
     folder when it is known already (a Sphinx page says it). None: no page there."""
@@ -261,6 +309,7 @@ def survey(address: str, name: str = "", root: str | None = None) -> Site | None
                  if (got := get(x)) and b"](" in got[0][:200_000] and b"<html" not in got[0][:500].lower()), None)
     if llms:
         listed, crumbs, md_of = importers.read_llms(llms, [root], 50_000, fetch=fetched)
+        listed, crumbs, md_of = as_linked(listed, crumbs, md_of, site.lists["links"])
         site.lists["llms.txt"] = listed
         site.md_of.update(md_of)
         for p, c in crumbs.items():                  # (llms.txt's sections are the site's own)

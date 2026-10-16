@@ -167,8 +167,9 @@ def get(url: str, timeout: float = 15) -> tuple[bytes, str] | None:
     """A file the survey asks for, or None (a list the site does not have). A host that says it
     is asked too often (huggingface.co) is asked nothing more in this survey: what it listed so
     far is kept, and the place is not taken as unreachable."""
+    from docsearch import importers
     host = urllib.parse.urlparse(url).netloc
-    if host in LIMITED:
+    if host in LIMITED or not importers.allowed(url):   # (its robots.txt says no: not asked)
         return None
     if url in cli.SURVEYED:                          # (asked already in this command: llms.txt, read
         return cli.SURVEYED[url]                     # to see what it is, then for its pages)
@@ -241,6 +242,40 @@ def as_linked(listed: list[str], crumbs: dict, md_of: dict, links: list[str]) ->
     return (out, {moved.get(p, p): c for p, c in crumbs.items()}, {moved.get(p, p): m for p, m in md_of.items()})
 
 
+def listed_under(root: str) -> list[str]:
+    """What the site's own llms.txt (at its root) lists under a folder: the names its pages go by."""
+    from docsearch import importers
+    u = urllib.parse.urlparse(root)
+    origin = f"{u.scheme}://{u.netloc}/"
+    got = get(origin + "llms.txt")
+    if not got or b"](" not in got[0][:200_000] or b"<html" in got[0][:500].lower():
+        return []
+    pages, _, md_of = importers.read_llms(origin + "llms.txt", [root], 50_000, fetch=fetched)
+    return [md_of.get(p, p) for p in pages]
+
+
+def allowed_twin(root: str) -> str | None:
+    """Docs in a folder the site's robots.txt closes to programs, where it opens the same pages
+    to them: a folder it names with Allow that holds them too (nodejs.org: Disallow: /docs/,
+    Allow: /api/; docs/latest/api/fs.md is api/fs.md). The same: the first pages the site's
+    llms.txt lists under the closed folder are there under the open one (or, with no such list,
+    its index is, under a folder of the same name). None: no such folder."""
+    from docsearch import importers
+    if importers.allowed(root):
+        return None
+    last = root.rstrip("/").rsplit("/", 1)[-1]
+    names = [p[len(root):] for p in listed_under(root) if p.startswith(root)][:3]
+    folders = sorted(importers.allowed_folders(root), key=lambda f: (f.rstrip("/").rsplit("/", 1)[-1] != last, len(f)))
+    for folder in folders:
+        if folder == root or not importers.allowed(folder):
+            continue
+        if not names and folder.rstrip("/").rsplit("/", 1)[-1] != last:
+            continue
+        if all(get(folder + n) for n in names or [""]):
+            return folder
+    return None
+
+
 HOME_PATH = re.compile(r"/?([a-z]{2}([-_][A-Za-z]{2})?/?)?")    # a site's home: /, or a language's (/en/)
 
 
@@ -267,9 +302,11 @@ def llms_docs(address: str) -> str | None:
     return folder if n >= cli.MIN_LISTED and folder != here else None
 
 
-def survey(address: str, name: str = "", root: str | None = None) -> Site | None:
+def survey(address: str, name: str = "", root: str | None = None, alias: str | None = None) -> Site | None:
     """What the docs at an address publish about themselves (see above). `root`: the docs'
-    folder when it is known already (a Sphinx page says it). None: no page there."""
+    folder when it is known already (a Sphinx page says it). `alias`: the folder the site's
+    lists name these pages under, closed to programs (allowed_twin): read here. None: no page
+    there."""
     from docsearch import importers
     roots, page, said = cli.probe_roots(address)
     if not page:
@@ -308,7 +345,11 @@ def survey(address: str, name: str = "", root: str | None = None) -> Site | None
     llms = next((x for x in dict.fromkeys([root + "llms.txt", origin + "llms.txt"])
                  if (got := get(x)) and b"](" in got[0][:200_000] and b"<html" not in got[0][:500].lower()), None)
     if llms:
-        listed, crumbs, md_of = importers.read_llms(llms, [root], 50_000, fetch=fetched)
+        listed, crumbs, md_of = importers.read_llms(llms, [root] + ([alias] if alias else []), 50_000, fetch=fetched)
+        if alias:                                    # (named under the closed folder: here, the same pages)
+            here = lambda x: root + x[len(alias):] if x.startswith(alias) else x       # noqa: E731
+            listed, crumbs = list(dict.fromkeys(here(x) for x in listed)), {here(k): v for k, v in crumbs.items()}
+            md_of = {here(k): here(v) for k, v in md_of.items()}
         listed, crumbs, md_of = as_linked(listed, crumbs, md_of, site.lists["links"])
         site.lists["llms.txt"] = listed
         site.md_of.update(md_of)
@@ -319,7 +360,7 @@ def survey(address: str, name: str = "", root: str | None = None) -> Site | None
     # list was not found, and the site has not said it is asked too often.
     own = max((len(site.lists.get(k) or []) for k in ("search index", "llms.txt") if k not in site.partial), default=0)
     if own < cli.MIN_LISTED and u.netloc not in LIMITED:
-        rp = importers.robots(root)
+        rp = importers.rules(root)
         maps = list(dict.fromkeys((rp.site_maps() or []) + [root + "sitemap.xml", origin + "sitemap.xml"]))
         listed = []
         for sm in maps:

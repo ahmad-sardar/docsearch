@@ -15,7 +15,9 @@ spot check of 81 packages: docs/evaluation/results-finding.md), with no internet
   with how the site answered; folders guessed only where its page links; nothing asked twice;
 - a site's home page you gave (nodejs.org/en, its website): its docs where its own llms.txt
   says (/docs/latest/api/), each page at the address the site links it by (fs.html, listed as
-  fs.md), the list asked for once; an address that is not a home page: as you gave it.
+  fs.md), the list asked for once; an address that is not a home page: as you gave it;
+- docs its robots.txt closes to programs (Disallow: /docs/), the same pages at the folder it opens
+  (Allow: /api/): those, and nothing asked under the closed one.
 """
 from __future__ import annotations
 
@@ -211,7 +213,7 @@ def main() -> None:
           and read.location == "https://docs.cvx.example/1.2.0/group__io.html#ga1"
           and got.get("cvx::Image") is not None and got["cvx::Image"].kind == "class"
           and got.get("Your first image") is not None and got["Your first image"].purpose == "learn"
-          and not any("docs.cvx.example" in u and "/master/" not in u for u in ASKED),
+          and not any("docs.cvx.example" in u and "/master/" not in u and not u.endswith("/robots.txt") for u in ASKED),
           f"a release's Doxygen docs: each function an entry at its place on the docs site; a class's page "
           f"its class; a tutorial titled as Doxygen titles it, to learn from ({sorted(got)[:8]})")
     WEB["learn.example"] = {"/": page("Learn X", "".join(f"<p><a href='/lesson-{k}/'>Lesson {k}</a></p>" for k in range(12))
@@ -256,6 +258,27 @@ def main() -> None:
           and sites.llms_docs("https://nodex.example/learn/") is None,
           f"a site's home page you gave: its docs where its llms.txt says; pages at the addresses the site links; "
           f"the list asked once; not a home page: as given ({plan and plan.get('root')}, {listed[:3]})")
+    WEB["nodey.example"] = {
+        "/robots.txt": b"User-agent: *\nAllow: /api/\nDisallow: /docs/\n",
+        "/en/": page("Nodey", "<p><a href='/en/blog/a'>A post</a></p>"),
+        "/llms.txt": ("# Nodey Documentation\n\n## API Documentations\n" + "".join(
+            f"- [{n}](https://nodey.example/docs/latest/api/{n}.md): the {n} module\n" for n in names)).encode(),
+        **{f"{base}{n}.{ext}": (page(f"Module {n}") if ext == "html" else f"# Module {n}\n\nWords enough.\n".encode())
+           for base in ("/docs/latest/api/", "/api/") for n in names for ext in ("html", "md")},
+        "/docs/latest/api/": page("Nodey API", "".join(f"<p><a href='{n}.html'>{n}</a></p>" for n in names)),
+        "/api/": page("Nodey API", "".join(f"<p><a href='{n}.html'>{n}</a></p>" for n in names)),
+    }
+    ASKED.clear()
+    said = io.StringIO()
+    with contextlib.redirect_stderr(said), contextlib.redirect_stdout(said), cli.telling():
+        plan = cli.web_docs("nodey", "nodey=https://nodey.example/en/", "", "https://nodey.example/en/",
+                            argparse.Namespace(yes=True, workers=2, guide=None), check_copy=False)
+    closed = [u for u in ASKED if "/docs/" in u]
+    check(plan is not None and plan.get("root") == "https://nodey.example/api/" and not closed
+          and plan.get("md_of", {}).get("https://nodey.example/api/a.html") == "https://nodey.example/api/a.md"
+          and "opens the same pages at https://nodey.example/api/" in said.getvalue(),
+          f"docs its robots.txt closes, the same pages where it opens them: read there; nothing asked under the "
+          f"closed folder ({plan and plan.get('root')}, asked there: {closed[:3]})")
     WEB["pg.example"] = {"/docs/17/": page("PG 17 manual", "".join(f"<p><a href='/docs/17/ch{k}.html'>Chapter {k}</a></p>"
                                                                   for k in range(12))),
                          **{f"/docs/17/ch{k}.html": page(f"Chapter {k}") for k in range(12)}}

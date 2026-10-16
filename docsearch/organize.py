@@ -70,7 +70,7 @@ PARTS = [
               r"(.* )?tour( of .*)?|learn( .*)?"),
     ("do", r"(.* )?how-?tos?( .*)?|(.* )?howtos?( .*)?|how to .*|(.* )?user'?s? guide( .*)?|(.* )?recipes|"
            r"install( .*)?|migrating( .*)?|porting( .*)?|(.* )?examples|(.* )?gallery|(.* )?guides?"),
-    ("lookup", r"(.* )?reference( manual| guide)?|(.* )?api( reference| documentation| docs)?|"
+    ("lookup", r"(.* )?reference( manual| guide)?|(.* )?api( reference| documentations?| docs)?|"
                r"(.* )?standard library|(.* )?module index|(.* )?appendix|(.* )?appendices"),
     ("understand", r"(.* )?fundamentals|(.* )?internals|(.* )?concepts|design( .*)?"),
 ]
@@ -87,7 +87,7 @@ PLACE_NAMES = {"overview", "introduction", "intro", "home", "welcome", "index", 
 # topic ("Getting Started", "Install spaCy") does not
 COLLECTION = re.compile(r"(.* )?(user'?s? )?guides?( .*)?|(.* )?tutorials?( .*)?|learn( .*)?|(.* )?how-?tos?|(.* )?howtos?|"
                         r"(.* )?recipes|(.* )?examples|(.* )?gallery|(.* )?cookbook|(.* )?faqs?|"
-                        r"(.* )?reference( manual| guide)?|(.* )?api( reference| documentation| docs)?|"
+                        r"(.* )?reference( manual| guide)?|(.* )?api( reference| documentations?| docs)?|"
                         r"(.* )?standard library|(.* )?module index|(.* )?concepts|(.* )?internals|"
                         r"(.* )?fundamentals|explanations?")
 PART_RE = {p: re.compile(rx) for p, rx in PARTS}

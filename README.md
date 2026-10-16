@@ -292,10 +292,14 @@ search add aks=https://learn.microsoft.com/en-us/azure/aks/
   100 pages in 5 minutes) is asked no faster than that. one that asks for a longer pause (come
   back in an hour) stops the download, kept, and the same command goes on after that time: a
   big site can take a few sittings, and so can updating it.
-- robots.txt is kept: pages it asks programs not to read are not read (oracle: its old
-  releases, 10g and 11g; download those yourself and add the folder or zip). a site whose
+- robots.txt is kept, from the first request (finding the docs too): pages it asks programs not
+  to read are not read (oracle: its old releases, 10g and 11g; download those yourself and add
+  the folder or zip). where it closes the docs' folder but opens the same pages at another
+  (nodejs.org: `/docs/` closed, `/api/` open), those are read, and it says so. a site whose
   robots.txt can't be read (it answers with a server error) is not read at all that time, as
   the robots.txt standard (rfc 9309) says.
+- a site that lists its own pages (llms.txt, a sitemap, a search index) is read from that list;
+  its links are followed only where it has none.
 - give a site's home page (`nodejs.org/en`, its website) and its own llms.txt says its docs
   are elsewhere (`/docs/latest/api/`): those are read, and it says so. any other address is
   read as you give it.

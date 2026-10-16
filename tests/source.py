@@ -444,7 +444,8 @@ def main() -> None:
     cli.HOME.mkdir(parents=True, exist_ok=True)
     said = run("add", "alpha", "--no-embed")
     m = meta("alpha@1.0")
-    found_with = ASKED[:ASKED.index("https://alpha.readthedocs.io/en/stable/objects.inv") + 1]
+    found_with = [u for u in ASKED[:ASKED.index("https://alpha.readthedocs.io/en/stable/objects.inv") + 1]
+                  if not u.endswith("/robots.txt")]      # (each site's robots.txt, first: RFC 9309)
     check(m.get("repo") == "github.com/alpha-org/alpha" and "they link to" in m.get("verified", "")
           and "Index the docs" not in said and not any("api.github.com" in u for u in ASKED),
           "docs that link to their repository: taken, no question, the repository kept, GitHub not asked")

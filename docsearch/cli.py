@@ -575,6 +575,7 @@ def told(url: str, timeout: float, ask):
 
 
 SURVEYED: dict[str, tuple[bytes, str]] = {}   # the lists a survey read this command (site.get)
+ROBOT_RULES: dict[str, object] = {}              # each site's robots.txt, read once a command (importers.rules)
 ANSWERED_ABSENT: dict[str, Failed] = {}   # addresses that answered "not there" (404, 410) this run:
                                            # not asked again (the survey's objects.inv, after finding)
 
@@ -1640,7 +1641,10 @@ def landing(url: str) -> tuple[str, str]:
     """The page at an address, and where it is. A page that only says "go to ..." is followed
     when it leads further into its own folder (triton-lang.org: to /main/); one that leads
     elsewhere stays as it is (PyTorch's /stable/ to /2.14/: stable stays the docs' address)."""
+    from docsearch import importers
     for _ in range(3):
+        if not importers.allowed(url):
+            raise Failed("robots", url)
         body, final = http_get(url, timeout=10)
         m = REFRESH.search(body[:4096]) if len(body) < 20_000 else None
         nxt = urllib.parse.urljoin(final, m.group(1).decode("utf-8", "replace")) if m else ""
@@ -1705,8 +1709,11 @@ def docs_index(kind: str, data: bytes) -> bool:
 def index_in(roots: list[str], files=SITE_INDEXES) -> tuple[str, str, bytes | None] | None:
     """The first docs index in these folders: ("sphinx", root, its inventory) where an
     objects.inv is, ("website", root, None) where an MkDocs or Zensical search index is."""
+    from docsearch import importers
     for root in roots:
         for fname, kind in files:
+            if not importers.allowed(root + fname):     # (its robots.txt: not asked)
+                continue
             try:                                 # (a guess: one refused says nothing of the site)
                 data, final = http_get(root + fname, timeout=10, guess=True)
             except Failed as e:
@@ -1934,7 +1941,7 @@ def package_docs(name: str, yes: bool) -> tuple[str, str, bytes | None, dict] | 
             first = found
     unreached = {**{u: e for u, e in UNREACHED.items()},
                  **{h: e for h, e in DEAD_HOSTS.items() if h not in dead_before}}
-    refused = {u: e for u, e in unreached.items() if e.kind in ("bot-check", "forbidden", "login")}
+    refused = {u: e for u, e in unreached.items() if e.kind in ("bot-check", "forbidden", "login", "robots")}
     for host, e in {urllib.parse.urlparse(u).netloc or u: e for u, e in refused.items()}.items():
         say(f"  {host}: {WHY[e.kind].format(detail=e.detail)}")      # (it will not let programs read it:
                                                                      # for good, not later: its README)
@@ -3467,9 +3474,21 @@ def web_docs(name: str, spec: str, want: str, override: str, args, check_copy: b
     if check_copy and have_copy(spec, name, want, have, args):
         return None
     read = {}
+    alias = None
+    if kind != "sphinx":                             # its robots.txt closes the docs to programs: where
+        from docsearch import importers, site as sites      # it opens the same pages, else nothing
+        if not importers.allowed(root):
+            twin = sites.allowed_twin(root)
+            if twin is None:
+                say(f"  {root}: the site's robots.txt asks programs not to read these docs; nothing read. "
+                    f"{LOCAL_TIP.format(name=name).strip()}")
+                return None
+            say(f"  {root} is closed to programs by the site's robots.txt, which opens the same pages at "
+                f"{twin}: reading those")
+            alias, root = root, twin
     if kind != "sphinx":                             # what the site lists, and how to read it (site.py)
         from docsearch import site as sites
-        surveyed = sites.survey(root)
+        surveyed = sites.survey(root, alias=alias)
         if surveyed is not None and surveyed.expected:
             root = surveyed.root
             pages, said = sites.choose(surveyed, name, site_sections(name, surveyed.root, main=True))
@@ -5233,6 +5252,7 @@ def main(argv: list[str] | None = None) -> None:
     PAGES_SEEN.clear()                             # (what a site answered: kept for this command)
     ANSWERED_ABSENT.clear()
     SURVEYED.clear()
+    ROBOT_RULES.clear()
     if not argv or argv[0] not in ONLINE:          # everything but indexing stays offline
         offline_only()
     if not argv:                                   # just "search": open the search page

@@ -90,10 +90,12 @@ def robots(root: str):
     5 s), which every download from it then keeps. As RFC 9309 says: a robots.txt that is not
     there (4xx) allows everything; one that cannot be read (5xx, no answer) allows nothing."""
     rp = urllib.robotparser.RobotFileParser()
+    rp.source = ""                                   # (its text: its Allow lines, see allowed_folders)
     u = urllib.parse.urlparse(root)
     try:
         body, _ = cli.http_get(f"{u.scheme}://{u.netloc}/robots.txt", timeout=10)
-        rp.parse(body.decode("utf-8", "replace").splitlines())
+        rp.source = body.decode("utf-8", "replace")
+        rp.parse(rp.source.splitlines())
     except cli.Failed as e:
         if e.kind in ("server-error", "timeout", "dropped", "offline", "other"):
             say(f"  {u.netloc}: its robots.txt could not be read ({cli.WHY[e.kind].format(detail=e.detail)}), so nothing of it is "
@@ -109,6 +111,43 @@ def robots(root: str):
         say(f"  {u.netloc} asks programs to wait {float(delay):g} s between pages (robots.txt): "
             f"about {3600 / float(delay):,.0f} pages an hour")
     return rp
+
+
+def rules(url: str):
+    """A site's robots.txt (robots), read once in a command: what finding its docs may ask."""
+    u = urllib.parse.urlparse(url)
+    origin = f"{u.scheme}://{u.netloc}/"
+    if origin not in cli.ROBOT_RULES:
+        cli.ROBOT_RULES[origin] = robots(origin)
+    return cli.ROBOT_RULES[origin]
+
+
+def allowed(url: str) -> bool:
+    """May docsearch ask for this address, by its site's robots.txt? (robots.txt itself: yes)"""
+    if urllib.parse.urlparse(url).path == "/robots.txt":
+        return True
+    return rules(url).can_fetch(cli.USER_AGENT, url)
+
+
+def allowed_folders(url: str) -> list[str]:
+    """The folders a site's robots.txt opens to programs by name (Allow: /api/), for its rules
+    that apply to docsearch (User-agent: * or its own)."""
+    rp = rules(url)
+    u = urllib.parse.urlparse(url)
+    out, agents, rules_seen = [], [], False
+    for line in (getattr(rp, "source", "") or "").splitlines():
+        key, _, value = line.split("#", 1)[0].partition(":")
+        key, value = key.strip().lower(), value.strip()
+        if key == "user-agent":
+            agents = [] if rules_seen else agents
+            rules_seen = False
+            agents.append(value.lower())
+        elif key in ("allow", "disallow"):
+            rules_seen = True
+            if key == "allow" and value.endswith("/") and value != "/" and not any(c in value for c in "*$") \
+                    and any(a in ("*", "docsearch") for a in agents):
+                out.append(f"{u.scheme}://{u.netloc}{value}")
+    return list(dict.fromkeys(out))
 
 
 def from_llms(url: str, prefixes: list[str], limit: int) -> list[str]:
@@ -790,7 +829,9 @@ def build_website(name: str, sid: str, spec: dict, store: Store, workers: int,
     starts = [starts] if isinstance(starts, str) else starts
     exclude = re.compile(spec.get("exclude", r"$^"))
     depth = spec.get("depth", 10**6)
-    follow = not spec.get("sitemap")                       # a sitemap lists every page already
+    follow = not spec.get("sitemap") and not spec.get("listed")    # a site's own complete list (a
+    # sitemap, llms.txt, a search index: site.reading) names every page already; links (nodejs.org's
+    # Markdown copies: 659 addresses not there) add only guesses
     try:
         state = json.loads((folder / "state.json").read_text(encoding="utf-8")) if resume else None
     except (OSError, ValueError):

@@ -167,7 +167,7 @@ def plan_with(plan: dict, name: str, args, newest: bool, pypi: bool = False) -> 
     found: list[dict] = []
     if newest:
         top = plan.get("home") or root               # (the site's home page, where its docs were found
-        seen = cli.PAGES_SEEN.get(top)               # from it: its header names its guides)
+        seen = cli.PAGES_SEEN.get(top) or cli.PAGES_SEEN.get(top.rstrip("/"))    # from it: its header names its guides)
         try:                                         # (read already this run: not asked again)
             page = seen[1] if seen and seen[1] else cli.landing(top)[1]
         except Exception:  # noqa: BLE001 - no page: no header to read

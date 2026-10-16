@@ -296,6 +296,32 @@ search add aks=https://learn.microsoft.com/en-us/azure/aks/
   releases, 10g and 11g; download those yourself and add the folder or zip). a site whose
   robots.txt can't be read (it answers with a server error) is not read at all that time, as
   the robots.txt standard (rfc 9309) says.
+- give a site's home page (`nodejs.org/en`, its website) and its own llms.txt says its docs
+  are elsewhere (`/docs/latest/api/`): those are read, and it says so. any other address is
+  read as you give it.
+- while it looks for the docs, each request it makes is a line: what it asked, how the site
+  answered, how long that took; then the time spent waiting for the site against its own.
+  a slow site shows as one.
+
+### options
+
+most adds need none. each is for one situation:
+
+| option | with | use it when |
+|---|---|---|
+| `--guide URL` | add | a guide of the package isn't read with its docs: their header doesn't link it, or it isn't a docs site by itself (node's `nodejs.org/learn`, a site with only a sitemap). it must be on the docs' own site, or link to the package's repository. kept in packages.toml, so sync reads it too. |
+| `--yes` | add, update, downgrade | docs nothing vouches for (the package's repository and the docs don't point at each other): in a terminal you're asked; without one (a script) they're skipped unless you say `--yes`. check they're the right docs. |
+| `--no-embed` | add | big docs you want quickly: no vectors, so no search by meaning for them (names and words still work). `search embed NAME` makes them later. |
+| `--accept-partial` | add, sync, update, downgrade | a new download of docs you have looks incomplete, so yours were kept; take the new one anyway. |
+| `--force` | sync, update, downgrade | download again though you have that version (the site fixed its pages). |
+| `--prune` | sync | remove the docs packages.toml no longer lists. |
+| `--all` | remove | every copy of a package (`numpy@1.26` and `numpy@2.5`). |
+| `--workers N` | add, sync, update, downgrade, setup | pages downloaded at once (16; save: 8 images). a site's own pace (robots.txt, its limits) is kept whatever it says. |
+| `--to NAME`, `--series` | save | the collection saved pages go in (tutorials); also the parts that follow a page (its next links). |
+| `--port N` | serve | the page's port (8765, or `DOCSEARCH_PORT`). |
+| `-e` | search | an exact match from the terminal: `search -e drop_duplicates`. |
+
+`search COMMAND --help` lists a command's options.
 
 ## versions
 

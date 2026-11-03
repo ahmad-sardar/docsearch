@@ -3854,6 +3854,30 @@ def organization(host: str) -> str:
     return ".".join(host.lower().split(":")[0].split(".")[-2:])
 
 
+def remove_dir(d: Path) -> None:
+    """Delete a copy's folder while a search page may be reloading and writing its caches into
+    it (a file written mid-delete: "Directory not empty"). First out of the index in one step
+    (data/removing/), so nothing finds it or writes into it; where a folder with open files
+    cannot move (Windows), in place. Then deleted, again if a file turned up meanwhile."""
+    target = d
+    try:
+        (DATA / "removing").mkdir(parents=True, exist_ok=True)
+        target = DATA / "removing" / f"{d.name}-{os.getpid()}-{time.monotonic_ns()}"
+        os.replace(d, target)
+    except OSError:
+        target = d
+    for attempt in range(10):
+        try:
+            shutil.rmtree(target)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            if attempt == 9:
+                raise
+            time.sleep(0.1)
+
+
 def forget(sid: str) -> bool:
     """Remove a copy: its index; in packages.toml the version it was listed under (the package's
     whole line once no copy is left, so sync does not bring it back) and the choice of it."""
@@ -3862,7 +3886,7 @@ def forget(sid: str) -> bool:
     d = source_dir(sid)
     gone = d.exists()
     if gone:
-        shutil.rmtree(d)
+        remove_dir(d)
     base, _, label = sid.partition("@")
     if config_use().get(base) == label or not copies(base):
         config_unset(base, "use")

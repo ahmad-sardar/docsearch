@@ -278,6 +278,40 @@ def copies_at_once(nightly: str) -> None:
     cli.choose(was)
 
 
+def remove_while_written() -> None:
+    """search remove while a search page reloads and writes caches into the copy's folder (its
+    order.npy, search caches): removed, without "Directory not empty", nothing left behind."""
+    errors = []
+    for k in range(5):
+        d = cli.HOME / f"racy{k}"
+        (d / "pages" / "sub").mkdir(parents=True)
+        (d / "meta.json").write_text('{"name": "racy"}', encoding="utf-8")
+        for i in range(400):
+            (d / "pages" / "sub" / f"p{i}.html").write_text("x", encoding="utf-8")
+        stop = threading.Event()
+
+        def writer() -> None:                       # as a reloading page writes its caches
+            n = 0
+            while not stop.is_set():
+                for sub in (d, d / "pages", d / "pages" / "sub"):
+                    try:
+                        (sub / f"cache{n}.npy").write_bytes(b"0")
+                    except OSError:
+                        pass
+                n += 1
+        t = threading.Thread(target=writer)
+        t.start()
+        time.sleep(0.05)
+        try:
+            cli.forget(f"racy{k}")
+        except OSError as e:
+            errors.append(repr(e))
+        stop.set()
+        t.join()
+    left = [x for x in cli.indexed() if x.startswith("racy")]
+    check(not errors and not left, f"removed while a search page writes into it: no error, nothing left ({errors[:1]}, {left})")
+
+
 def project_files() -> None:
     """The versions a project uses, read from its files (in the folder search runs in, or above)."""
     root = Path(tempfile.mkdtemp(prefix="docsearch-project-"))
@@ -506,6 +540,7 @@ def main() -> None:
     versions()
     project_files()
     named_versions()
+    remove_while_written()
     print("all good")
 
 
